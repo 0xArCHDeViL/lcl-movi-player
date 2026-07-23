@@ -8,6 +8,7 @@
     "vscode": "^1.80.0"
   },
   "categories": [
+    "Programming Languages",
     "Other",
     "Visualization"
   ],
@@ -33,7 +34,13 @@
     "subtitle",
     "codec",
     "media",
-    "movie"
+    "movie",
+    "custom element",
+    "web component",
+    "intellisense",
+    "autocomplete",
+    "html",
+    "movi-player"
   ],
   "icon": "icons/icon128.png",
   "galleryBanner": {
@@ -303,6 +310,16 @@
           "name": "Quick Actions",
           "icon": "icons/movi-sidebar.svg"
         }
+      ]
+    },
+    "html": {
+      "customData": [
+        "./html-custom-data.json"
+      ]
+    },
+    "css": {
+      "customData": [
+        "./css-custom-data.json"
       ]
     }
   },
