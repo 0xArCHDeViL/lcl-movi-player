@@ -9,10 +9,17 @@ import dts from 'vite-plugin-dts';
 import terser from '@rollup/plugin-terser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { readFileSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = resolve(__dirname, '..');
+
+// Bake the package version into the bundle so it can be read at runtime
+// (MoviElement.version / VERSION export), jQuery-style.
+const PKG_VERSION = JSON.parse(
+  readFileSync(resolve(rootDir, 'package.json'), 'utf8'),
+).version;
 
 const entries = [
   { name: 'demuxer', path: 'src/demuxer.ts' },
@@ -94,6 +101,9 @@ async function buildEntry(entry, format) {
 
   await build({
     configFile: false,
+    define: {
+      __MOVI_VERSION__: JSON.stringify(PKG_VERSION),
+    },
     plugins: [
       // Only generate types once for ES format
       ...(format === 'es'

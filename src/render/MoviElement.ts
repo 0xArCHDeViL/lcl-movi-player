@@ -28,6 +28,7 @@ import { isOpenableScheme } from "../source/adapterRegistry";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
 import { QoECollector, beaconSink, type QoESink, type QoESession } from "../utils/QoE";
+import { VERSION } from "../version";
 
 const TAG = "MoviElement";
 
@@ -493,6 +494,19 @@ export class MoviElement extends HTMLElement {
   };
 
   // Observed attributes (native video element attributes)
+  /**
+   * The player version, baked in at build time — jQuery-style discoverability
+   * (`$.fn.jquery`). Read it off the class (`MoviElement.version`), off any
+   * instance (`document.querySelector("movi-player").version`), or import the
+   * `VERSION` export from `movi-player/element`.
+   */
+  static readonly version: string = VERSION;
+
+  /** Instance mirror of {@link MoviElement.version}. */
+  get version(): string {
+    return VERSION;
+  }
+
   static get observedAttributes() {
     return [
       "src",

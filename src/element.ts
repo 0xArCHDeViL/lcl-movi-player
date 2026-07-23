@@ -98,6 +98,10 @@ export { MoviPlayer } from './core/MoviPlayer';
 export { MoviElement } from './render/MoviElement';
 import type { MoviElement as MoviElementType } from './render/MoviElement';
 
+// Package version, baked in at build time. `import { VERSION } from
+// "movi-player/element"`, or read MoviElement.version / element.version.
+export { VERSION } from './version';
+
 // QoE analytics — versioned event stream + pluggable sinks.
 export {
   QoECollector,
