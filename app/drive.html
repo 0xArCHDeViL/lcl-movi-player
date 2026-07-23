@@ -7,6 +7,16 @@
   <title>Movi Player for Google Drive — play your Drive videos in the browser</title>
   <meta name="description" content="Open and stream your Google Drive videos (MKV, HEVC, AV1, 4K/HDR) directly in the browser with Movi Player. No download, read-only, decoded on your device." />
   <link rel="canonical" href="https://moviplayer.com/drive" />
+
+  <!-- Start the player bundle download immediately, in parallel with <head>,
+       rather than waiting for the module <script> in <body>. It carries the
+       WASM engine (critical path to first frame); same versioned URL as the
+       import, so it's one cached request. -->
+  <link
+    rel="modulepreload"
+    href="/dist/__BUILD_VERSION__/element.js"
+    fetchpriority="high"
+  />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta property="og:title" content="Movi Player for Google Drive" />
   <meta property="og:description" content="Play your Google Drive videos in the browser — MKV, HEVC, AV1, 4K/HDR. Read-only, nothing uploaded." />

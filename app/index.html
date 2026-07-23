@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Online Video Player — Play MKV, HEVC, AV1, HDR Videos Free in Browser | MoviPlayer</title>
+
+    <!-- Kick off the player bundle download the moment the HTML lands, in
+         parallel with the rest of <head>, rather than waiting for the module
+         <script> near the end of <body>. The bundle carries the WASM engine, so
+         it's on the critical path to the first frame — starting it early is the
+         cheapest cold-start win. Same versioned URL the import uses → one
+         request, reused from cache. -->
+    <link
+      rel="modulepreload"
+      href="/dist/__BUILD_VERSION__/element.js"
+      fetchpriority="high"
+    />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />

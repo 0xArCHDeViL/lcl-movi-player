@@ -6,6 +6,19 @@
     <title>Native &lt;video&gt; vs MoviPlayer — Side-by-side comparison</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
+    <!-- Start the player bundle downloading the instant the HTML arrives,
+         in parallel with parsing the rest of <head>, instead of waiting for
+         the module <script> at the bottom of <body> to be reached. The bundle
+         carries the WASM engine, so it sits on the critical path to the first
+         frame — pulling its download forward is the cheapest cold-start win.
+         Same versioned URL the module import uses, so it's one request, cached
+         and reused. -->
+    <link
+      rel="modulepreload"
+      href="/dist/__BUILD_VERSION__/element.js"
+      fetchpriority="high"
+    />
+
     <meta name="description" content="Drop any MKV/HEVC/AV1 file. See exactly what your browser's native <video> tag silently ignores — multi-audio tracks, embedded subtitles, chapters — and what MoviPlayer surfaces." />
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://moviplayer.com/compare" />
