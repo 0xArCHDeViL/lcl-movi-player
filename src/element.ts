@@ -204,6 +204,54 @@ export interface MoviPlayerAttributes {
   gesturefs?: boolean | "";
 }
 
+/**
+ * A `<source>` child of `<movi-player>`. Movi reads several non-standard
+ * attributes (`data-height`, `data-fps`, `data-badge`, `srclang`, `kind="audio"`)
+ * that a native `<source>` type rejects — this describes the wrapper components'
+ * friendly prop names, each mapping to the attribute the element parses.
+ */
+export interface MoviSourceProps {
+  /** URL of the video or audio file. */
+  src: string;
+  /** MIME type — `canPlayType` uses it to pick the first playable source. */
+  type?: string;
+  /** Mark this as an audio-only track (split source / multi-language). */
+  kind?: "audio";
+  /** BCP-47 language code — required for the language menu. → `srclang` */
+  srcLang?: string;
+  /** Human-readable label shown in the menu. */
+  label?: string;
+  /** Resolution height in pixels — populates the quality picker. → `data-height` */
+  height?: number;
+  /** Frame-rate hint shown in the quality picker. → `data-fps` */
+  fps?: number;
+  /** Free-form chip (e.g. `"HDR"`) shown next to the label. → `data-badge` */
+  badge?: string;
+  /** Bitrate hint in bits/sec for ABR. → `data-bandwidth` */
+  bandwidth?: number;
+  /** Make this the initial pick. → `data-default` */
+  default?: boolean;
+}
+
+/**
+ * A `<track>` child of `<movi-player>` (subtitles / captions). `format` maps to
+ * the non-standard `data-format` the element reads.
+ */
+export interface MoviTrackProps {
+  /** URL of the subtitle file. */
+  src: string;
+  /** `subtitles` or `captions` (omit to default). */
+  kind?: "subtitles" | "captions";
+  /** BCP-47 language code. → `srclang` */
+  srcLang?: string;
+  /** Human-readable label shown in the menu. */
+  label?: string;
+  /** Subtitle format. → `data-format` */
+  format?: "vtt" | "srt";
+  /** Make this the initial pick. → `data-default` */
+  default?: boolean;
+}
+
 declare global {
   interface HTMLElementTagNameMap {
     // `document.querySelector('movi-player')` is now typed as the element.

@@ -32,5 +32,7 @@ await transpile("packages/vue/index.ts", "dist/vue/index.js");
 copyFileSync("packages/react/index.tsx", "dist/react/index.tsx");
 copyFileSync("packages/vue/index.ts", "dist/vue/index.ts");
 copyFileSync("packages/svelte/MoviPlayer.svelte", "dist/svelte/MoviPlayer.svelte");
+copyFileSync("packages/svelte/MoviSource.svelte", "dist/svelte/MoviSource.svelte");
+copyFileSync("packages/svelte/MoviTrack.svelte", "dist/svelte/MoviTrack.svelte");
 
 console.log("[wrappers] react + vue transpiled, svelte copied → dist/{react,vue,svelte}");

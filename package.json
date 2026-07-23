@@ -41,6 +41,16 @@
       "types": "./dist/svelte/MoviPlayer.svelte",
       "svelte": "./dist/svelte/MoviPlayer.svelte",
       "default": "./dist/svelte/MoviPlayer.svelte"
+    },
+    "./svelte/MoviSource": {
+      "types": "./dist/svelte/MoviSource.svelte",
+      "svelte": "./dist/svelte/MoviSource.svelte",
+      "default": "./dist/svelte/MoviSource.svelte"
+    },
+    "./svelte/MoviTrack": {
+      "types": "./dist/svelte/MoviTrack.svelte",
+      "svelte": "./dist/svelte/MoviTrack.svelte",
+      "default": "./dist/svelte/MoviTrack.svelte"
     }
   },
   "files": [

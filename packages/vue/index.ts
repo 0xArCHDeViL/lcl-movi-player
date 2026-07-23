@@ -23,7 +23,12 @@ import {
   type PropType,
 } from "vue";
 import "movi-player/element";
-import type { MoviElement, QoEEvent } from "movi-player/element";
+import type {
+  MoviElement,
+  MoviSourceProps,
+  MoviTrackProps,
+  QoEEvent,
+} from "movi-player/element";
 
 export const MoviPlayer = defineComponent({
   name: "MoviPlayer",
@@ -94,4 +99,71 @@ export const MoviPlayer = defineComponent({
   },
 });
 
-export type { MoviElement, QoEEvent };
+/**
+ * Typed `<source>` for a `<MoviPlayer>` child list. Maps friendly props to the
+ * attributes the element parses (`height` → `data-height`, `srcLang` →
+ * `srclang`, `default` → `data-default`).
+ *
+ *   <MoviPlayer controls>
+ *     <MoviSource src="4k.mp4" :height="2160" badge="HDR" default />
+ *     <MoviSource src="en.m4a" kind="audio" srcLang="en" label="English" />
+ *   </MoviPlayer>
+ */
+export const MoviSource = defineComponent({
+  name: "MoviSource",
+  props: {
+    src: { type: String, required: true },
+    type: String,
+    kind: String as PropType<"audio">,
+    srcLang: String,
+    label: String,
+    height: Number,
+    fps: Number,
+    badge: String,
+    bandwidth: Number,
+    default: { type: Boolean, default: undefined },
+  },
+  setup(props) {
+    return () => {
+      const attrs: Record<string, unknown> = { src: props.src };
+      if (props.type) attrs.type = props.type;
+      if (props.kind) attrs.kind = props.kind;
+      if (props.srcLang) attrs.srclang = props.srcLang;
+      if (props.label) attrs.label = props.label;
+      if (props.height != null) attrs["data-height"] = props.height;
+      if (props.fps != null) attrs["data-fps"] = props.fps;
+      if (props.badge) attrs["data-badge"] = props.badge;
+      if (props.bandwidth != null) attrs["data-bandwidth"] = props.bandwidth;
+      if (props.default) attrs["data-default"] = "";
+      return h("source", attrs);
+    };
+  },
+});
+
+/** Typed `<track>` (subtitles / captions) for a `<MoviPlayer>` child list. */
+export const MoviTrack = defineComponent({
+  name: "MoviTrack",
+  props: {
+    src: { type: String, required: true },
+    kind: String as PropType<"subtitles" | "captions">,
+    srcLang: String,
+    label: String,
+    format: String as PropType<"vtt" | "srt">,
+    default: { type: Boolean, default: undefined },
+  },
+  setup(props) {
+    return () => {
+      const attrs: Record<string, unknown> = {
+        src: props.src,
+        kind: props.kind ?? "subtitles",
+      };
+      if (props.srcLang) attrs.srclang = props.srcLang;
+      if (props.label) attrs.label = props.label;
+      if (props.format) attrs["data-format"] = props.format;
+      if (props.default) attrs["data-default"] = "";
+      return h("track", attrs);
+    };
+  },
+});
+
+export type { MoviElement, QoEEvent, MoviSourceProps, MoviTrackProps };

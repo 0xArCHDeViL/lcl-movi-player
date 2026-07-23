@@ -12,10 +12,12 @@ import "movi-player/element"; // registers <movi-player> (side effect)
 import type {
   MoviElement,
   MoviPlayerAttributes,
+  MoviSourceProps,
+  MoviTrackProps,
   QoEEvent,
 } from "movi-player/element";
 
-export type { MoviElement, QoEEvent };
+export type { MoviElement, QoEEvent, MoviSourceProps, MoviTrackProps };
 
 export interface MoviPlayerProps extends MoviPlayerAttributes {
   className?: string;
@@ -112,3 +114,45 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
     );
   },
 );
+
+/**
+ * A typed `<source>` for a `<MoviPlayer>` child list. Maps its friendly props
+ * to the exact attributes the element parses — `height` → `data-height`,
+ * `srcLang` → `srclang`, `default` → `data-default`, etc. Non-standard names go
+ * through as `data-*` (or plain lowercase) so React renders them verbatim
+ * instead of stripping them the way it would on a raw `<source srclang>`.
+ *
+ *   <MoviPlayer controls>
+ *     <MoviSource src="4k.mp4"    height={2160} badge="HDR" default />
+ *     <MoviSource src="1080.mp4"  height={1080} />
+ *     <MoviSource src="en.m4a"    kind="audio" srcLang="en" label="English" />
+ *   </MoviPlayer>
+ */
+export function MoviSource(props: MoviSourceProps): React.ReactElement {
+  const attrs: Record<string, unknown> = { src: props.src };
+  if (props.type) attrs.type = props.type;
+  if (props.kind) attrs.kind = props.kind;
+  if (props.srcLang) attrs.srcLang = props.srcLang;
+  // `label` isn't a standard <source> attribute, so React warns on it — the
+  // element reads `data-label` too, which is always valid.
+  if (props.label) attrs["data-label"] = props.label;
+  if (props.height != null) attrs["data-height"] = props.height;
+  if (props.fps != null) attrs["data-fps"] = props.fps;
+  if (props.badge) attrs["data-badge"] = props.badge;
+  if (props.bandwidth != null) attrs["data-bandwidth"] = props.bandwidth;
+  if (props.default) attrs["data-default"] = "";
+  return React.createElement("source", attrs);
+}
+
+/** A typed `<track>` (subtitles / captions) for a `<MoviPlayer>` child list. */
+export function MoviTrack(props: MoviTrackProps): React.ReactElement {
+  const attrs: Record<string, unknown> = {
+    src: props.src,
+    kind: props.kind ?? "subtitles",
+  };
+  if (props.srcLang) attrs.srcLang = props.srcLang;
+  if (props.label) attrs.label = props.label;
+  if (props.format) attrs["data-format"] = props.format;
+  if (props.default) attrs["data-default"] = "";
+  return React.createElement("track", attrs);
+}
