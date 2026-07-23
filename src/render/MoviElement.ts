@@ -5701,10 +5701,10 @@ export class MoviElement extends HTMLElement {
       try {
         if (document.pictureInPictureElement === this.video) {
           await document.exitPictureInPicture();
-          this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: false } }));
+          this._emitPipChange(false);
         } else {
           await this.video.requestPictureInPicture();
-          this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: true } }));
+          this._emitPipChange(true);
         }
       } catch (e) {
         Logger.warn(TAG, "Native video PiP failed", e);
@@ -5724,7 +5724,7 @@ export class MoviElement extends HTMLElement {
       this.restorePiPCanvas();
       try { win.close(); } catch (_) {}
       Logger.info(TAG, "togglePiP: PiP window closed");
-      this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: false } }));
+      this._emitPipChange(false);
       return;
     }
 
@@ -5755,7 +5755,7 @@ export class MoviElement extends HTMLElement {
         height: Math.round(pipHeight),
       });
       this._pipWindow = pipWindow;
-      this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: true } }));
+      this._emitPipChange(true);
 
       // Chrome may ignore requestWindow size (remembers last PiP size), force resize
       try {
@@ -7585,13 +7585,16 @@ export class MoviElement extends HTMLElement {
       } catch {}
       this.removeEventListener("loadeddata", restore);
       this.removeEventListener("canplay", restore);
-      this.removeEventListener("durationchange", restore);
     };
     // Different player wrappers fire different events first — listen to the
-    // earliest signals that the new instance is ready to seek.
+    // earliest signals that the new instance is ready to SEEK.
+    // Deliberately NOT `durationchange`: the player emits it as soon as it has
+    // parsed mediaInfo, well before loadEnd, so resuming there would seek a
+    // pipeline that isn't ready. (Both of these were dead listeners until the
+    // element started re-dispatching the standard events; `durationchange`
+    // becoming live is exactly why it had to be dropped from this set.)
     this.addEventListener("loadeddata", restore);
     this.addEventListener("canplay", restore);
-    this.addEventListener("durationchange", restore);
     // Hard-fallback in case none of the events bubble up to the host element
     // (e.g. when the wrapper proxies events differently): poll for readiness.
     if (resumeTime > 0) {
@@ -10024,6 +10027,48 @@ export class MoviElement extends HTMLElement {
         if (hdrSupported !== this._lastHdrSupported) {
           this._lastHdrSupported = hdrSupported;
           this.updateHDRVisibility();
+        }
+        // Standard `progress`: fetching advanced the buffered end. A <video>
+        // gives hosts this for free; ours only drew its own bar, so anyone
+        // rendering custom chrome had to poll getBufferEndTime() themselves.
+        // Throttled by a real threshold rather than the tick so a stalled
+        // download stays quiet instead of firing 4x/sec forever.
+        const bufEnd = this.player.getBufferEndTime?.() ?? 0;
+        if (bufEnd > this._lastProgressBufferEnd + 0.25) {
+          this._lastProgressBufferEnd = bufEnd;
+          this.dispatchEvent(new CustomEvent("progress", { detail: bufEnd }));
+        }
+
+        // `canplaythrough` only once the buffer genuinely reaches the end. A
+        // <video> fires it on an ESTIMATE; we would rather stay silent than
+        // promise a stall-free run we can't back — hosts that gate their UI on
+        // it must not be lied to. Fires at most once per source.
+        const dur = this.player.getDuration?.() ?? 0;
+        if (!this._canPlayThroughFired && dur > 0 && bufEnd >= dur - 0.5) {
+          this._canPlayThroughFired = true;
+          this.dispatchEvent(new Event("canplaythrough"));
+        }
+
+        // `stalled`: the browser tried to fetch and got nothing. Native uses a
+        // ~3s no-data window; mirror that against the real byte cursor, which
+        // (unlike the time-based buffer) doesn't go flat merely because the
+        // playhead is parked during a seek.
+        const bytes = this.player.getBufferEndBytes?.() ?? -1;
+        if (bytes >= 0 && bytes === this._lastStalledBytes) {
+          if (
+            this._stalledSince &&
+            timestamp - this._stalledSince >= 3000 &&
+            !this._stalledFired
+          ) {
+            this._stalledFired = true;
+            this.dispatchEvent(new Event("stalled"));
+          } else if (!this._stalledSince) {
+            this._stalledSince = timestamp;
+          }
+        } else {
+          this._lastStalledBytes = bytes;
+          this._stalledSince = 0;
+          this._stalledFired = false;
         }
         // When the controls *bar* is auto-hidden, progress bar / time /
         // volume icon are invisible — skip those DOM writes. Play/pause
@@ -16368,6 +16413,13 @@ export class MoviElement extends HTMLElement {
         if (!(this._src instanceof File)) {
           const oldSrc = this._src;
           this._src = newValue || null;
+          // `loadstart` lived only in the `src` PROPERTY setter, so
+          // `el.src = url` announced the load but `el.setAttribute("src", url)`
+          // — the same thing to a host, and what frameworks emit — stayed
+          // silent. A <video> fires it for both.
+          this.dispatchEvent(
+            new CustomEvent("loadstart", { detail: { src: this._src } }),
+          );
           // New source → reset the "has been played" flag so the
           // next source's initial poster-seek "paused" transition
           // doesn't trigger a premature bar surface.
@@ -17680,8 +17732,9 @@ export class MoviElement extends HTMLElement {
       this.updateAmbientMode();
       this.updateAmbientUI();
 
-      // Dispatch load event
-      this.dispatchEvent(new Event("loadeddata"));
+      // Dispatch load event. Pipelines that never emit loadEnd land here
+      // instead; whichever runs first wins and the other is a no-op.
+      this._emitLoadedData(true);
     } catch (error) {
       const initMsg = error instanceof Error ? error.message : String(error);
       // A recovery reload (onto a lower rendition after a source error) can fail
@@ -17850,6 +17903,19 @@ export class MoviElement extends HTMLElement {
       // appeared when Auto climbed into an HDR one. The renderer re-runs its own
       // detection in configure(); this re-reads the result.
       this.updateHDRVisibility();
+      // Standard `resize`: HTMLVideoElement fires it whenever the intrinsic
+      // dimensions change, which for us is exactly a quality switch. Hosts
+      // sizing a container around the video had no signal for it at all.
+      const vt = this.player?.trackManager?.getActiveVideoTrack?.();
+      const vw = vt?.width || 0;
+      const vhh = vt?.height || 0;
+      if (vw > 0 && vhh > 0 && (vw !== this._lastVideoWidth || vhh !== this._lastVideoHeight)) {
+        this._lastVideoWidth = vw;
+        this._lastVideoHeight = vhh;
+        this.dispatchEvent(
+          new CustomEvent("resize", { detail: { width: vw, height: vhh } }),
+        );
+      }
       // Notify hosts when the active video resolution changes — including from
       // an ABR/in-place quality switch, which bypasses the manual switch path
       // that normally fires `qualitychange`. Without this a host that persists
@@ -17893,6 +17959,13 @@ export class MoviElement extends HTMLElement {
     // Forward player events to element
     const stateChangeHandler = (state: PlayerState) => {
       Logger.info(TAG, `stateChange: ${state}`);
+      // Standard media events for the stall/resume pair. `play`/`pause` only
+      // report INTENT; a <video> also tells you when playback actually stalled
+      // for data (`waiting`) and when it genuinely resumed (`playing`). Without
+      // these, a host had to subscribe to our non-standard `statechange` and
+      // know our internal PlayerState names just to drive a spinner.
+      if (state === "playing") this.dispatchEvent(new Event("playing"));
+      else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
       // Re-sync the enabled/disabled chrome on every state change. It used to
       // run only on loadEnd/preloadcomplete, so a recovery path that reached a
       // playable state without a fresh loadEnd (the recreate calls load()
@@ -18117,7 +18190,13 @@ export class MoviElement extends HTMLElement {
       // tracks (and thus title/duration) are finalised.
       this.updateMediaSession();
       this.updateMediaSessionPosition();
-      this.dispatchEvent(new Event("loadeddata"));
+      // Native ordering: metadata (duration + tracks known) → first frame
+      // decoded → ready to start. All three are true by the time loadEnd
+      // fires; only `loadeddata` was ever surfaced, so integrators porting
+      // from <video> found `loadedmetadata`/`canplay` simply never arrived.
+      // (`canplaythrough` is deliberately NOT emitted — we cannot honestly
+      // promise buffer-through, and a fake one is worse than none.)
+      this._emitLoadedData(true);
     };
     this.player.on("loadEnd", loadEndHandler);
     this.eventHandlers.set("loadEnd", () =>
@@ -18141,10 +18220,40 @@ export class MoviElement extends HTMLElement {
       }
       this.updateControlsState();
       this.updatePlayPauseIcon();
+      // Documented as a MoviElement DOM event but never actually re-dispatched
+      // — only the player emitted it, so `el.addEventListener("preloadcomplete")`
+      // was dead.
+      this.dispatchEvent(new CustomEvent("preloadcomplete"));
     };
     this.player.on("preloadcomplete", preloadCompleteHandler);
     this.eventHandlers.set("preloadcomplete", () =>
       this.player?.off("preloadcomplete", preloadCompleteHandler),
+    );
+
+    // Standard media events the element never re-exposed. The player already
+    // emits all three; without this bridge `el.addEventListener("seeking"|
+    // "seeked"|"durationchange")` silently did nothing, and the element's OWN
+    // quality-switch resume path listened for `durationchange` on itself — a
+    // listener that could never fire.
+    const seekingHandler = (time: number) =>
+      this.dispatchEvent(new CustomEvent("seeking", { detail: time }));
+    this.player.on("seeking", seekingHandler);
+    this.eventHandlers.set("seeking", () =>
+      this.player?.off("seeking", seekingHandler),
+    );
+
+    const seekedHandler = (time: number) =>
+      this.dispatchEvent(new CustomEvent("seeked", { detail: time }));
+    this.player.on("seeked", seekedHandler);
+    this.eventHandlers.set("seeked", () =>
+      this.player?.off("seeked", seekedHandler),
+    );
+
+    const durationChangeHandler = (duration: number) =>
+      this.dispatchEvent(new CustomEvent("durationchange", { detail: duration }));
+    this.player.on("durationChange", durationChangeHandler);
+    this.eventHandlers.set("durationChange", () =>
+      this.player?.off("durationChange", durationChangeHandler),
     );
 
     // Source fell back to linear (non-seekable) playback — drop the timeline,
@@ -18406,6 +18515,19 @@ export class MoviElement extends HTMLElement {
     // Reset unsupported and loading state on source change so new source can load
     this._isUnsupported = false;
     this.isLoading = false;
+    // Otherwise a shorter next video never clears the previous one's high-water
+    // mark and `progress` would never fire again.
+    this._lastProgressBufferEnd = -1;
+    this._canPlayThroughFired = false;
+    this._loadedDataFired = false;
+    this._lastStalledBytes = -1;
+    this._stalledSince = 0;
+    this._stalledFired = false;
+    this._lastVideoWidth = 0;
+    this._lastVideoHeight = 0;
+    // Standard `emptied`: the previous media has been torn down and the element
+    // is starting over. Pairs with the `loadstart` that follows.
+    this.dispatchEvent(new Event("emptied"));
     // Drop any autoplay deferred for the previous source — initializePlayer
     // re-arms it for the new one if still hidden.
     this._autoplayPendingVisible = false;
@@ -19043,8 +19165,47 @@ export class MoviElement extends HTMLElement {
    *  then jump to the target once it lands. Showing the target throughout is
    *  what the viewer asked for. */
   private _uiSeekTarget = -1;
+  /**
+   * Picture-in-Picture state change. Emits our own `pipchange` plus the two
+   * events HTMLVideoElement uses, so code written against a native <video>
+   * (`enterpictureinpicture` / `leavepictureinpicture`) works unchanged.
+   */
+  private _emitPipChange(pip: boolean): void {
+    this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip } }));
+    this.dispatchEvent(
+      new Event(pip ? "enterpictureinpicture" : "leavepictureinpicture"),
+    );
+  }
+
   /** Last observed isHDRSupported(), so the UI tick can notice a flip. */
   private _lastHdrSupported: boolean | null = null;
+  /** Buffered-end at the last `progress` dispatch. Reset on a new source. */
+  private _lastProgressBufferEnd = -1;
+  /** Intrinsic size at the last `resize` dispatch. */
+  private _lastVideoWidth = 0;
+  private _lastVideoHeight = 0;
+  /** `canplaythrough` is once-per-source. */
+  private _canPlayThroughFired = false;
+  /**
+   * `loadeddata` is dispatched from BOTH loadEnd and initializePlayer's finally
+   * (different pipelines reach one or the other), so a normal load fired it
+   * twice while its `loadedmetadata`/`canplay` neighbours fired once. A
+   * <video> fires it once per load; this keeps the triple coherent.
+   */
+  private _loadedDataFired = false;
+
+  /** Dispatch the loaded/ready triple once per load, in native order. */
+  private _emitLoadedData(withMetadata: boolean): void {
+    if (this._loadedDataFired) return;
+    this._loadedDataFired = true;
+    if (withMetadata) this.dispatchEvent(new Event("loadedmetadata"));
+    this.dispatchEvent(new Event("loadeddata"));
+    if (withMetadata) this.dispatchEvent(new Event("canplay"));
+  }
+  /** Byte cursor / timer backing the `stalled` no-data window. */
+  private _lastStalledBytes = -1;
+  private _stalledSince = 0;
+  private _stalledFired = false;
   /** Ownership token for _uiSeekTarget. Value equality is NOT enough: a single
    *  click fires BOTH the document-mouseup and the bar-click handler with the
    *  SAME target, so the first one's finally cleared the second one's still-live
