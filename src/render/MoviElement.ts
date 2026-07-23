@@ -16898,10 +16898,24 @@ export class MoviElement extends HTMLElement {
     // toggling) collapses a still-loading VIDEO into the strip. Treat that
     // window like the error state and decide from the src's media type until
     // the real tracks arrive.
+    // And the same trap once more, this time WITHOUT a telltale state: a
+    // quality switch REPLACES the track list, so getActiveVideoTrack() is null
+    // for a moment while the player is still "playing"/"seeking". None of the
+    // states above match, so the generic `!hasVideoTrack && hasAudio` branch
+    // decided the source had turned into audio and painted cover art over a
+    // playing video — until the tracks resolved and it flipped back. This runs
+    // on every resize, so any layout settle inside that window triggered it,
+    // which is why it looked random. Once a source has shown a video track, a
+    // momentary absence is a rebuild, not a change of medium.
+    if (hasVideoTrack) this._sourceHadVideoTrack = true;
     const state = this.player?.getState?.();
     const errored = state === "error" || this._isUnsupported;
     const tracksUnresolved =
-      !hasVideoTrack && (errored || state === "idle" || state === "loading");
+      !hasVideoTrack &&
+      (errored ||
+        state === "idle" ||
+        state === "loading" ||
+        this._sourceHadVideoTrack);
     const srcIsAudio =
       typeof this._src === "string" &&
       this.guessMediaType(this._src).startsWith("audio/");
@@ -18520,6 +18534,9 @@ export class MoviElement extends HTMLElement {
     this._lastProgressBufferEnd = -1;
     this._canPlayThroughFired = false;
     this._loadedDataFired = false;
+    // A genuine video→audio source change must still be able to reach audio
+    // mode, so this memory is per-source.
+    this._sourceHadVideoTrack = false;
     this._lastStalledBytes = -1;
     this._stalledSince = 0;
     this._stalledFired = false;
@@ -19186,6 +19203,12 @@ export class MoviElement extends HTMLElement {
   private _lastVideoHeight = 0;
   /** `canplaythrough` is once-per-source. */
   private _canPlayThroughFired = false;
+  /**
+   * Whether THIS source has ever resolved a video track. Lets the cover-art
+   * decision tell "the track list is being rebuilt" (quality switch) apart from
+   * "this really is an audio source". Must reset with the source.
+   */
+  private _sourceHadVideoTrack = false;
   /**
    * `loadeddata` is dispatched from BOTH loadEnd and initializePlayer's finally
    * (different pipelines reach one or the other), so a normal load fired it
