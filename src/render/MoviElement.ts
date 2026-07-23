@@ -22392,6 +22392,196 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Reflecting IDL properties for the remaining observed attributes.
+  //
+  // A custom element should let every documented attribute be set as a property
+  // too — `el.rotate = 90` alongside `rotate="90"`. Most attributes already had
+  // one; these were the stragglers that could only be reached via
+  // setAttribute(). Each simply reflects to/from its attribute, so writing the
+  // property runs the same attributeChangedCallback the markup path does — no
+  // second code path to keep in sync. Booleans reflect as presence; strings
+  // reflect their value (null / "" removes).
+  // ---------------------------------------------------------------------------
+
+  private _reflectBool(attr: string, value: boolean): void {
+    if (value) this.setAttribute(attr, "");
+    else this.removeAttribute(attr);
+  }
+
+  private _reflectStr(attr: string, value: string | null): void {
+    if (value == null || value === "") this.removeAttribute(attr);
+    else this.setAttribute(attr, value);
+  }
+
+  /** CORS mode for cross-origin media (mirrors `HTMLMediaElement.crossOrigin`). */
+  get crossOrigin(): "anonymous" | "use-credentials" | null {
+    return this.getAttribute("crossorigin") as
+      | "anonymous"
+      | "use-credentials"
+      | null;
+  }
+  set crossOrigin(value: "anonymous" | "use-credentials" | null) {
+    this._reflectStr("crossorigin", value);
+  }
+
+  /** Subtitle font size (multiplier, or a percentage above 5). */
+  get subtitleSize(): string | null {
+    return this.getAttribute("subtitlesize");
+  }
+  set subtitleSize(value: string | number | null) {
+    this._reflectStr("subtitlesize", value == null ? null : String(value));
+  }
+
+  /** Subtitle text colour as a hex string (`#fff` / `#ffffff`). */
+  get subtitleColor(): string | null {
+    return this.getAttribute("subtitlecolor");
+  }
+  set subtitleColor(value: string | null) {
+    this._reflectStr("subtitlecolor", value);
+  }
+
+  /** Subtitle background opacity (0–1, or a percentage above 1). */
+  get subtitleBg(): string | null {
+    return this.getAttribute("subtitlebg");
+  }
+  set subtitleBg(value: string | number | null) {
+    this._reflectStr("subtitlebg", value == null ? null : String(value));
+  }
+
+  /** Subtitle edge style. */
+  get subtitleEdge(): "none" | "shadow" | "outline" | "raised" | null {
+    return this.getAttribute("subtitleedge") as
+      | "none"
+      | "shadow"
+      | "outline"
+      | "raised"
+      | null;
+  }
+  set subtitleEdge(value: "none" | "shadow" | "outline" | "raised" | null) {
+    this._reflectStr("subtitleedge", value);
+  }
+
+  /** CSS selector for an external element to receive the ambient glow. */
+  get ambientWrapper(): string | null {
+    return this.getAttribute("ambientwrapper");
+  }
+  set ambientWrapper(value: string | null) {
+    this._reflectStr("ambientwrapper", value);
+  }
+
+  /** Offer a resume-from-last-position prompt for this source. */
+  get resume(): boolean {
+    return this.hasAttribute("resume");
+  }
+  set resume(value: boolean) {
+    this._reflectBool("resume", value);
+  }
+
+  /** Encrypted (token-authenticated) source mode. */
+  get encrypted(): boolean {
+    return this.hasAttribute("encrypted");
+  }
+  set encrypted(value: boolean) {
+    this._reflectBool("encrypted", value);
+  }
+
+  /** Token endpoint URL for encrypted playback. */
+  get tokenUrl(): string | null {
+    return this.getAttribute("tokenurl");
+  }
+  set tokenUrl(value: string | null) {
+    this._reflectStr("tokenurl", value);
+  }
+
+  /** Video endpoint URL for encrypted playback. */
+  get videoUrl(): string | null {
+    return this.getAttribute("videourl");
+  }
+  set videoUrl(value: string | null) {
+    this._reflectStr("videourl", value);
+  }
+
+  /** Video ID for encrypted playback. */
+  get videoId(): string | null {
+    return this.getAttribute("videoid");
+  }
+  set videoId(value: string | null) {
+    this._reflectStr("videoid", value);
+  }
+
+  /** Enable DRM (Widevine / FairPlay) playback; pair with `licenseUrl`. */
+  get drm(): boolean {
+    return this.hasAttribute("drm");
+  }
+  set drm(value: boolean) {
+    this._reflectBool("drm", value);
+  }
+
+  /** DRM license server URL. */
+  get licenseUrl(): string | null {
+    return this.getAttribute("licenseurl");
+  }
+  set licenseUrl(value: string | null) {
+    this._reflectStr("licenseurl", value);
+  }
+
+  /** Extra HTTP headers for the DRM license request (JSON object string). */
+  get licenseHeaders(): string | null {
+    return this.getAttribute("licenseheaders");
+  }
+  set licenseHeaders(value: string | null) {
+    this._reflectStr("licenseheaders", value);
+  }
+
+  /** Enable the LCEVC enhancement layer. */
+  get lcevc(): boolean {
+    return this.hasAttribute("lcevc");
+  }
+  set lcevc(value: boolean) {
+    this._reflectBool("lcevc", value);
+  }
+
+  /** LCEVC enhancement-data URL. */
+  get lcevcUrl(): string | null {
+    return this.getAttribute("lcevcurl");
+  }
+  set lcevcUrl(value: string | null) {
+    this._reflectStr("lcevcurl", value);
+  }
+
+  /** 360° projection mode (`equirect`, or empty to auto-detect from metadata). */
+  get vr(): string | null {
+    return this.getAttribute("vr");
+  }
+  set vr(value: string | null) {
+    this._reflectStr("vr", value);
+  }
+
+  /** Show the on-screen 360° look-around joystick pad. */
+  get vrPad(): boolean {
+    return this.hasAttribute("vrpad");
+  }
+  set vrPad(value: boolean) {
+    this._reflectBool("vrpad", value);
+  }
+
+  /** Audio output device — a concrete `deviceId` or a label substring. */
+  get audioOutput(): string | null {
+    return this.getAttribute("audiooutput");
+  }
+  set audioOutput(value: string | null) {
+    this._reflectStr("audiooutput", value);
+  }
+
+  /** What to do with a source Movi can't play (`native` hands it to `<video>`). */
+  get fallback(): "native" | null {
+    return this.getAttribute("fallback") as "native" | null;
+  }
+  set fallback(value: "native" | null) {
+    this._reflectStr("fallback", value);
+  }
+
   /**
    * Parse a `postertime` string into seconds, clamped to [0, duration].
    * Accepted formats:
