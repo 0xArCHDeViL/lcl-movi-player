@@ -524,7 +524,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `ratechange`           | `{ playbackRate: number }`           | Playback speed changed                             |
 | `titlechange`          | `{ title: string \| null }`          | Resolved/cleaned video title changed               |
 | `audiotrackchange`     | —                                    | Active audio track switched                        |
-| `subtitleTrackChange`  | —                                    | Active subtitle track switched (note camelCase)    |
+| `subtitletrackchange`  | —                                    | Active subtitle track switched                     |
 | `trackschange`         | `Track[]`                            | Available tracks list updated                      |
 | `fullscreenchange`     | `{ fullscreen: boolean }`            | Player entered/exited fullscreen                   |
 | `movi-fullscreen-request` | —                                 | **Cancelable** — fires before `requestFullscreen()`. `preventDefault()` blocks it so a host can take over via [`setHostFullscreen()`](./element.md#sethostfullscreen-active-boolean-void) |
@@ -535,6 +535,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attribute     |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
 | `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
+| `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI |
 | `audiotrackchange`     | —                                    | Active audio track switched                        |
 | `audiooutputchange`    | `{ deviceId: string \| null }`       | Audio output device (sink) changed                 |
 | `audiostripchange`     | `{ active: boolean }`                | Audio-only strip layout entered/left               |
@@ -543,7 +544,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `filerevoked`          | `{ offset, length, reason }`         | Underlying `File` handle was revoked by the browser (mobile background / memory pressure). Prompt the user to re-pick. |
 
 ::: tip Casing note
-`subtitleTrackChange` keeps camelCase for backward compatibility while every other custom event uses lowercase. If you're listening for both `audiotrackchange` and subtitle changes, mind the casing.
+`subtitletrackchange` is the canonical name, matching every other DOM event here. A camelCase `subtitleTrackChange` is dispatched alongside it as a compatibility alias — earlier versions of this page documented only that spelling. Prefer the lowercase one.
 :::
 
 ### Parity with `<video>`

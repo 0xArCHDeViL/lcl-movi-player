@@ -9027,6 +9027,10 @@ export class MoviElement extends HTMLElement {
     if (this._linearMode) return;
     this._linearMode = true;
     this.classList.add("movi-linear");
+    // Documented as a MoviElement DOM event but never re-dispatched — only the
+    // player emitted it, so a host that hid its own seek UI on `linearmode`
+    // (exactly what the docs tell them to do) was never told.
+    this.dispatchEvent(new Event("linearmode"));
     // If the seek-dependent timeline strip happens to be open, close it — it
     // can't generate frames without random access.
     const panel = this.shadowRoot?.querySelector(
@@ -17891,6 +17895,12 @@ export class MoviElement extends HTMLElement {
     const subtitleTrackChangeHandler = () => {
       this.updateSubtitleTrackMenu();
       this.dispatchEvent(new Event("subtitletrackchange"));
+      // The docs have always listed the camelCase spelling for this one (with a
+      // note about keeping it for backward compatibility) while the code only
+      // ever dispatched lowercase — so anyone who followed the documented name
+      // got nothing. Emit both; lowercase is canonical, camelCase is the alias
+      // the documentation promised.
+      this.dispatchEvent(new Event("subtitleTrackChange"));
     };
     this.player.trackManager.on(
       "subtitleTrackChange",

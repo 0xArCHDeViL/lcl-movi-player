@@ -1550,22 +1550,36 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | Event                  | Detail payload                       | When it fires                                      |
 | ---------------------- | ------------------------------------ | -------------------------------------------------- |
 | `loadstart`            | `{ src: string \| null }`            | A new source is being loaded                       |
+| `emptied`              | —                                    | Previous media torn down; a new load is starting   |
+| `loadedmetadata`       | —                                    | Duration and track list are known                  |
 | `loadeddata`           | —                                    | First frame is decoded and ready to render         |
+| `canplay`              | —                                    | Enough data buffered to begin playback             |
+| `canplaythrough`       | —                                    | Buffer reached the end of the media. Unlike `<video>` this is **not** an estimate — it fires only when the rest is genuinely buffered, at most once per source |
+| `durationchange`       | `number` (seconds)                   | Duration became known, or was corrected mid-playback |
 | `play`                 | —                                    | Playback started                                   |
+| `playing`              | —                                    | Playback actually resumed (after a stall or start) |
+| `waiting`              | —                                    | Playback stalled waiting for data                  |
 | `pause`                | —                                    | Playback paused                                    |
+| `seeking`              | `number` (target time)               | A seek started                                     |
+| `seeked`               | `number` (landed time)               | The seek completed                                 |
+| `progress`             | `number` (buffered end, seconds)     | Fetching advanced the buffered end                 |
+| `stalled`              | —                                    | No data arrived for ~3s while fetching             |
 | `ended`                | —                                    | Playback reached the end                           |
 | `timeupdate`           | `number` (current time)              | Current time advanced (fires repeatedly)           |
+| `resize`               | `{ width: number, height: number }`  | Intrinsic video size changed (i.e. a quality switch) |
 | `error`                | `Error`                              | Internal player error surfaced to the DOM          |
 | `statechange`          | `PlayerState`                        | Underlying `MoviPlayer` state transitioned         |
 | `volumechange`         | `{ volume: number, muted: boolean }` | Volume or mute toggled (UI, hotkey, or property)   |
 | `ratechange`           | `{ playbackRate: number }`           | Playback speed changed                             |
 | `titlechange`          | `{ title: string \| null }`          | Resolved/cleaned video title changed               |
 | `audiotrackchange`     | —                                    | Active audio track switched                        |
-| `subtitleTrackChange`  | —                                    | Active subtitle track switched (note camelCase)    |
+| `subtitletrackchange`  | —                                    | Active subtitle track switched                     |
 | `trackschange`         | `Track[]`                            | Available tracks list updated                      |
 | `fullscreenchange`     | `{ fullscreen: boolean }`            | Player entered/exited fullscreen                   |
 | `movi-fullscreen-request` | —                                 | **Cancelable** — fired before `requestFullscreen()` so a host can take over (call `setHostFullscreen()`) |
 | `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
+| `enterpictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
+| `leavepictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
 | `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
@@ -1574,8 +1588,10 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `filerevoked`          | `{ offset, length, reason }`         | Underlying `File` handle was revoked by the browser (mobile background / memory pressure) |
 
 ::: tip Casing note
-`subtitleTrackChange` keeps camelCase for backward compatibility while every other custom event uses lowercase. If you're listening for both `audiotrackchange` and subtitle changes, mind the casing.
+`subtitletrackchange` is the canonical name, matching every other DOM event here. A camelCase `subtitleTrackChange` is dispatched alongside it as a compatibility alias — earlier versions of this page documented only that spelling. Prefer the lowercase one.
 :::
+
+Every `HTMLMediaElement` event above behaves as it does on a `<video>`, except that `canplaythrough` is stricter (see the table). `abort`, `suspend`, `encrypted` and `waitingforkey` are not emitted — see [Events → Parity with `<video>`](./events.md#parity-with-video) for the reasoning and for the player-level (`player.on(...)`) event list.
 
 ### Lifecycle
 
