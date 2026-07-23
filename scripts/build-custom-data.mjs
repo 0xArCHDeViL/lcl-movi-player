@@ -53,6 +53,39 @@ function observedAttributes() {
   return names;
 }
 
+/**
+ * The keys of the `MoviPlayerAttributes` interface in src/element.ts — the type
+ * that backs the React/Vue/Svelte wrappers' declarative props. It is hand-typed
+ * (the value types are JSX-shaped: `boolean | ""`, literal unions) so it can't
+ * simply be generated, but its KEY SET must stay equal to observedAttributes,
+ * or a new attribute lands with no autocomplete in any framework wrapper — which
+ * is the exact gap this whole pipeline exists to prevent.
+ */
+function interfaceKeys() {
+  const src = read("src/element.ts");
+  const k = src.indexOf("export interface MoviPlayerAttributes");
+  if (k < 0) throw new Error("MoviPlayerAttributes not found in src/element.ts");
+  const end = src.indexOf("\n}", k);
+  return [...src.slice(k, end).matchAll(/^\s{2}([a-z0-9]+)\??:/gm)].map((m) => m[1]);
+}
+
+function assertInterfaceCovers(attrs) {
+  const keys = new Set(interfaceKeys());
+  const missing = attrs.filter((a) => !keys.has(a));
+  const extra = [...keys].filter((k) => !attrs.includes(k));
+  if (missing.length || extra.length) {
+    const parts = [];
+    if (missing.length)
+      parts.push(`missing from the type: ${missing.join(", ")}`);
+    if (extra.length) parts.push(`no such attribute: ${extra.join(", ")}`);
+    throw new Error(
+      `MoviPlayerAttributes (src/element.ts) is out of sync with observedAttributes — ${parts.join("; ")}.\n` +
+        `That interface backs the React/Vue/Svelte wrappers' props, so it must\n` +
+        `list every attribute and nothing else. Add/remove the entry to match.`,
+    );
+  }
+}
+
 /** The body of the `#### \`attr\`` section, stopping at the next `---` rule. */
 function docSection(doc, attr) {
   const esc = attr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -245,6 +278,7 @@ function buildEvents() {
 /* ------------------------------------------------------------------- outputs */
 
 const attributes = buildAttributes();
+assertInterfaceCovers(attributes.map((a) => a.name));
 const cssProperties = buildCssProperties();
 const events = buildEvents();
 

@@ -142,9 +142,66 @@ export interface MoviPlayerAttributes {
   resume?: boolean | "";
   drm?: string;
   licenseurl?: string;
+  /** Extra HTTP headers for the DRM license request only (JSON object string). */
+  licenseheaders?: string;
   encrypted?: boolean | "";
   lcevc?: boolean | "";
   lcevcurl?: string;
+  /** Token endpoint URL for encrypted playback. */
+  tokenurl?: string;
+  /** Video endpoint URL for encrypted playback. */
+  videourl?: string;
+  /** Video identifier sent to the token server. */
+  videoid?: string;
+
+  /** Element width in pixels (CSS sizing is preferred). */
+  width?: number | string;
+  /** Element height in pixels (CSS sizing is preferred). */
+  height?: number | string;
+  /** How the video fills the canvas. */
+  objectfit?: "contain" | "cover" | "fill" | "zoom" | "control";
+  /** Rotate the video, in degrees (snaps to a quarter-turn). */
+  rotate?: 0 | 90 | 180 | 270;
+  /** Rendering backend. */
+  renderer?: "canvas";
+  /** Show the title-bar overlay at the top of the player. */
+  showtitle?: boolean | "";
+  /** Enable ±10s fast-seek controls. */
+  fastseek?: boolean | "";
+  /** Enable the double-tap-to-seek gesture. */
+  doubletap?: boolean | "";
+  /** Disable all keyboard shortcuts. */
+  nohotkeys?: boolean | "";
+  /** Start playback at this time, in seconds. */
+  startat?: number | string;
+  /** Target prefetch window, in megabytes. */
+  buffersize?: number | string;
+  /** Override the video frame rate (0 = use the source's own). */
+  fps?: number | string;
+  /** Force software decoding (FFmpeg WASM) instead of WebCodecs. `auto` (default) picks per source. */
+  sw?: boolean | "auto";
+  /** Enable HDR tone-mapping (Chromium + canvas renderer + HDR source). */
+  hdr?: boolean | "";
+  /** Generate on-demand thumbnails for seek-bar previews. */
+  thumb?: boolean | "";
+
+  /** Subtitle timing offset, in seconds (positive = later, VLC/mpv sign). */
+  subtitledelay?: number | string;
+  /** Subtitle font size — a multiplier, or a percentage above 5. */
+  subtitlesize?: number | string;
+  /** Subtitle text colour as a hex string (`#fff` / `#ffffff`). */
+  subtitlecolor?: string;
+  /** Subtitle background opacity — 0–1, or a percentage above 1. */
+  subtitlebg?: number | string;
+  /** Subtitle edge style. */
+  subtitleedge?: "none" | "shadow" | "outline" | "raised";
+
+  /** CSS selector for an external element to receive the ambient glow. */
+  ambientwrapper?: string;
+  /** What to do with a source Movi can't play (`native` → hand to `<video>`). */
+  fallback?: "native";
+  /** @deprecated Replaced by {@link playsinline}. */
+  gesturefs?: boolean | "";
 }
 
 declare global {
