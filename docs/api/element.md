@@ -727,6 +727,23 @@ Supported providers: PallyCon, EZDRM, BuyDRM, AWS Media Services, custom.
 
 ---
 
+#### `licenseheaders`
+
+Extra HTTP headers sent with the **DRM license request only** — the auth token, customer ID or provider-specific header your license server expects. A JSON object string; invalid JSON is ignored with a console warning.
+
+```html
+<movi-player
+  src="stream.mpd"
+  drm
+  licenseurl="https://license.example.com/wv"
+  licenseheaders='{"Authorization":"Bearer eyJ...","X-Customer-Id":"acme"}'
+></movi-player>
+```
+
+Distinct from [`headers`](#headers), which applies to media requests (manifests, segments, thumbnails) rather than to the license exchange. Set both if your license server and your CDN each need auth.
+
+---
+
 #### `headers`
 
 Custom HTTP headers applied to **every** media network request — adaptive-stream manifests *and* their segments (Shaka request filter, hls.js `xhrSetup`, dash.js request interceptor), progressive HTTP, thumbnails, and the encrypted source (stream GET + token refresh). Use it to carry auth tokens, signed-URL headers, or API keys.
@@ -759,6 +776,25 @@ Data-saver mode — play only the audio and skip the video decode to save CPU an
 ```html
 <movi-player src="podcast.mkv" audioonly controls></movi-player>
 ```
+
+---
+
+#### `fallback`
+
+What to do with a source Movi itself can't play.
+
+**Values:**
+
+- *(unset, default)* — surface the error screen
+- `native` — hand the source to the browser's own `<video>` and keep the Movi UI on top of it
+
+```html
+<movi-player src="video.mp4" fallback="native" controls></movi-player>
+```
+
+Tried once per source. If the native element also fails, playback falls through to the software-decode path (for decoder errors) or to the normal error screen — so this only ever adds a recovery attempt, it never hides a genuine failure.
+
+Native playback exposes no track list and no WASM canvas, so canvas-dependent controls (rotate, snapshot, aspect, ambient mode, the timeline strip, HDR, quality/subtitle menus) hide themselves for the duration. A [`nativefallback`](./events.md#movielement-dom-events) event fires with the source that was handed over.
 
 ```typescript
 player.audioOnly = true;   // switch to audio-only at runtime
