@@ -258,8 +258,15 @@
               }
             },
             {
+              "name": "engine",
+              "description": "Which playback engine leads, and what follows it. Movi has four ways to play a source and, by default, a fixed order: its own WASM demuxer + WebCodecs pipeline first; Shaka (then dash.js / hls.js) for adaptive manifests; the WASM demuxer again as the manifest fallback; the browser's `<video>` last. `engine` re-orders that — the first name listed is attempted first, and any others define what's tried when it fails, replacing the built-in escalation.",
+              "type": {
+                "text": "\"wasm\" | \"shaka\" | \"dashjs\" | \"hlsjs\" | \"native\""
+              }
+            },
+            {
               "name": "wasmurl",
-              "description": "URL of the external `movi.wasm`, used only by the **slim build** (`element.slim.js`)."
+              "description": "URL of the external `movi.wasm`, used only by the **slim build**"
             }
           ],
           "events": [

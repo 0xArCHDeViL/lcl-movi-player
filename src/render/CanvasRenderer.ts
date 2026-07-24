@@ -5,6 +5,7 @@
 
 import { Logger } from "../utils/Logger";
 import type { SubtitleCue } from "../types";
+import { KARAOKE_GHOST_DELIM } from "./sanitizeVttHtml";
 
 const TAG = "CanvasRenderer";
 
@@ -3395,7 +3396,7 @@ export class CanvasRenderer {
       // 2D canvas and applied as `min-width` on the line. This anchors
       // the box at full-sentence width from cue #1 without putting any
       // ghost text into the DOM where it could leak through.
-      const KARAOKE_DELIM = "⟨⟨GHOST⟩⟩";
+      const KARAOKE_DELIM = KARAOKE_GHOST_DELIM;
       const delimIdx = cue.text.indexOf(KARAOKE_DELIM);
       const visibleText =
         delimIdx >= 0 ? cue.text.slice(0, delimIdx) : cue.text;

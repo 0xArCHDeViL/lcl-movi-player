@@ -27,7 +27,7 @@
       "require": "./dist/element.cjs",
       "types": "./dist/element.d.ts"
     },
-    "./slim": {
+    "./element/slim": {
       "import": "./dist/element.slim.js",
       "require": "./dist/element.slim.cjs",
       "types": "./dist/element.d.ts"
@@ -38,15 +38,30 @@
       "import": "./dist/react/index.js",
       "default": "./dist/react/index.js"
     },
+    "./react/slim": {
+      "types": "./dist/react/slim.tsx",
+      "import": "./dist/react/slim.js",
+      "default": "./dist/react/slim.js"
+    },
     "./vue": {
       "types": "./dist/vue/index.ts",
       "import": "./dist/vue/index.js",
       "default": "./dist/vue/index.js"
     },
+    "./vue/slim": {
+      "types": "./dist/vue/slim.ts",
+      "import": "./dist/vue/slim.js",
+      "default": "./dist/vue/slim.js"
+    },
     "./svelte": {
       "types": "./dist/svelte/MoviPlayer.svelte",
       "svelte": "./dist/svelte/MoviPlayer.svelte",
       "default": "./dist/svelte/MoviPlayer.svelte"
+    },
+    "./svelte/slim": {
+      "types": "./dist/svelte/MoviPlayerSlim.svelte",
+      "svelte": "./dist/svelte/MoviPlayerSlim.svelte",
+      "default": "./dist/svelte/MoviPlayerSlim.svelte"
     },
     "./svelte/MoviSource": {
       "types": "./dist/svelte/MoviSource.svelte",

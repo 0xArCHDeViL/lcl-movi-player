@@ -102,6 +102,11 @@ import type { MoviElement as MoviElementType } from './render/MoviElement';
 // "movi-player/element"`, or read MoviElement.version / element.version.
 export { VERSION } from './version';
 
+// Which bundle this is — "slim" (separate movi.wasm) or "full" (embedded).
+// Separate from VERSION, which is identical across both. Also readable as
+// MoviElement.build / element.build.
+export { BUILD } from './build-flags';
+
 // QoE analytics — versioned event stream + pluggable sinks.
 export {
   QoECollector,
@@ -204,6 +209,12 @@ export interface MoviPlayerAttributes {
   ambientwrapper?: string;
   /** What to do with a source Movi can't play (`native` → hand to `<video>`). */
   fallback?: "native";
+  /**
+   * Playback-engine priority, space-separated. The first name leads; any others
+   * replace the built-in escalation. `wasm` (Movi's demuxer + WebCodecs — for a
+   * manifest, its own DASH/HLS handling), `shaka`, `dashjs`, `hlsjs`, `native`.
+   */
+  engine?: string;
   /** @deprecated Replaced by {@link playsinline}. */
   gesturefs?: boolean | "";
   /** URL of the external `movi.wasm` (slim build only; defaults to next to the JS bundle). */

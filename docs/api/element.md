@@ -781,7 +781,8 @@ Data-saver mode — play only the audio and skip the video decode to save CPU an
 
 #### `wasmurl`
 
-URL of the external `movi.wasm`, used only by the **slim build** (`element.slim.js`).
+URL of the external `movi.wasm`, used only by the **slim build**
+(`movi-player/element/slim`, i.e. `dist/element.slim.js`).
 The slim build ships the WASM as a separate file instead of embedding it; by
 default it loads `movi.wasm` from next to the JS bundle. Set `wasmurl` when you
 host it somewhere else — a CDN, or a versioned path.
@@ -814,7 +815,37 @@ What to do with a source Movi itself can't play.
 
 Tried once per source. If the native element also fails, playback falls through to the software-decode path (for decoder errors) or to the normal error screen — so this only ever adds a recovery attempt, it never hides a genuine failure.
 
-Native playback exposes no track list and no WASM canvas, so canvas-dependent controls (rotate, snapshot, aspect, ambient mode, the timeline strip, HDR, quality/subtitle menus) hide themselves for the duration. A [`nativefallback`](./events.md#movielement-dom-events) event fires with the source that was handed over.
+Native playback has no WASM canvas, so canvas-dependent controls (rotate, snapshot, aspect, ambient mode, the timeline strip, HDR) hide themselves for the duration. What survives: the quality menu (including Auto) when the source declared a `<source>` ladder, subtitles declared as `<track>` children (rendered in Movi's own overlay, so the subtitle styling controls still apply), and split/multi-language audio via a synced companion `<audio>`. A [`nativefallback`](./events.md#movielement-dom-events) event fires with the source that was handed over.
+
+---
+
+#### `engine`
+
+Which playback engine leads, and what follows it. Movi has four ways to play a source and, by default, a fixed order: its own WASM demuxer + WebCodecs pipeline first; Shaka (then dash.js / hls.js) for adaptive manifests; the WASM demuxer again as the manifest fallback; the browser's `<video>` last. `engine` re-orders that — the first name listed is attempted first, and any others define what's tried when it fails, replacing the built-in escalation.
+
+**Values:** *(space-separated; unset keeps the built-in order)*
+
+- `wasm` — Movi's own demuxer + WebCodecs pipeline. For a manifest this is Movi's own DASH/HLS handling, which the default order only reaches as a last resort. Aliases: `demuxer`, `movi`
+- `shaka` — Shaka Player (the default engine for adaptive manifests)
+- `dashjs` — dash.js
+- `hlsjs` — hls.js
+- `native` — the browser's own `<video>`, under Movi's UI
+
+```html
+<!-- native <video> first, nothing after it -->
+<movi-player src="video.mp4" engine="native" controls></movi-player>
+
+<!-- native first, Movi's pipeline if it can't play it -->
+<movi-player src="video.mkv" engine="native wasm" controls></movi-player>
+
+<!-- dash.js instead of Shaka, Shaka as the backup -->
+<movi-player src="stream.mpd" engine="dashjs shaka" controls></movi-player>
+
+<!-- force Movi's own demuxer for a manifest, skipping every MSE engine -->
+<movi-player src="stream.m3u8" engine="wasm" controls></movi-player>
+```
+
+Read at load time; changing it applies to the next source. A single name means exactly that engine and no fallback — list the ones you want tried, in order. Independent of [`fallback`](#fallback), which only appends native as a last-resort recovery; `engine` decides the whole order.
 
 ```typescript
 player.audioOnly = true;   // switch to audio-only at runtime
@@ -934,6 +965,36 @@ Also settable at runtime — see [`setAudioOutput()`](#setaudiooutput-deviceid-s
 ---
 
 ## Properties
+
+### Build Info
+
+#### `version: string` (read-only)
+
+The player version, baked in at build time. Readable off the class, off any instance, or as an import — all three are the same string.
+
+```typescript
+MoviElement.version;                              // "0.3.6"
+document.querySelector("movi-player").version;    // "0.3.6"
+
+import { VERSION } from "movi-player/element";
+```
+
+---
+
+#### `build: "slim" | "full"` (read-only)
+
+Which bundle is running: `"full"` embeds the FFmpeg WASM in the JS, `"slim"` streams it from a separate `movi.wasm` (see [`wasmurl`](#wasmurl)).
+
+```typescript
+MoviElement.build;                              // "full"
+document.querySelector("movi-player").build;    // "full"
+
+import { BUILD } from "movi-player/element";
+```
+
+Deliberately separate from `version` — both bundles ship the same release, so folding it in (`0.3.6+slim`) would break any consumer comparing versions for equality. It's the axis worth capturing in a bug report: the two differ in how the engine loads, and in what happens when it can't (the slim build degrades to native `<video>` on its own). The stats panel shows both as `Player: 0.3.6 (slim)`.
+
+---
 
 ### Media Properties
 

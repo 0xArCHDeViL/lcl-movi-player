@@ -858,10 +858,60 @@
           ]
         },
         {
+          "name": "engine",
+          "description": {
+            "kind": "markdown",
+            "value": "Which playback engine leads, and what follows it. Movi has four ways to play a source and, by default, a fixed order: its own WASM demuxer + WebCodecs pipeline first; Shaka (then dash.js / hls.js) for adaptive manifests; the WASM demuxer again as the manifest fallback; the browser's `<video>` last. `engine` re-orders that — the first name listed is attempted first, and any others define what's tried when it fails, replacing the built-in escalation."
+          },
+          "values": [
+            {
+              "name": "wasm",
+              "description": {
+                "kind": "markdown",
+                "value": "Movi's own demuxer + WebCodecs pipeline. For a manifest this is Movi's own DASH/HLS handling, which the default order only reaches as a last resort. Aliases: demuxer, movi"
+              }
+            },
+            {
+              "name": "shaka",
+              "description": {
+                "kind": "markdown",
+                "value": "Shaka Player (the default engine for adaptive manifests)"
+              }
+            },
+            {
+              "name": "dashjs",
+              "description": {
+                "kind": "markdown",
+                "value": "dash.js"
+              }
+            },
+            {
+              "name": "hlsjs",
+              "description": {
+                "kind": "markdown",
+                "value": "hls.js"
+              }
+            },
+            {
+              "name": "native",
+              "description": {
+                "kind": "markdown",
+                "value": "the browser's own <video>, under Movi's UI"
+              }
+            }
+          ],
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#engine"
+            }
+          ]
+        },
+        {
           "name": "wasmurl",
           "description": {
             "kind": "markdown",
-            "value": "URL of the external `movi.wasm`, used only by the **slim build** (`element.slim.js`)."
+            "value": "URL of the external `movi.wasm`, used only by the **slim build**"
           },
           "references": [
             {

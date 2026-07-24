@@ -17,3 +17,15 @@ declare const __MOVI_SLIM__: boolean | undefined;
  */
 export const IS_SLIM: boolean =
   typeof __MOVI_SLIM__ !== "undefined" ? __MOVI_SLIM__ : false;
+
+/**
+ * Which bundle is running: `"slim"` (WASM streamed from a separate
+ * `movi.wasm`) or `"full"` (WASM embedded in the JS).
+ *
+ * Deliberately NOT folded into {@link VERSION} — both builds ship the same
+ * release, and a `0.3.6+slim` string would break every consumer that compares
+ * versions for equality. This is the separate axis, and the one worth having in
+ * a bug report: the two bundles differ in how the engine loads and in what
+ * happens when it can't.
+ */
+export const BUILD: "slim" | "full" = IS_SLIM ? "slim" : "full";

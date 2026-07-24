@@ -1,5 +1,6 @@
 import Hls from "hls.js";
 import { EventEmitter } from "../events/EventEmitter";
+import { stripKaraokeGhost } from "./sanitizeVttHtml";
 import {
   PlayerEventMap,
   PlayerState,
@@ -180,6 +181,13 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       // getCueAsHTML() is the browser's own trusted WebVTT-markup parser — it
       // returns real DOM nodes for <b>/<i>/<u>/<ruby>/etc., so bold/italic
       // cues render correctly without us touching innerHTML at all.
+      // A karaoke cue carries the upcoming sentence after the ghost delimiter
+      // for width anchoring — only the part before it is visible text.
+      const visible = stripKaraokeGhost(cue.text);
+      if (visible !== cue.text) {
+        this.textContainer!.appendChild(document.createTextNode(visible));
+        return;
+      }
       try {
         this.textContainer!.appendChild(cue.getCueAsHTML());
       } catch {

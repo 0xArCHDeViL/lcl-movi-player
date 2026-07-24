@@ -216,10 +216,31 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 | Module | Size | Gzip | Brotli | What you get |
 |---|---|---|---|---|
 | `movi-player` / `movi-player/element` | ~410KB | 3.13 MB | 2.37 MB | Full player with UI, controls, gestures |
+| `movi-player/element/slim` | ~410KB | 1.00 MB + WASM | 750 KB + WASM | Same player, WASM shipped as a separate `movi.wasm` |
 | `movi-player/player` | ~180KB | 3.15 MB | 2.38 MB | Programmatic playback, no UI |
 | `movi-player/demuxer` | ~50KB | 2.37 MB | 1.79 MB | Metadata extraction, decoding only |
 
 > **Note:** Module sizes (first column) exclude the embedded WASM binary. Gzip/Brotli columns show the total transfer size including WASM. Enable Brotli compression on your server for optimal delivery.
+
+### Slim Build
+
+`movi-player/element/slim` is the same `<movi-player>` element with the same API — only the WASM ships differently. The default build embeds the FFmpeg WASM inside the JS (11.4 MB of JS); the slim build keeps it as a separate `movi.wasm` (4.2 MB JS + 5.6 MB WASM), so the engine streams and compiles as a cacheable asset and the JS parses far faster. If the WASM can't be fetched, playback falls back to the browser's native `<video>` automatically — no `fallback="native"` needed.
+
+```typescript
+import "movi-player/element/slim";
+```
+
+You host `movi.wasm` yourself — it ships in the package at `movi-player/dist/movi.wasm`. Vite / webpack 5 / Parcel 2 emit it automatically; otherwise copy it next to your bundle or point at it with `wasmurl`:
+
+```html
+<movi-player
+  src="video.mkv"
+  wasmurl="https://cdn.example.com/movi-player/movi.wasm"
+  controls
+></movi-player>
+```
+
+The framework wrappers have slim twins too — `movi-player/react/slim`, `movi-player/vue/slim`, `movi-player/svelte/slim` — same components, same props. See [Modules](https://mrujjwalg.github.io/movi-player/guide/modules) for details.
 
 ## Features
 
@@ -313,6 +334,8 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   vrpad                     <!-- On-screen look-around joystick for vr mode -->
   lcevc                     <!-- Enable MPEG-5 LCEVC enhancement decoding (adaptive streams) -->
   lcevcurl="https://..."    <!-- URL to lazy-load the lcevc_dec.js decoder library -->
+  engine="native wasm"      <!-- Engine priority: wasm | shaka | dashjs | hlsjs | native -->
+  wasmurl="/movi.wasm"      <!-- Slim build only: URL of the external movi.wasm -->
   sw                        <!-- Force software decoding -->
   fps="60"                  <!-- Override frame rate -->
   playsinline               <!-- Play inline; on any touch device, suppress swipe/volume gestures while inline so they don't fight page scroll (fullscreen unaffected) -->

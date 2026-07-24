@@ -387,4 +387,12 @@ export interface PlayerEventMap {
    * to cache whole. The UI hides the timeline and disables seeking/thumbnails.
    */
   linearmode: void;
+  /**
+   * Autoplay-with-sound was refused, so playback started muted instead. The UI
+   * surfaces the "Tap to unmute" pill — the user's gesture is the only way back
+   * to audio. Emitted by the native fallback, whose muting happens inside the
+   * media element (the WASM path detects the same condition off its
+   * AudioContext, see maybeFallbackToMutedAutoplay).
+   */
+  autoplaymuted: void;
 }

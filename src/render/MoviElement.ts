@@ -29,10 +29,18 @@ import { isOpenableScheme } from "../source/adapterRegistry";
 import { SettingsStorage } from "../utils/SettingsStorage";
 import { QoECollector, beaconSink, type QoESink, type QoESession } from "../utils/QoE";
 import { VERSION } from "../version";
-import { IS_SLIM } from "../build-flags";
+import { IS_SLIM, BUILD } from "../build-flags";
 import { setWasmUrl } from "../wasm/FFmpegLoader";
 
 const TAG = "MoviElement";
+
+/**
+ * The engines that can play a source, in the order the `engine` attribute may
+ * name them: Movi's own WASM demuxer + WebCodecs pipeline, the three MSE stream
+ * engines, and the browser's own `<video>`.
+ */
+const ENGINE_NAMES = ["wasm", "shaka", "dashjs", "hlsjs", "native"] as const;
+type EngineName = (typeof ENGINE_NAMES)[number];
 
 // OSD icon constants — shared across keyboard, button, and context menu handlers
 const OSD = {
@@ -345,6 +353,16 @@ export class MoviElement extends HTMLElement {
   // the one-shot guard (reset on new source); `_streamEngineNext` is consumed
   // by the next initializePlayer() as config.forceStreamEngine.
   private _streamEngineTried = false;
+  // The volume/speed an OSD was last shown for. These updaters are re-entered
+  // by paths that change nothing — a persisted-settings restore, its reflection
+  // back onto the attributes, an attribute replay when the element reconnects —
+  // and each one used to flash "100%" / "1x" as if the user had just pressed
+  // something. The OSD is a feedback signal, so it only fires on a real change.
+  private _lastOsdVolumeKey = "";
+  private _lastOsdRate = NaN;
+  // Which `engine` entries have already had their turn on this source, so the
+  // escalation walks the author's list once instead of retrying the same one.
+  private _engineTried = new Set<EngineName>();
   private _streamEngineNext: "dashjs" | "hlsjs" | null = null;
   // Video Representation URL the user picked in the demuxer-mode DASH quality
   // menu. Carried into the next initializePlayer() as config.forceVideoRendition
@@ -510,6 +528,21 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Which bundle is running — `"slim"` or `"full"`. Same discoverability as
+   * {@link MoviElement.version} (class, instance, or the `BUILD` export), and
+   * deliberately separate from it: the version says WHAT shipped, this says
+   * HOW the engine is packaged, which is what decides whether a `movi.wasm`
+   * has to be reachable and whether an unplayable source degrades to native
+   * `<video>` on its own.
+   */
+  static readonly build: "slim" | "full" = BUILD;
+
+  /** Instance mirror of {@link MoviElement.build}. */
+  get build(): "slim" | "full" {
+    return BUILD;
+  }
+
+  /**
    * The effective fallback mode. Honours an explicit `fallback` attribute
    * exactly as before; when none is set, the slim build defaults to `"native"`
    * so a source the (separately-hosted, possibly-absent) WASM engine can't open
@@ -520,6 +553,39 @@ export class MoviElement extends HTMLElement {
     const attr = this.getAttribute("fallback");
     if (attr) return attr;
     return IS_SLIM ? "native" : null;
+  }
+
+  /**
+   * `engine` — which playback engine leads, and what follows it.
+   *
+   * Movi has four ways to play something and, by default, a fixed order:
+   * its own WASM demuxer + WebCodecs pipeline first; Shaka (then dash.js /
+   * hls.js) for adaptive manifests; the WASM demuxer again as the manifest
+   * fallback; the browser's `<video>` last. `engine` re-orders that — the first
+   * name listed is attempted first, and any others define what's tried when it
+   * fails, replacing the built-in escalation.
+   *
+   *   engine="native"          → native <video> first, nothing after it
+   *   engine="native wasm"     → native first, Movi's pipeline if it fails
+   *   engine="dashjs shaka"    → dash.js first for manifests, Shaka after
+   *   engine="wasm"            → force Movi's own demuxer, even for manifests
+   *
+   * Unset (the default) keeps the built-in order untouched.
+   */
+  private _enginePriority(): EngineName[] {
+    const raw = this.getAttribute("engine");
+    if (!raw) return [];
+    const out: EngineName[] = [];
+    for (const token of raw.toLowerCase().split(/[\s,]+/)) {
+      if (!token) continue;
+      // `demuxer` / `movi` are aliases for the WASM pipeline — for a manifest
+      // that's Movi's own DASH/HLS handling, for a file it's the normal path.
+      const name = (
+        token === "demuxer" || token === "movi" ? "wasm" : token
+      ) as EngineName;
+      if (ENGINE_NAMES.includes(name) && !out.includes(name)) out.push(name);
+    }
+    return out;
   }
 
   static get observedAttributes() {
@@ -579,6 +645,7 @@ export class MoviElement extends HTMLElement {
       "vrpad",
       "audiooutput",
       "fallback",
+      "engine",
       "wasmurl",
     ];
   }
@@ -7145,8 +7212,13 @@ export class MoviElement extends HTMLElement {
     // and switch them; needs 2+ with a (real or estimated) bitrate. Pass the
     // active src so the ABR knows which rendition is already on screen and
     // doesn't "switch" to the identical file (a pointless swap that desyncs).
+    // Auto also needs a player that can actually measure and switch: the native
+    // fallback wrapper swaps renditions but decodes opaquely, so it has no
+    // throughput to size them by and doesn't implement setDashRenditions. Its
+    // menu therefore lists the fixed rungs only, with no dead "Auto" row.
     const abrCapable =
-      this._videoQualities.filter((q) => (q.bandwidth || 0) > 0).length >= 2;
+      this._videoQualities.filter((q) => (q.bandwidth || 0) > 0).length >= 2 &&
+      typeof player?.setDashRenditions === "function";
     if (abrCapable) {
       player?.setDashRenditions?.(
         // Exclude rungs above the decode ceiling — after a hardware "Decoding
@@ -15669,14 +15741,19 @@ export class MoviElement extends HTMLElement {
          handles those natively. Audio-graph controls (stable audio, >100% boost,
          audio-output) can't touch opaque audio; canvas controls (rotate, ambient,
          snapshot, aspect) and WASM ones (timeline previews, HDR tone-map) don't
-         apply. Quality / subtitle / audio-track menus are empty here anyway. */
+         apply. The audio-track menu is empty here anyway.
+         Quality and subtitles are the two exceptions that DO survive: a premuxed
+         ladder is just other files (swapped in place on the <video>) and declared
+         <track> cues are fetched and painted into Movi's own overlay. Those two
+         menus stay hidden unless engageNativeFallback found something to put in
+         them (.movi-native-quality / .movi-native-subs). */
       :host(.movi-native-video) .movi-hdr-container,
       :host(.movi-native-video) .movi-aspect-ratio-btn,
       :host(.movi-native-video) .movi-snapshot-btn,
       :host(.movi-native-video) .movi-rotate-btn,
       :host(.movi-native-video) .movi-stable-audio-container,
-      :host(.movi-native-video) .movi-quality-container,
-      :host(.movi-native-video) .movi-subtitle-track-container {
+      :host(.movi-native-video:not(.movi-native-quality)) .movi-quality-container,
+      :host(.movi-native-video:not(.movi-native-subs)) .movi-subtitle-track-container {
         display: none !important;
       }
       :host(.movi-native-video) .movi-context-menu-item[data-action="fit"],
@@ -15686,7 +15763,7 @@ export class MoviElement extends HTMLElement {
       :host(.movi-native-video) .movi-context-menu-item[data-action="timeline"],
       :host(.movi-native-video) .movi-context-menu-item[data-action="hdr-toggle"],
       :host(.movi-native-video) .movi-context-menu-item[data-action="stable-audio-toggle"],
-      :host(.movi-native-video) .movi-context-menu-item[data-action="subtitle-track"],
+      :host(.movi-native-video:not(.movi-native-subs)) .movi-context-menu-item[data-action="subtitle-track"],
       :host(.movi-native-video) .movi-context-menu-item-audiodevice,
       :host(.movi-native-video) .movi-context-menu-divider-audiodevice,
       :host(.movi-native-video) .movi-context-menu-submenu-audiodevice {
@@ -16162,6 +16239,16 @@ export class MoviElement extends HTMLElement {
       .then((settings) => {
         let changed = false;
 
+        // Restoring persisted settings is not a user action, so it must not
+        // flash their OSDs ("1x", "100%"). updateVolume/updatePlaybackRate gate
+        // the OSD on isLoading, which is normally still true this early — but
+        // not when the load resolved quickly (the native fallback drops it as
+        // soon as the handoff completes), which is how a bare "1x" ended up
+        // popping on every playback start. Same isLoading idiom the volume-cap
+        // update uses.
+        const wasLoading = this.isLoading;
+        this.isLoading = true;
+
         // Apply volume if not explicitly set by attribute
         if (!this.hasAttribute("volume") && settings.volume !== undefined) {
           this._volume = settings.volume;
@@ -16185,6 +16272,7 @@ export class MoviElement extends HTMLElement {
           this.updatePlaybackRate();
           changed = true;
         }
+
 
         // User-toggled opt-in preferences ALWAYS win over the HTML default.
         // Rationale: the attribute is an integrator-set default; once the user
@@ -16230,13 +16318,19 @@ export class MoviElement extends HTMLElement {
 
         if (changed) {
           this.updateVolumeIcon();
-          // Update external attributes to reflect loaded state
+          // Update external attributes to reflect loaded state. These writes
+          // re-enter attributeChangedCallback → updateVolume/updatePlaybackRate,
+          // which is the second (and, in practice, the one that actually
+          // fired) route to a spurious "100%" / "1x" OSD on every playback
+          // start — hence the isLoading guard covering this block too, not just
+          // the direct update*() calls above.
           if (settings.volume !== undefined)
             this.setAttribute("volume", settings.volume.toString());
           if (settings.muted) this.setAttribute("muted", "");
           if (settings.playbackRate !== undefined)
             this.setAttribute("playbackrate", settings.playbackRate.toString());
         }
+        this.isLoading = wasLoading;
       });
   }
 
@@ -16331,6 +16425,14 @@ export class MoviElement extends HTMLElement {
     newValue: string | null,
   ) {
     switch (name) {
+      case "wasmurl":
+        // Also handled here, not just in connectedCallback: a framework wrapper
+        // (React/Vue) reflects its props in a post-mount effect, so the
+        // attribute can land AFTER connect. The engine load is async, so a
+        // same-tick set still beats the fetch — and a connect-time attribute
+        // just calls this with the same value.
+        setWasmUrl(newValue);
+        break;
       case "thumb":
         this._thumb = newValue !== null;
         // Sync an already-created player so toggling `thumb` at runtime — or
@@ -16471,6 +16573,9 @@ export class MoviElement extends HTMLElement {
           // it never reaches here — no risk of clearing its own forced pick.)
           this._streamDemuxTried = false;
           this._streamEngineTried = false;
+          // Same for the `engine` priority walk — the new source starts at the
+          // top of the author's list, not wherever the last one gave up.
+          this._engineTried.clear();
           this._forcedDashRendition = null;
           if (newValue !== oldSrc) {
             this._hasEverPlayed = false;
@@ -17235,6 +17340,11 @@ export class MoviElement extends HTMLElement {
   }
 
   private updateVolume() {
+    // Muted state is part of what the OSD reports, so it's part of the key.
+    const osdKey = `${this._volume}|${this._muted}`;
+    const volumeChanged = osdKey !== this._lastOsdVolumeKey;
+    this._lastOsdVolumeKey = osdKey;
+
     if (this.player) {
       // Only update volume if not muted (muted state overrides volume)
       if (!this._muted) {
@@ -17244,8 +17354,9 @@ export class MoviElement extends HTMLElement {
     // Always update icon immediately to ensure UI reflects state even if not playing
     this.updateVolumeIcon();
 
-    // Show OSD for volume (volume is 0-1, show as 0-100%)
-    if (this.isConnected && !this.isLoading) {
+    // Show OSD for volume (volume is 0-1, show as 0-100%) — only on a real
+    // change; restores and attribute replays re-enter with the same value.
+    if (volumeChanged && this.isConnected && !this.isLoading) {
       const volumePercent = Math.round(this._volume * 100);
       let icon = "";
       if (this._muted || this._volume === 0) {
@@ -17273,6 +17384,9 @@ export class MoviElement extends HTMLElement {
   }
 
   private updatePlaybackRate() {
+    const rateChanged = this._playbackRate !== this._lastOsdRate;
+    this._lastOsdRate = this._playbackRate;
+
     // Mark the rate-change time so the ambient sampler can stand down briefly
     // — its GPU readback otherwise blocks the main thread right when the
     // audio decoder is refilling, causing audible silence gaps.
@@ -17293,8 +17407,9 @@ export class MoviElement extends HTMLElement {
       }
     });
 
-    // Show OSD for speed
-    if (this.isConnected && !this.isLoading && this.player) {
+    // Show OSD for speed — only when the speed actually changed (see
+    // _lastOsdRate: restores and attribute replays re-enter with the same one).
+    if (rateChanged && this.isConnected && !this.isLoading && this.player) {
       this.showOSD(
         `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path><path d="m12 12 4-4"></path></svg>`,
         `${this._playbackRate}x`,
@@ -17407,6 +17522,27 @@ export class MoviElement extends HTMLElement {
     }
 
     if ((!this._src && !this._sourceAdapter) || this.isLoading || this.player || this._isUnsupported) {
+      return;
+    }
+
+    // Nothing to build a player for once the element has left the document —
+    // and whatever we built would be unreachable, since disconnectedCallback
+    // (the only thing that tears a player down on removal) has already run.
+    // Reconnecting re-enters here from connectedCallback.
+    if (!this.isConnected) return;
+
+    // `engine="native …"` — the browser's <video> leads instead of trailing as a
+    // last resort, so hand off before any WASM work starts. Everything after it
+    // in the list is tried by the escalation in handleUnsupportedVideo if the
+    // native element can't play the source either.
+    if (
+      this._enginePriority()[0] === "native" &&
+      !this._engineTried.has("native") &&
+      typeof this._src === "string"
+    ) {
+      this._engineTried.add("native");
+      this._nativeFallbackAttempted = true;
+      this.engageNativeFallback(this._src);
       return;
     }
 
@@ -17533,6 +17669,35 @@ export class MoviElement extends HTMLElement {
         this.video.style.display = "none";
       }
 
+      // `engine="…"` — apply whichever engine currently leads the priority list.
+      // For a manifest, `wasm` means Movi's own DASH/HLS demuxer path (what the
+      // built-in order only reaches as a last stream-side resort); `shaka` is
+      // the default, so it needs no forcing.
+      const leadEngine = this._enginePriority().find(
+        (e) => !this._engineTried.has(e),
+      );
+      if (leadEngine && leadEngine !== "native") {
+        this._engineTried.add(leadEngine);
+        if (leadEngine === "wasm") {
+          this._streamDemuxNext = true;
+        } else if (leadEngine === "dashjs" || leadEngine === "hlsjs") {
+          this._streamEngineNext = leadEngine;
+        }
+        // The MSE engines only ever see manifests (.m3u8/.mpd/.ism) — they have
+        // no way to read a progressive file, let alone pair a video-only file
+        // with a separate audio one. Asking for one on a plain URL would
+        // otherwise silently play through the WASM pipeline instead.
+        const srcL = typeof this._src === "string" ? this._src.toLowerCase() : "";
+        const isManifest =
+          srcL.includes(".m3u8") || srcL.includes(".mpd") || srcL.includes(".ism");
+        if (leadEngine !== "wasm" && !isManifest) {
+          Logger.warn(
+            TAG,
+            `engine="${leadEngine}" ignored — ${leadEngine} plays adaptive manifests only, and this source isn't one`,
+          );
+        }
+      }
+
       // Consume a pending DASH→demuxer fallback request (set when an MSE engine
       // failed to decode this stream). One-shot per attempt; MoviPlayer skips
       // the stream engines and plays the single-file Representation via WASM.
@@ -17621,6 +17786,20 @@ export class MoviElement extends HTMLElement {
       // Load the video
       if (this.player) {
         await this.player.load();
+        // The element can be removed while that load is in flight (a host that
+        // swaps videos on navigation). disconnectedCallback has already torn
+        // down whatever it found, so anything from here on would run — and
+        // play — on a detached element nothing can reach. Drop it.
+        if (!this.isConnected) {
+          try {
+            this.player?.destroy();
+          } catch {
+            /* noop */
+          }
+          this.player = null;
+          this.isLoading = false;
+          return;
+        }
         // Apply any `buffersize` attribute set on the element before
         // load() — the source only exists after load() resolves, so
         // the attributeChangedCallback path couldn't have reached it.
@@ -17951,7 +18130,26 @@ export class MoviElement extends HTMLElement {
     );
 
     // Handle tracks change (when media loads)
-    const tracksChangeHandler = () => {
+    const tracksChangeHandler = () => this.handleTracksChange();
+    this.player.trackManager.on("tracksChange", tracksChangeHandler);
+    this.eventHandlers.set("tracksChange", () =>
+      this.player?.trackManager.off("tracksChange", tracksChangeHandler),
+    );
+    this._setupRemainingEventHandlers();
+  }
+
+  /**
+   * Repaint everything keyed to the active track set, and notify the host.
+   *
+   * Shared on purpose: the WASM player and the native fallback both publish
+   * their active video track through a TrackManager, so the fallback's Auto
+   * switches need this exact refresh — the quality badge, the menu's active row,
+   * and the `qualitychange` a host persists its pick from. It only ever ran for
+   * the WASM path before, which is why a native Auto switch changed the picture
+   * but left the badge (and the host) on the rung it started at.
+   */
+  private handleTracksChange(): void {
+    {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
@@ -18011,11 +18209,13 @@ export class MoviElement extends HTMLElement {
           chapters: this.player?.getChapters() || [],
         },
       }));
-    };
-    this.player.trackManager.on("tracksChange", tracksChangeHandler);
-    this.eventHandlers.set("tracksChange", () =>
-      this.player?.trackManager.off("tracksChange", tracksChangeHandler),
-    );
+    }
+  }
+
+  /** The rest of setupEventHandlers — split only so handleTracksChange could
+   *  become a method the native fallback can reuse. */
+  private _setupRemainingEventHandlers(): void {
+    if (!this.player) return;
 
     // Forward player events to element
     const stateChangeHandler = (state: PlayerState) => {
@@ -18907,6 +19107,21 @@ export class MoviElement extends HTMLElement {
       this.player = null;
     }
 
+    // An <audio> released for a quality switch but never re-adopted (the source
+    // changed instead of reloading the same one) is detached, still playing the
+    // OLD audio, and about to lose its last reference — so it would keep playing
+    // underneath the next video with nothing able to stop it. Kill it here.
+    if (this._carryAudioEl) {
+      try {
+        this._carryAudioEl.pause();
+        this._carryAudioEl.removeAttribute("src");
+        this._carryAudioEl.load();
+      } catch {
+        /* noop */
+      }
+      this._carryAudioEl = null;
+    }
+
     // Clear subtitle overlay
     if (this.subtitleOverlay) {
       this.subtitleOverlay.innerHTML = "";
@@ -18935,6 +19150,7 @@ export class MoviElement extends HTMLElement {
     // Movi's own canvas pipeline (the previous source may have degraded to the
     // browser <video> via fallback="native").
     this._nativeFallbackAttempted = false;
+    this._engineTried.clear();
     if (this._nativeFallbackActive) {
       this._nativeFallbackActive = false;
       if (this.video) {
@@ -19762,6 +19978,19 @@ export class MoviElement extends HTMLElement {
     origMessage?: string,
   ): void {
     if (this._nativeFallbackActive) return;
+    // The load that failed is async, so it can land AFTER the element was
+    // removed (a host that swaps videos on navigation does exactly this). Its
+    // teardown already ran, so a wrapper stood up now would play a detached
+    // <video> — plus its companion <audio>, which isn't even in the DOM — with
+    // nothing left able to stop it: the old source keeps playing underneath the
+    // next video, forever. Reconnecting re-runs the load from scratch.
+    if (!this.isConnected) {
+      Logger.info(
+        TAG,
+        "Source failed after the element was removed — skipping the native handoff",
+      );
+      return;
+    }
     this._nativeFallbackActive = true;
     Logger.info(
       TAG,
@@ -19815,6 +20044,36 @@ export class MoviElement extends HTMLElement {
       this.updatePlayPauseIcon();
       this.updateControlsState();
     });
+    // The wrapper publishes its active quality rung through its TrackManager,
+    // exactly like MoviPlayer does — so give it the same listener. That's what
+    // repaints the quality badge/menu on an Auto switch and fires the
+    // `qualitychange` a host persists the pick from.
+    const onTracksChange = () => this.handleTracksChange();
+    wrapper.trackManager.on("tracksChange", onTracksChange);
+    this.eventHandlers.set("tracksChange", () =>
+      wrapper.trackManager.off("tracksChange", onTracksChange),
+    );
+
+    // Autoplay-with-sound was refused and the wrapper started muted instead.
+    // Mirror the WASM path's handling (see maybeFallbackToMutedAutoplay): latch
+    // the auto-mute — NOT via the `muted` setter, which would mark it as the
+    // user's own choice — so the "Tap to unmute" pill appears and the gesture
+    // brings the sound back.
+    wrapper.on("autoplaymuted", () => {
+      if (this._muted) return;
+      Logger.info(
+        TAG,
+        "Autoplay-with-sound blocked on the native fallback — muted playback (tap to unmute)",
+      );
+      this._autoMutedForAutoplay = true;
+      this._muted = true;
+      this.updateMuted();
+      this.dispatchEvent(
+        new CustomEvent("volumechange", {
+          detail: { volume: this._volume, muted: this._muted },
+        }),
+      );
+    });
     wrapper.on("ended", () => {
       if (this._loop) {
         wrapper.seek(0);
@@ -19846,14 +20105,72 @@ export class MoviElement extends HTMLElement {
         muted: this._muted,
         loop: this._loop,
         playsInline: this._playsinline,
+        // Split sources (<source kind="audio">) have no audio in the video file,
+        // so a bare native <video> plays silently. Hand the audio URL over and
+        // the wrapper drives a synced <audio> alongside it.
+        audioUrl: this._audioSrc || undefined,
       })
       .catch(() => {});
+
+    // Carry the current volume/speed onto the wrapper directly (no update*()
+    // round-trip, which would flash their OSDs). Covers the case where the
+    // persisted-settings restore already ran before this handoff.
+    wrapper.setVolume(this._volume);
+    wrapper.setPlaybackRate(this._playbackRate);
+
+    // Premuxed quality ladder + declared <track> subtitles both survive the
+    // degradation: the ladder is just other files (the wrapper swaps `src` in
+    // place), and cues are fetched/painted into Movi's own overlay. Hand both
+    // over and let the host classes below un-hide their menus.
+    wrapper.setExternalSubtitles(
+      this._subtitleTracks.map((t) => ({
+        url: t.src,
+        lang: t.lang,
+        label: t.label,
+        format: t.format as "vtt" | "srt" | undefined,
+      })),
+    );
+    wrapper.setSubtitleOverlay(this.subtitleOverlay);
+    wrapper.setSubtitleDelay(this._subtitleDelay);
+    if (this._audioTracks.length > 1) {
+      wrapper.setAudioLangTracks(
+        this._audioTracks.map((t) => ({
+          src: t.src,
+          lang: t.lang,
+          label: t.label,
+        })),
+      );
+    }
+    // Hand the ladder over up front rather than waiting for the quality menu to
+    // be built: this is also what publishes the active rung as the wrapper's
+    // video track, and the UI poll reads that height to fire `qualitychange`.
+    // Without it a host that persists the user's pick (movi-tube's stored
+    // height) never hears about the rendition in play, so the choice is lost on
+    // the next video. It's also what "Auto" needs to have rungs to move between.
+    if (this._videoQualities.length > 0) {
+      wrapper.setDashRenditions(
+        this._videoQualities.map((q) => ({
+          url: q.src,
+          id: q.src,
+          label: q.label,
+          height: q.height,
+        })),
+        url,
+      );
+    }
+    if (this._videoQualities.length > 1) this.classList.add("movi-native-quality");
+    if (this._subtitleTracks.length > 0) this.classList.add("movi-native-subs");
 
     // Bring Movi's own chrome to life against the wrapper.
     this.startUIUpdates();
     this.updateControlsVisibility();
     this.updateControlsState();
     this.updatePlayPauseIcon();
+    // Build the two menus that still have content against the wrapper (both
+    // no-op when the source declared neither ladder nor tracks).
+    this.updateQualityMenu();
+    this.updateSubtitleTrackMenu();
+    this.updateAudioTrackMenu();
     // Native-video render: hide every canvas/WASM-dependent control (rotate,
     // ambient, snapshot, aspect, timeline, HDR, stable-audio, audio-output,
     // quality/subtitle menus) via the host class — see the :host(.movi-native-
@@ -19895,6 +20212,34 @@ export class MoviElement extends HTMLElement {
       title === "Playback Error" ||
       msgLower.includes("decoder") ||
       msgLower.includes("codec"));
+
+    // An explicit `engine` list owns the escalation: walk to the next engine the
+    // author named that hasn't been tried for this source. Only when the list is
+    // exhausted (or was never set) does the built-in order below run — so
+    // `engine="native"` alone means native and nothing else, while
+    // `engine="native wasm"` falls through to Movi's pipeline.
+    const engineOrder = this._enginePriority();
+    if (engineOrder.length > 0) {
+      const next = engineOrder.find((e) => !this._engineTried.has(e));
+      if (next) {
+        this._engineTried.add(next);
+        Logger.info(TAG, `engine="…" — escalating to ${next}`);
+        if (next === "native") {
+          if (typeof this._src === "string") {
+            this._nativeFallbackAttempted = true;
+            this.engageNativeFallback(this._src, title, message);
+            return;
+          }
+        } else {
+          if (next === "wasm") this._streamDemuxNext = true;
+          else if (next === "dashjs" || next === "hlsjs") {
+            this._streamEngineNext = next;
+          }
+          this.load().catch(() => {});
+          return;
+        }
+      }
+    }
 
     // Adaptive-stream decode failure (e.g. Shaka error 3014). Escalate through
     // two stages before surfacing the error, both keeping the .mpd/.m3u8 src:
@@ -21368,7 +21713,14 @@ export class MoviElement extends HTMLElement {
     const topGap = hostHeight < 400 ? 4 : 12;
     overlay.style.maxHeight = `${hostHeight - controlsHeight - topGap}px`;
 
-    const stats = this.player.getStats();
+    // Lead with what shipped: version AND which bundle. A bug report from the
+    // slim build ("no audio", "played through a plain <video>") reads very
+    // differently from the same words on the embedded one, and the two are
+    // otherwise indistinguishable at a glance.
+    const stats = {
+      Player: `${VERSION} (${BUILD})`,
+      ...this.player.getStats(),
+    };
     let html = "";
     for (const [key, value] of Object.entries(stats)) {
       html += `<div class="movi-nerd-stats-row">
@@ -22617,6 +22969,18 @@ export class MoviElement extends HTMLElement {
   }
   set fallback(value: "native" | null) {
     this._reflectStr("fallback", value);
+  }
+
+  /**
+   * Playback-engine priority — a space-separated list whose first entry leads
+   * and whose remainder replaces the built-in escalation
+   * (`wasm` | `shaka` | `dashjs` | `hlsjs` | `native`). Read at load time.
+   */
+  get engine(): string | null {
+    return this.getAttribute("engine");
+  }
+  set engine(value: string | null) {
+    this._reflectStr("engine", value);
   }
 
   /**

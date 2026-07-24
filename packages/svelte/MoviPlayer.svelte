@@ -8,6 +8,10 @@
       import MoviPlayer from "movi-player/svelte";
     </script>
     <MoviPlayer src="video.mkv" controls autoplay on:movi-qoe={(e) => console.log(e.detail)} />
+
+  This registers the default build, whose FFmpeg WASM is embedded in the JS. For
+  the slim build (separate, cacheable movi.wasm) import "movi-player/svelte/slim"
+  instead — same component, same props; keep the two files in sync.
 -->
 <script lang="ts">
   import "movi-player/element"; // registers <movi-player> (side effect)

@@ -12,6 +12,21 @@
  * attributes, href/src/style — by unwrapping disallowed elements (their TEXT
  * survives, just not the tag) rather than dropping their content outright.
  */
+/**
+ * Karaoke cues carry the FULL final sentence after this delimiter so a renderer
+ * can size the caption box to the finished line from the first word (see the
+ * min-width anchoring in CanvasRenderer). Only the part BEFORE it is ever
+ * visible text — a renderer that doesn't do the anchoring must still cut it off,
+ * or the marker and the whole upcoming sentence print on screen.
+ */
+export const KARAOKE_GHOST_DELIM = "⟨⟨GHOST⟩⟩";
+
+/** The visible half of a (possibly) karaoke cue. */
+export function stripKaraokeGhost(text: string): string {
+  const idx = text.indexOf(KARAOKE_GHOST_DELIM);
+  return idx >= 0 ? text.slice(0, idx) : text;
+}
+
 const ALLOWED_TAGS = new Set([
   "b",
   "i",
