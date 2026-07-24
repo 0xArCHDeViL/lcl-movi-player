@@ -756,7 +756,7 @@
             <div class="pane-title">Native &lt;video&gt; <span class="badge native">Built into your browser</span></div>
           </div>
           <div class="pane-stage">
-            <video id="native-video" controls playsinline muted autoplay></video>
+            <video id="native-video" controls playsinline muted></video>
             <div class="pane-fallback" id="native-fallback" hidden></div>
           </div>
           <div class="pane-tracks" id="native-tracks">
@@ -774,7 +774,7 @@
             <div class="pane-title">&lt;movi-player&gt; <span class="badge movi">Same file, same browser</span></div>
           </div>
           <div class="pane-stage">
-            <movi-player id="movi-player" controls playsinline muted autoplay objectfit="contain" thumb fastseek showtitle stablevolume gesturefs></movi-player>
+            <movi-player id="movi-player" controls playsinline muted objectfit="contain" thumb fastseek showtitle stablevolume gesturefs></movi-player>
             <div class="pane-fallback" id="movi-fallback" hidden></div>
           </div>
           <div class="pane-tracks" id="movi-tracks">
@@ -1175,25 +1175,36 @@
         nativeFallback.hidden = true;
         moviFallback.hidden = true;
 
-        nativeVideo.src = nativeSrc;
-        nativeVideo.load();
-        // Race loadedmetadata / error / timeout. We don't trust the default
-        // value of nativeOk — Safari rejects MKV silently (no error event,
-        // no loadedmetadata), so the timeout would resolve with the default
-        // unchanged. Decide nativeOk authoritatively AFTER the race using
-        // the real element state (videoWidth + .error) below.
-        const nativeLoadOnce = new Promise((res) => {
-          nativeVideo.addEventListener("loadedmetadata", () => res(), { once: true });
-          nativeVideo.addEventListener("error", () => res(), { once: true });
-          setTimeout(res, 5000);
-        });
-
+        // Load MoviPlayer FIRST, native SECOND (below), rather than both at
+        // once. Both players fetch the same file independently — a true single
+        // fetch feeding both isn't possible, because the native <video> does its
+        // own range I/O and can't be handed a shared buffer for an MKV (MSE only
+        // accepts fragmented MP4). Firing both at t=0 makes them fight over the
+        // network for the same bytes, slowing both. Staggering removes that
+        // contention, and the synchronized start at the end (both begin together
+        // once each has its first frame) replaces the cache-dependent race —
+        // cold-cache favoured Movi's targeted range reads, warm-cache favoured
+        // the native tag's zero-JS start, so "who plays first" flip-flopped.
         moviPlayer.src = moviSrc;
 
         // Use the player's own demux/track parsing instead of spinning up a
         // second Demuxer. The player will fire trackschange / loadeddata
         // once its source is open; we then pull tracks via its public API.
         const moviResult = await waitForPlayerMetadata();
+
+        // Now bring the native pane up, after Movi already has its metadata.
+        nativeVideo.src = nativeSrc;
+        nativeVideo.load();
+        // Race canplay / error / timeout. We don't trust the default value of
+        // nativeOk — Safari rejects MKV silently (no error event, no metadata),
+        // so the timeout would resolve with the default unchanged. Decide
+        // nativeOk authoritatively AFTER the race using the real element state
+        // (videoWidth + .error) below.
+        const nativeLoadOnce = new Promise((res) => {
+          nativeVideo.addEventListener("canplay", () => res(), { once: true });
+          nativeVideo.addEventListener("error", () => res(), { once: true });
+          setTimeout(res, 5000);
+        });
         if (!moviResult.ok) {
           setFallback(
             moviFallback,
@@ -1236,6 +1247,14 @@
         }
 
         await nativeLoadOnce;
+
+        // Synchronized start: both panes are ready now (Movi has its first
+        // frame, native has reached canplay or was rejected), so start them
+        // together instead of letting whichever finished first run ahead. Both
+        // are muted, so autoplay policy allows play() without a gesture. A native
+        // that rejected the file just no-ops here.
+        try { await moviPlayer.play?.(); } catch {}
+        try { await nativeVideo.play?.(); } catch {}
 
         // Authoritative detection: the element either has decoded video
         // dimensions OR enough metadata to play (readyState >= HAVE_METADATA)
