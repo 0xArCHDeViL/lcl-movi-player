@@ -27,6 +27,12 @@
       "require": "./dist/element.cjs",
       "types": "./dist/element.d.ts"
     },
+    "./slim": {
+      "import": "./dist/element.slim.js",
+      "require": "./dist/element.slim.cjs",
+      "types": "./dist/element.d.ts"
+    },
+    "./movi.wasm": "./dist/movi.wasm",
     "./react": {
       "types": "./dist/react/index.tsx",
       "import": "./dist/react/index.js",

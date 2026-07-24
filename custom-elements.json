@@ -256,6 +256,10 @@
               "type": {
                 "text": "\"native\""
               }
+            },
+            {
+              "name": "wasmurl",
+              "description": "URL of the external `movi.wasm`, used only by the **slim build** (`element.slim.js`)."
             }
           ],
           "events": [

@@ -856,6 +856,19 @@
               "url": "https://moviplayer.com/docs/api/element#fallback"
             }
           ]
+        },
+        {
+          "name": "wasmurl",
+          "description": {
+            "kind": "markdown",
+            "value": "URL of the external `movi.wasm`, used only by the **slim build** (`element.slim.js`)."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#wasmurl"
+            }
+          ]
         }
       ],
       "references": [

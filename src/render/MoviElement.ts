@@ -29,6 +29,8 @@ import { isOpenableScheme } from "../source/adapterRegistry";
 import { SettingsStorage } from "../utils/SettingsStorage";
 import { QoECollector, beaconSink, type QoESink, type QoESession } from "../utils/QoE";
 import { VERSION } from "../version";
+import { IS_SLIM } from "../build-flags";
+import { setWasmUrl } from "../wasm/FFmpegLoader";
 
 const TAG = "MoviElement";
 
@@ -507,6 +509,19 @@ export class MoviElement extends HTMLElement {
     return VERSION;
   }
 
+  /**
+   * The effective fallback mode. Honours an explicit `fallback` attribute
+   * exactly as before; when none is set, the slim build defaults to `"native"`
+   * so a source the (separately-hosted, possibly-absent) WASM engine can't open
+   * falls through to native `<video>` on its own. In the default build this
+   * returns the attribute value unchanged — no behaviour change.
+   */
+  private _fallbackMode(): string | null {
+    const attr = this.getAttribute("fallback");
+    if (attr) return attr;
+    return IS_SLIM ? "native" : null;
+  }
+
   static get observedAttributes() {
     return [
       "src",
@@ -564,6 +579,7 @@ export class MoviElement extends HTMLElement {
       "vrpad",
       "audiooutput",
       "fallback",
+      "wasmurl",
     ];
   }
 
@@ -15911,6 +15927,13 @@ export class MoviElement extends HTMLElement {
     // the first load with every attribute already applied.
     this._hasConnected = true;
 
+    // Point the WASM loader at a custom `movi.wasm` URL before the engine loads
+    // (slim build only; harmless otherwise — the embedded build never fetches a
+    // .wasm). Module-global on purpose: one .wasm serves the whole app.
+    if (this.hasAttribute("wasmurl")) {
+      setWasmUrl(this.getAttribute("wasmurl"));
+    }
+
     // Enable keyboard focus. Set here (not in the constructor) because
     // assigning tabIndex reflects to a `tabindex` attribute, which a custom
     // element constructor is not allowed to do. (issue #9)
@@ -19920,7 +19943,7 @@ export class MoviElement extends HTMLElement {
     // here with _nativeFallbackAttempted latched and the SAME error class, and we
     // fall through to the software path (decoder errors) or the real error below.
     if (
-      this.getAttribute("fallback") === "native" &&
+      this._fallbackMode() === "native" &&
       !this._nativeFallbackAttempted &&
       typeof this._src === "string"
     ) {
@@ -19957,7 +19980,7 @@ export class MoviElement extends HTMLElement {
         this._userAcceptedSoftwareFallback ||
         // fallback="native": after native has already been tried (and failed) on
         // a decoder error, auto-apply software silently — never show the prompt.
-        this.getAttribute("fallback") === "native")
+        this._fallbackMode() === "native")
     ) {
       Logger.info(
         TAG,
@@ -20011,7 +20034,7 @@ export class MoviElement extends HTMLElement {
           this.getAttribute("sw") !== "false" &&
           // fallback="native" recovers automatically (native → software) — the
           // manual "Try Software Decoding" prompt is never surfaced.
-          this.getAttribute("fallback") !== "native" &&
+          this._fallbackMode() !== "native" &&
           // Adaptive streams (HLS/DASH via Shaka/hls.js/dash.js) decode through
           // the browser's MSE, NOT movi's own decoder — so forcing software does
           // nothing, it just re-runs the same stream engine and fails identically
@@ -22594,6 +22617,18 @@ export class MoviElement extends HTMLElement {
   }
   set fallback(value: "native" | null) {
     this._reflectStr("fallback", value);
+  }
+
+  /**
+   * URL of the external `movi.wasm` (slim build only). Defaults to the copy next
+   * to the JS bundle; set this when it's hosted elsewhere (a CDN, a versioned
+   * path). No effect on the default build, whose WASM is embedded.
+   */
+  get wasmUrl(): string | null {
+    return this.getAttribute("wasmurl");
+  }
+  set wasmUrl(value: string | null) {
+    this._reflectStr("wasmurl", value);
   }
 
   /**

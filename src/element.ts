@@ -206,6 +206,8 @@ export interface MoviPlayerAttributes {
   fallback?: "native";
   /** @deprecated Replaced by {@link playsinline}. */
   gesturefs?: boolean | "";
+  /** URL of the external `movi.wasm` (slim build only; defaults to next to the JS bundle). */
+  wasmurl?: string;
 }
 
 /**

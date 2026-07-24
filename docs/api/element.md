@@ -779,6 +779,26 @@ Data-saver mode — play only the audio and skip the video decode to save CPU an
 
 ---
 
+#### `wasmurl`
+
+URL of the external `movi.wasm`, used only by the **slim build** (`element.slim.js`).
+The slim build ships the WASM as a separate file instead of embedding it; by
+default it loads `movi.wasm` from next to the JS bundle. Set `wasmurl` when you
+host it somewhere else — a CDN, or a versioned path.
+
+```html
+<movi-player
+  src="video.mkv"
+  wasmurl="https://cdn.example.com/movi-player/movi.wasm"
+  controls
+></movi-player>
+```
+
+Has no effect on the default build (`element.js`), whose WASM is embedded. Must
+be set before the engine first loads (the attribute is read on connect).
+
+---
+
 #### `fallback`
 
 What to do with a source Movi itself can't play.
