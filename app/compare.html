@@ -6,16 +6,23 @@
     <title>Native &lt;video&gt; vs MoviPlayer — Side-by-side comparison</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
-    <!-- Start the player bundle downloading the instant the HTML arrives,
-         in parallel with parsing the rest of <head>, instead of waiting for
-         the module <script> at the bottom of <body> to be reached. The bundle
-         carries the WASM engine, so it sits on the critical path to the first
-         frame — pulling its download forward is the cheapest cold-start win.
-         Same versioned URL the module import uses, so it's one request, cached
-         and reused. -->
+    <!-- This page runs the SLIM build: element.slim.js carries no WASM (4MB vs
+         10.9MB), and the engine streams from a separate movi.wasm. Both are on
+         the critical path to the first frame, so start both downloads during
+         <head> — the module <script> at the bottom of <body> would otherwise
+         only kick them off once the parser reaches it. Same versioned URLs the
+         glue uses, so each is one cached request. -->
     <link
       rel="modulepreload"
-      href="/dist/__BUILD_VERSION__/element.js"
+      href="/dist/__BUILD_VERSION__/element.slim.js"
+      fetchpriority="high"
+    />
+    <link
+      rel="preload"
+      href="/dist/__BUILD_VERSION__/movi.wasm"
+      as="fetch"
+      type="application/wasm"
+      crossorigin
       fetchpriority="high"
     />
 
@@ -805,7 +812,8 @@
     </main>
 
     <script type="module">
-      import "/dist/__BUILD_VERSION__/element.js";
+      // Slim build — same <movi-player>, WASM streamed from movi.wasm alongside.
+      import "/dist/__BUILD_VERSION__/element.slim.js";
 
       const DEFAULT_SAMPLE = {
         url: "/samples/sintel-2010-1080p.mkv",
