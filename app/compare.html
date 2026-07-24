@@ -774,7 +774,7 @@
             <div class="pane-title">&lt;movi-player&gt; <span class="badge movi">Same file, same browser</span></div>
           </div>
           <div class="pane-stage">
-            <movi-player id="movi-player" controls playsinline muted objectfit="contain" thumb fastseek showtitle stablevolume gesturefs></movi-player>
+            <movi-player id="movi-player" controls playsinline muted autoplay objectfit="contain" thumb fastseek showtitle stablevolume gesturefs></movi-player>
             <div class="pane-fallback" id="movi-fallback" hidden></div>
           </div>
           <div class="pane-tracks" id="movi-tracks">
@@ -1248,13 +1248,20 @@
 
         await nativeLoadOnce;
 
-        // Synchronized start: both panes are ready now (Movi has its first
-        // frame, native has reached canplay or was rejected), so start them
-        // together instead of letting whichever finished first run ahead. Both
-        // are muted, so autoplay policy allows play() without a gesture. A native
-        // that rejected the file just no-ops here.
-        try { await moviPlayer.play?.(); } catch {}
-        try { await nativeVideo.play?.(); } catch {}
+        // MoviPlayer drives the pair. It has `autoplay muted`, so it starts on
+        // its own — and that autoplay path is what surfaces its "Tap to unmute"
+        // pill (the pill is gated on controls + autoplay + muted; without
+        // autoplay it never appears). Rather than race a second independent
+        // autoplay on the native pane, bring native up to Movi's current frame
+        // and play it from there: same frame, no cache-dependent "who's first"
+        // flip-flop, and no t=0 contention since native only started loading
+        // after Movi had its metadata. Muted, so play() needs no gesture; a
+        // native that rejected the file just no-ops.
+        try {
+          const t = Number(moviPlayer.currentTime);
+          if (Number.isFinite(t) && t > 0) nativeVideo.currentTime = t;
+          await nativeVideo.play?.();
+        } catch {}
 
         // Authoritative detection: the element either has decoded video
         // dimensions OR enough metadata to play (readyState >= HAVE_METADATA)
