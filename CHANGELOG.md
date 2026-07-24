@@ -5,7 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.6] - 2026-07-24
+
+### Added
+- **HLS/DASH streams the browser can't decode now play anyway**: when Shaka/hls.js/dash.js can't decode a stream's codec (e.g. Safari rejecting HE-AAC, or an unsupported video codec), playback now escalates through the other MSE engine and, as a last resort, falls back to the player's own FFmpeg-WASM software demuxer — for both DASH and HLS. Quality switching, alternate audio-language tracks, and subtitle/caption tracks (WebVTT and TTML) all carry over into that fallback mode.
+- **Seamless, in-place quality switching everywhere**: manual and automatic quality changes — across the WASM-demuxer fallback, multi-file quality sources (one file per resolution), and now HLS/DASH — swap the active rendition in place instead of tearing the player down and reloading, so there's no loading gap, no dropped playhead, and no dead silence.
+- **Auto (adaptive) quality**: an "Auto" option that measures your link's throughput and picks the best rendition it can sustain, now available for the demuxer-fallback and multi-file quality-source paths too (HLS/DASH already had it). It sizes quality by calculation rather than climbing one rung at a time, persists your Auto preference across videos, and shows the active rung like "Auto (1080p)".
+- **Pluggable `SubtitleRenderer` for ASS/SSA** (issue #17): a host hook to plug in a custom subtitle renderer (e.g. jassub/libass-wasm) for full ASS/SSA styling — positioning, karaoke, embedded fonts — since the player's canvas-only pipeline can't use a native `<track>` overlay for these.
+- **`fallback="native"`**: when the WASM/WebCodecs pipeline can't read a source (a no-CORS cross-origin file, a transient network failure), playback now hands off to the browser's own `<video>` element wrapped in the player's own controls, instead of a dead end.
+- **Pluggable URL-scheme adapter registry**: `registerSourceAdapter()` teaches the player about custom `src` schemes — `s3://`, `ipfs://`, `ws://`, etc. — with no per-element wiring.
+- **Adaptive load shedding for underpowered devices**: a detector measures the achieved frame-present rate against the source's rate and sheds load on a sustained deficit, so a device that can't keep up (low-end mobile on 4K, software-decoded AV1) degrades gracefully instead of stuttering indefinitely.
+- **`movi-player/slim`**: a second, smaller build (~3MB vs. ~9.7MB) that streams the FFmpeg WASM from a separate `movi.wasm` file instead of embedding it, with automatic fallback to native playback if the WASM can't be fetched.
+- **Standard `HTMLMediaElement` events**: ten previously-missing standard events — including `seeking`/`seeked` and `durationchange` — now fire, so code ported from a native `<video>` works without changes.
+- **Full IDL property reflection**: every documented attribute (all 55) can now be read and set as a JS property (`el.rotate = 90`), not just via `setAttribute`/`getAttribute`.
+- **Declarative `rotate` attribute** (`0`/`90`/`180`/`270`): set rotation from markup instead of only through the hotkey/menu.
+- **`version` exposed at runtime**: `MoviElement.version` (static) and `el.version` (instance), jQuery-style.
+- **Framework wrappers type all 55 attributes**: React/Vue/Svelte wrappers now type the complete attribute set and accept typed `<source>`/`<track>` children (`height`, `srcLang`, `kind="audio"`, etc.) instead of needing string/attribute-spread workarounds.
+- **VS Code IntelliSense for `<movi-player>`**: attribute and value completion with hover docs, plus CSS completion for the 38 `--movi-*` theme variables.
+- **Examples gallery** (`/examples`): a page of live, copy-paste `<movi-player>` recipes with modal demos; existing recipes expanded and reorganized into themed sections, including a new ASS/SSA subtitle recipe.
+- **Embed-code dialog**: a toggle-driven dialog (autoplay, muted, loop, thumbnails, resume, ambient glow) generates a live `/embed` snippet, replacing the old one-shot copy button; `/embed` itself is now restricted to framed contexts, with a branded block page when opened directly.
+- **Google Drive video player** (`/drive`): sign in, pick a video from your Drive, and stream it straight into `movi-player`.
+
+### Fixed
+- **Auto (ABR) robustness**: fixed thrashing between rungs, wrong throughput measurement (stuck at a low rung on a fast link, or never leaving the starting rung across videos), downshifting on estimate noise instead of an actually-draining buffer, losing a voluntary upshift while the tab is hidden, and switching quality mid-seek — which could corrupt the demuxer and desync audio/video by tens of seconds.
+- **Playback recovery instead of dead ends**: the player now recovers from a corrupt/short demuxer read, a frozen frame with audio still advancing after a long backgrounded spell, a stream that's exhausted its recovery budget (now a self-healing "Reconnecting…" instead of a permanent error), a stuck cached WASM module after an abort, and a hardware decode error on too heavy a rendition (drops to a lower rung under Auto instead of a dead-end error overlay).
+- **Alternate audio-language and subtitle switching in HLS/DASH**: audio-language pickers that didn't work at all in some paths now do; subtitle-language switches no longer leave the previous language's caption stuck on screen; duplicate same-language audio renditions no longer clutter the menu with entries like "English · 48kbps / 64kbps / 32kbps".
+- **Rotation, timeline, and subtitles across stream playback**: rotating a video (or resizing while rotated) is now respected during HLS/DASH/Shaka playback — it previously touched the wrong renderer and could be a silent no-op, or revert on resize.
+- **Context menu in audio-only mode**: menu item queries are portal-aware everywhere now, the menu live-updates the moment you switch to audio-only, and video-only items (Aspect Ratio, Rotate, etc.) are hidden while in audio mode.
+- **HDR re-detected on quality change**: a rendition ladder can mix HDR and SDR rungs (e.g. an HDR 4K rung under an SDR 1080p one) — the HDR indicator now re-evaluates on every quality change instead of sticking with whatever the first-loaded rung reported.
+- **Album art no longer flashes over a playing video** during a quality switch.
+- **Picture-in-Picture**: subtitles now render inside the Document Picture-in-Picture window; the PiP window closes automatically when the element is torn down (no more orphaned black window on a video-to-video rebuild); the PiP control is hidden inside any iframe, where the browser forbids opening a PiP window anyway.
+- **Seek bar and progress UI**: clicking the seek bar no longer double-seeks and snaps back to the old position; ABR and the recovery watchdogs no longer fight an in-flight seek; the played/buffered bar draws seamlessly and resets to zero on a fresh load.
+- **Audio robustness**: split (separate-URL) audio no longer stalls when the tab is backgrounded; audio-only mode stops downloading the unwatched video stream and correctly suppresses the "Play at 1x" stutter hint; the screen wake lock is now acquired on tap-to-unmute, ordered so Safari doesn't consume the gesture on the wrong request; the pitch stretcher warms up at the correct rate; stale pre-seek audio is dropped on seek instead of playing briefly.
+- **Source resiliency**: a streamed source retries open-ended instead of failing when a bounded byte-range request gets a 403; file size is recovered via a ranged GET when a `HEAD` request throws (issue #14).
+- **Playback rate changes stay seek-free** when a healthy audio clock can anchor them, instead of always reseeking.
+- **Google Drive sign-in** no longer pops up unbidden on page load — it now only triggers on an explicit click.
+- **Chrome extension no longer tags the page DOM** for presence detection, which was showing up as a hydration mismatch on React/Next.js and similar pages; it now uses an in-memory window flag instead.
+
+### Changed
+- **Compare page (`/compare`) now served from the slim build**, and the player bundle preloads during `<head>` so its download starts earlier on the main app.
+- **README and docs discoverability**: an honest comparison table (added dash.js and Shaka Player columns) and a new "Alternatives" section naming peer libraries; docs are now served under `/docs`, and a Terms of Service page was added.
+- **Third-party license attribution completed** for every bundled component, including the FFmpeg LGPL notice.
 
 ## [0.3.5] - 2026-07-11
 
