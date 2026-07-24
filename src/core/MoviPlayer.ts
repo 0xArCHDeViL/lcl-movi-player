@@ -185,6 +185,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // to persist across ticks before committing (a lone throughput spike — e.g. a
   // cache-served burst — shouldn't upshift).
   private _lastAbrSwitchAt: number = Number.NEGATIVE_INFINITY;
+  // When playback first started for the current source. The buffer is
+  // legitimately near-empty while that FIRST fill is still in flight, and no
+  // switch has happened yet (`sinceSwitch` is Infinity), so the post-switch
+  // settle can't protect it — without this the absolute-low check reads the
+  // normal startup dip as "this rung can't be sustained" and drops 4K to 1080p
+  // in the first seconds on a link that carries it fine.
+  private _playbackStartedAt: number = Number.NEGATIVE_INFINITY;
   private _abrUpCandidate: string = "";
   private _abrUpConfirms: number = 0;
   // False until the ABR has made its first switch after Auto was enabled. The
@@ -759,6 +766,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     if (sourceConfig) {
       this.config.source = sourceConfig;
+      // New source on a reused instance: re-arm the startup grace so its first
+      // buffer fill gets the same protection a fresh instance would get.
+      this._playbackStartedAt = performance.now();
       // If we were not idle, we should essentially reset/destroy previous state if reusing instance
       // But for now, let's assume usage pattern respects idle check or we force reset
       if (this.stateManager.getState() !== "idle") {
@@ -1554,8 +1564,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // reset the buffered range to ~0 at the new playhead, so the absolute-low
     // clause below must not fire on that refill dip — a seek makes bufferAhead
     // low INSTANTLY, and downshifting then is wrong (it just needs to refill).
+    // Same reasoning extended to the FIRST fill after playback starts: at
+    // startup no switch has happened, so `sinceSwitch` is Infinity and the
+    // clause below would fire on the normal 0–4s ramp-up dip. Give the buffer
+    // the same 12s grace to build before its depth is treated as a verdict on
+    // the rung — this is what let 4K survive startup instead of being dropped
+    // to 1080p within the first second on a link that carries it.
+    // Unset (still NEGATIVE_INFINITY) means playback hasn't begun — that is
+    // the *least* settled state, so it must read false. Subtracting
+    // NEGATIVE_INFINITY yields Infinity, which would wrongly read as "settled".
+    const settledSinceStart =
+      this._playbackStartedAt !== Number.NEGATIVE_INFINITY &&
+      now - this._playbackStartedAt > 12000;
     const settledSinceSwitch =
-      sinceSwitch > 12000 && now - this._lastSeekAt > 12000;
+      sinceSwitch > 12000 &&
+      now - this._lastSeekAt > 12000 &&
+      settledSinceStart;
     // While the video is holding for a keyframe (or just recovered), the video
     // buffer drains even though the network is fine — the clock advances but the
     // frozen frame doesn't. Don't let that phantom drain trigger a downshift; a
@@ -2087,6 +2111,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Stop pause-time buffering — we're resuming active playback
     this.stopPauseBuffering();
+
+    // Fallback stamp for callers that drive playback without going through
+    // load() — normally load() sets this. Lets ABR tell "the buffer hasn't
+    // filled yet" apart from "this rung can't be sustained".
+    if (this._playbackStartedAt === Number.NEGATIVE_INFINITY) {
+      this._playbackStartedAt = performance.now();
+    }
 
     if (!this.stateManager.canPlay()) {
       Logger.warn(TAG, "Cannot play in current state");
