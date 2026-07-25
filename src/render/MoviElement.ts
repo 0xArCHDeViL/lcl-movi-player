@@ -22970,6 +22970,15 @@ export class MoviElement extends HTMLElement {
     if (this._snapshotPosterActive) {
       return;
     }
+    // Once playback has started, the poster stays gone — the canvas owns the
+    // frame. updatePoster() runs on any `poster` attribute (re-)set, and a host
+    // that re-renders mid-playback (e.g. movi-tube opening its download menu)
+    // reflects the same poster prop back onto the attribute; without this gate
+    // that painted the thumbnail over the playing video. A new source resets
+    // _hasEverPlayed, so the next video's poster shows normally.
+    if (this._hasEverPlayed && this.posterElement.style.display === "none") {
+      return;
+    }
     if (this._poster) {
       this.posterElement.src = this._poster;
       this.posterElement.style.display = "block";
