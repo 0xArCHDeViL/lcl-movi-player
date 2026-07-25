@@ -798,6 +798,14 @@ host it somewhere else — a CDN, or a versioned path.
 Has no effect on the default build (`element.js`), whose WASM is embedded. Must
 be set before the engine first loads (the attribute is read on connect).
 
+Setting `wasmurl` also **turns off the slim build's automatic native fallback.**
+The slim build defaults to `fallback="native"` for the consumer who never hosts
+`movi.wasm` — a source it can't open then degrades to the browser's `<video>`.
+Pointing `wasmurl` at the file says you *are* hosting it, so the WASM engine
+becomes authoritative (same as the embedded build) and an unplayable source
+surfaces an error instead of silently degrading. Opt back in with an explicit
+[`fallback="native"`](#fallback) if you still want the safety net.
+
 ---
 
 #### `fallback`

@@ -544,15 +544,22 @@ export class MoviElement extends HTMLElement {
 
   /**
    * The effective fallback mode. Honours an explicit `fallback` attribute
-   * exactly as before; when none is set, the slim build defaults to `"native"`
-   * so a source the (separately-hosted, possibly-absent) WASM engine can't open
-   * falls through to native `<video>` on its own. In the default build this
-   * returns the attribute value unchanged — no behaviour change.
+   * exactly as before.
+   *
+   * When none is set, the slim build defaults to `"native"` — but ONLY when the
+   * consumer hasn't told us where the WASM lives. The native-first default
+   * exists for the consumer who never hosts the separate `movi.wasm`; once they
+   * point `wasmurl` at it they've committed to the WASM engine, so it should be
+   * authoritative (behave like the embedded build) and a source it can't open
+   * should surface an error rather than silently degrading to `<video>`. They
+   * can still opt back in with an explicit `fallback="native"`.
+   *
+   * The default (embedded) build returns the attribute value unchanged.
    */
   private _fallbackMode(): string | null {
     const attr = this.getAttribute("fallback");
     if (attr) return attr;
-    return IS_SLIM ? "native" : null;
+    return IS_SLIM && !this.hasAttribute("wasmurl") ? "native" : null;
   }
 
   /**
@@ -6732,23 +6739,6 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  /** Persisted network throughput estimate (bytes/s). Carried across videos (a
-   *  fresh player each time in hosts like movi-tube) so the ABR can size the
-   *  starting quality directly instead of climbing up from a cold estimate. */
-  private _readStoredThroughput(): number {
-    try {
-      return parseFloat(localStorage.getItem("movi:net-bps") || "0") || 0;
-    } catch {
-      return 0;
-    }
-  }
-  private _writeStoredThroughput(bps: number): void {
-    try {
-      localStorage.setItem("movi:net-bps", String(Math.round(bps)));
-    } catch {
-      /* storage disabled — estimate just won't carry to the next video */
-    }
-  }
 
   // How many times we've reloaded onto a different rendition trying to escape a
   // source error on the current video. Bounded so a genuinely dead link still
@@ -6868,42 +6858,30 @@ export class MoviElement extends HTMLElement {
             this._src = picked ? picked.src : videoSources[0].src;
           }
 
-          // Under Auto, the STARTING rung must be sized by the link estimate,
-          // not by the consumer's default (movi-tube marks the HIGHEST as
-          // default — "give me best" — which is right for a manual pick but
-          // wrong for Auto). Otherwise every video starts at the top rung and
-          // the ABR can only walk DOWN from it, gated by a 12s startup grace —
-          // so a link that can't carry 1080p still opens at 1080p and stutters
-          // for those first seconds. Choosing the right rung up front is what
-          // "start at the quality the link can actually play" means.
+          // Under Auto, ALWAYS open on the SMALLEST rung, not the consumer's
+          // default (movi-tube marks the HIGHEST as default — right for a manual
+          // pick, wrong for Auto). The small file starts playback instantly AND
+          // is the speed test itself: the ABR measures the SUSTAINED download
+          // rate off real playback and ramps up in-place once a higher rung is
+          // confirmed affordable.
+          //
+          // We deliberately do NOT size the opening rung from the stored
+          // throughput estimate. That estimate is CARRIED from a previous video
+          // and goes stale the moment the network changes — which is exactly how
+          // a 0.7 Mbps link still opened at 1080p (the stored value was from an
+          // earlier fast session) and then stuttered down to 240p. And a
+          // one-shot burst probe can't fix it either: through a caching/
+          // buffering proxy its first slice reads at cache speed (600+ MB/s
+          // bursts seen in the logs), not the link's, so it over-measures just
+          // as badly. Starting low + measuring sustained playback is the only
+          // reading that's honest on every link.
           if (this._videoQualities.length > 1 && this._readQualityAutoPref()) {
-            const byBitrate = [...this._videoQualities].sort(
+            const smallest = [...this._videoQualities].sort(
               (a, b) =>
                 (a.bandwidth || this._estimateBitrate(a.height)) -
                 (b.bandwidth || this._estimateBitrate(b.height)),
-            );
-            const bps = this._readStoredThroughput(); // bytes/s, 0 when cold
-            if (bps <= 0) {
-              // Cold: no estimate yet. Start on the SMALLEST rung — it plays
-              // instantly AND is the speed test: the ABR measures the SUSTAINED
-              // download rate off real playback and upshifts in-place once a
-              // higher rung is confirmed affordable. (A one-shot burst probe was
-              // tried and removed — through a caching/buffering proxy its first
-              // slice reads at cache speed, not the link's, so it wildly
-              // over-measured and opened 1080p on a ~0.7 Mbps link.)
-              this._src = byBitrate[0].src;
-            } else {
-              // Warm: pick the highest rung the estimate sustains (80% headroom
-              // for overhead + bitrate variance), never below the smallest.
-              const affordableBits = bps * 8 * 0.8;
-              let pick = byBitrate[0];
-              for (const q of byBitrate) {
-                const b = q.bandwidth || this._estimateBitrate(q.height);
-                if (b <= affordableBits) pick = q;
-                else break;
-              }
-              this._src = pick.src;
-            }
+            )[0];
+            if (smallest) this._src = smallest.src;
           }
         }
 
@@ -7338,9 +7316,12 @@ export class MoviElement extends HTMLElement {
           })),
         activeSrc,
       );
-      // Seed the ABR with the throughput carried from the previous video so its
-      // first decision sizes quality directly (no rung-by-rung climb).
-      player?.seedNetworkThroughputBps?.(this._readStoredThroughput());
+      // Deliberately NOT seeding the ABR from the stored throughput. That value
+      // is carried from a previous video and goes stale when the network
+      // changes — seeding it made the ABR's first decision jump to a rung the
+      // CURRENT link can't carry (a 0.7 Mbps link "sized" to 1080p off an old
+      // fast reading). Auto now starts low and ramps from the SUSTAINED rate it
+      // measures off real playback, which is honest on every link.
       // Re-apply a persisted Auto preference (survives the per-video element
       // rebuild) before reading isAuto, so a fresh video lands on Auto.
       if (this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
@@ -7430,7 +7411,8 @@ export class MoviElement extends HTMLElement {
     const abrCapable =
       renditions.filter((r) => (r.bandwidth || 0) > 0).length >= 2;
     if (abrCapable) {
-      player?.seedNetworkThroughputBps?.(this._readStoredThroughput());
+      // No stored-throughput seed (see the note in renderPremuxedQualityMenu):
+      // Auto ramps from the sustained rate it measures off real playback.
       if (this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
         player?.setAutoQuality?.(true);
       }
@@ -10213,7 +10195,6 @@ export class MoviElement extends HTMLElement {
     // event, so reactive listeners still feel immediate.
     const UI_UPDATE_MIN_MS = 250;
     let lastRun = 0;
-    let lastThroughputSave = 0;
     const updateUI = (timestamp: number) => {
       if (!this.player) {
         this._uiUpdatesRunning = false;
@@ -10222,15 +10203,11 @@ export class MoviElement extends HTMLElement {
 
       // Fold the live download speed into the ABR estimate on every UI tick —
       // the ABR's own 4s cadence misses a small file that caches in under a
-      // second, which left Auto stuck at a low rung on a fast link.
+      // second, which left Auto stuck at a low rung on a fast link. NOT
+      // persisted across videos: a carried-over estimate goes stale when the
+      // network changes and made Auto open a too-high rung — each video now
+      // measures its own sustained rate fresh (see the start-low note).
       this.player.sampleThroughput?.();
-      // Persist the estimate every few seconds so the ABR on the next video (a
-      // fresh player instance) starts from a real number.
-      if (timestamp - lastThroughputSave >= 5000) {
-        lastThroughputSave = timestamp;
-        const bps = this.player.getNetworkThroughputBps?.() ?? 0;
-        if (bps > 0) this._writeStoredThroughput(bps);
-      }
 
       if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
         lastRun = timestamp;

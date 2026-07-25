@@ -39,6 +39,7 @@ import { TrackManager } from "./TrackManager";
 import { Clock } from "./Clock";
 import { PlayerStateManager } from "./PlayerState";
 import { Logger, LogLevel } from "../utils/Logger";
+import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 import { MoviVideoDecoder } from "../decode/VideoDecoder";
 import { MoviAudioDecoder } from "../decode/AudioDecoder";
 import { SubtitleDecoder } from "../decode/SubtitleDecoder";
@@ -179,6 +180,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _autoQuality: boolean = false;
   private _abrTimer: ReturnType<typeof setInterval> | null = null;
   private _abrSwitchInProgress: boolean = false;
+  // Guards the active pre-upshift speed test (probeRungThroughput) so ticks
+  // don't stack probes while one is in flight.
+  private _abrProbeInFlight: boolean = false;
+  // One startup speed test per player (see runStartupSpeedTest).
+  private _startupSpeedTestRan: boolean = false;
   // Last non-zero throughput estimate (bytes/s), carried across source swaps and
   // stale reads. A fully-downloaded single file (premuxed) reports 0 once idle,
   // so without this the ABR would lose its estimate and freeze at the start rung.
@@ -347,6 +353,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private audioRenderer: AudioRenderer;
   private previewInitPromise: Promise<void> | null = null; // Guard for preview initialization
   private previewInitAttempts: number = 0; // Bounded retries for preview pipeline init
+  // Deferred eager preview warm-up (see load()): keeps the thumbnail decoder
+  // from competing with the main decode during the startup grace.
+  private _previewWarmTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly PREVIEW_WARM_DELAY_MS = 12000;
   private previewInitGaveUp: boolean = false; // Stop retrying once init has failed too often
 
   // Debug flag to disable audio processing
@@ -1208,15 +1218,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.stateManager.setState("ready");
       this.emit("loadEnd", undefined);
 
-      // Initialize preview pipeline in background (fire-and-forget).
-      // Skipped only for sources with no video track — see previewsAllowed().
+      // Warm the preview pipeline in the background — but NOT right now. It
+      // stands up a second isolated WASM + WebCodecs decoder that competes with
+      // the main video decoder for the GPU, and doing that during the first
+      // seconds of playback is enough to tip a heavy 4K/HDR rung into a
+      // frame-rate deficit and get its resolution wrongly capped. Defer the
+      // eager warm-up until playback has settled; if the user scrubs before
+      // then, the seek path lazy-inits it on demand (initPreviewPipeline is
+      // idempotent), so previews still work — they just don't steal decode
+      // headroom from a struggling startup.
       if (this.previewsAllowed()) {
-        // This makes the first preview faster since WASM is already loaded
-        this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
-          Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
-          // Clear promise on error so we can retry later if needed
-          this.previewInitPromise = null;
-        });
+        this._previewWarmTimer = setTimeout(() => {
+          this._previewWarmTimer = null;
+          if (this._destroyed || this.previewInitPromise || this.thumbnailBindings) {
+            return;
+          }
+          this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
+            Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
+            this.previewInitPromise = null;
+          });
+        }, MoviPlayer.PREVIEW_WARM_DELAY_MS);
       }
 
       Logger.info(
@@ -1374,6 +1395,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.animationFrameId = null;
     }
     ++this.seekSessionId; // supersede any in-flight seek
+    // A seek we just superseded may have left its video-sync flag set; this swap
+    // owns the resume now, so release it or the pipeline waits for a completion
+    // that can never arrive (see notifySeekCompletion's superseded-seek branch).
+    this.waitingForVideoSync = false;
     let guard = 0;
     while (this.demuxInFlight && guard++ < 100) {
       await new Promise((r) => setTimeout(r, 10));
@@ -1465,7 +1490,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._abrPrimed = false; // first upshift jumps without the 2-tick wait
       this._abrPenalizedBandwidth = 0; // fresh Auto session — no stale penalty
       this._abrPenaltyUntil = 0;
-      this.abrTick(); // evaluate immediately (uses a seed if one exists)
+      // Kick off a quick startup speed test so Auto can ramp to the right rung
+      // in a couple of seconds instead of climbing rung-by-rung off passive
+      // measurement — the "good link but started ugly-low" case. Non-blocking:
+      // playback is already running on the small opening rung; when the probe
+      // lands it seeds the estimate and re-evaluates. It measures PAST the proxy
+      // burst (see probeLinkBandwidth), so it's honest on a caching proxy.
+      void this.runStartupSpeedTest();
+      this.abrTick(); // evaluate immediately (in case something already measured)
       if (!this._abrTimer) {
         this._abrTimer = setInterval(() => this.abrTick(), 4000);
       }
@@ -1473,6 +1505,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       clearInterval(this._abrTimer);
       this._abrTimer = null;
     }
+  }
+
+  /**
+   * One-shot startup speed test. Probes the SMALLEST rung's URL past the proxy
+   * burst for a sustained reading, seeds the estimate, and re-evaluates so Auto
+   * ramps straight to the affordable rung. Best-effort — a failure just leaves
+   * Auto to measure passively from playback as before.
+   */
+  private async runStartupSpeedTest(): Promise<void> {
+    if (this._startupSpeedTestRan) return;
+    this._startupSpeedTestRan = true;
+    const rungs = this._dashRenditions.filter((r) => (r.bandwidth || 0) > 0);
+    if (rungs.length < 2) return;
+    const smallest = rungs.reduce((a, b) =>
+      (b.bandwidth || 0) < (a.bandwidth || 0) ? b : a,
+    );
+    const bits = await probeLinkBandwidth(smallest.url, {
+      headers: this.config.headers,
+    });
+    if (this._destroyed || bits <= 0) return;
+    // Seed only if playback hasn't already measured a HIGHER sustained rate
+    // (a fully-cached/fast source can beat the probe) — never drag a good
+    // reading down.
+    const bps = bits / 8;
+    if (bps > this._lastThroughputBps) this._lastThroughputBps = bps;
+    Logger.info(
+      TAG,
+      `Startup speed test: ${(bits / 1e6).toFixed(1)}Mbps sustained (past the proxy burst)`,
+    );
+    if (this._autoQuality) void this.abrTick();
   }
 
   isAutoQuality(): boolean {
@@ -1716,9 +1778,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     const bps = this._lastThroughputBps;
     if (bps <= 0) {
-      // Never measured throughput yet — probe one rung UP so Auto doesn't sit
-      // stuck at a low starting quality; the downshift undoes it if it can't cope.
-      if (activeIdx > 0) await this.abrCommit(rungs[activeIdx - 1].url, now);
+      // No SUSTAINED measurement yet (playback just started on the smallest
+      // rung). Do nothing — don't guess, don't probe a burst. sampleThroughput
+      // builds the estimate off real playback within a couple of seconds, and
+      // the next tick sizes the ramp from that honest number.
       return;
     }
     const throughputBits = bps * 8;
@@ -1779,9 +1842,33 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // wait for 2 consecutive ticks so a lone spike can't bounce quality up.
       const need = this._abrPrimed ? 2 : 1;
       if (this._abrUpConfirms >= need) {
+        // Confirm the upshift with a fresh probe of the TARGET rung — but the
+        // probe can only make the decision MORE conservative, never less. Take
+        // the MIN of the sustained estimate and the probe: through a caching/
+        // buffering proxy the probe's first slice can read at cache speed (a
+        // 600+ MB/s burst), so trusting it OVER the sustained estimate would
+        // re-introduce the "jumped to 1080p on a slow link" bug. A genuinely
+        // fast link reads fast on BOTH; a slow link stays gated by whichever is
+        // lower. So the probe only ever catches a stale-high estimate, it can't
+        // inflate a real one.
+        const probeBits = await this.probeRungThroughput(up.url);
+        const effectiveBits =
+          probeBits > 0 ? Math.min(throughputBits, probeBits) : throughputBits;
+        if (effectiveBits * 0.85 < (up.bandwidth || 0)) {
+          // Can't sustain the higher rung — fold the tighter number into the
+          // estimate and hold; the next tick re-decides on the truer value.
+          this._lastThroughputBps = effectiveBits / 8;
+          this._abrUpCandidate = "";
+          this._abrUpConfirms = 0;
+          Logger.info(
+            TAG,
+            `ABR upshift to ${up.label || up.bandwidth} cancelled — ${(effectiveBits / 1e6).toFixed(1)}Mbps measured, rung needs ${((up.bandwidth || 0) / 1e6).toFixed(1)}Mbps`,
+          );
+          return;
+        }
         Logger.info(
           TAG,
-          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: throughput=${(throughputBits / 1e6).toFixed(1)}Mbps affordable, bufferAhead=${bufferAhead.toFixed(1)}s`,
+          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps sustained+probed, bufferAhead=${bufferAhead.toFixed(1)}s`,
         );
         await this.abrCommit(up.url, now);
       }
@@ -1792,6 +1879,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // half-formed upshift streak.
     this._abrUpCandidate = "";
     this._abrUpConfirms = 0;
+  }
+
+  /**
+   * Quick active speed test against a specific rung's file. Fetches a small
+   * head slice and returns the measured throughput in BITS/s (or -1 if it can't
+   * measure — a failure just falls back to the passive estimate).
+   *
+   * Probing the TARGET rung, not the current one, is the point: it's a file the
+   * browser has never fetched, so it hits the network fresh rather than reading
+   * a cache, and it directly answers "can the link carry THIS rung?". Only used
+   * to gate an UPSHIFT — a downshift happens because the buffer is already
+   * draining, and adding a probe fetch into a struggling link would only slow
+   * the recovery, so downshift stays reactive.
+   */
+  private async probeRungThroughput(url: string): Promise<number> {
+    if (this._abrProbeInFlight || this._destroyed) return -1;
+    this._abrProbeInFlight = true;
+    const PROBE_BYTES = 1_200_000;
+    try {
+      const t0 = performance.now();
+      const res = await fetch(url, {
+        headers: { Range: `bytes=0-${PROBE_BYTES - 1}`, ...(this.config.headers || {}) },
+      });
+      if (!res.ok && res.status !== 206) return -1;
+      const buf = await res.arrayBuffer();
+      const seconds = (performance.now() - t0) / 1000;
+      // Need a meaningful sample: a tiny/instant read is a cache hit or a warm
+      // proxy buffer, not the link — don't trust it.
+      if (this._destroyed || seconds < 0.15 || buf.byteLength < 262144) return -1;
+      return (buf.byteLength / seconds) * 8;
+    } catch {
+      return -1;
+    } finally {
+      this._abrProbeInFlight = false;
+    }
   }
 
   /** Perform an ABR switch and arm the anti-thrash cooldown/hysteresis. */
@@ -2699,6 +2821,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         TAG,
         `notifySeekCompletion: stale session ${this.seekArmedSessionId} != ${this.seekSessionId} — ignoring`,
       );
+      // But the armed seek is DEAD — a later op (a subtitle prefetch, an audio
+      // switch, a quality swap) bumped the session to supersede it without
+      // clearing the sync flag it left set. If we only ignore, every frame
+      // re-enters here and bails forever while `waitingForVideoSync` stays true,
+      // so the pipeline sits in a permanent "seeking"/loading state that only a
+      // fresh manual seek clears. The superseding op owns its own resume, so we
+      // must NOT run the resume/paused branch — just release the dead flag so
+      // playback can proceed. (seekTargetTime is left alone: the superseding op
+      // may be using it as a pre-target frame filter.)
+      if (this.seekArmedSessionId < this.seekSessionId && this.waitingForVideoSync) {
+        Logger.info(
+          TAG,
+          "notifySeekCompletion: releasing a superseded seek's stuck video-sync flag",
+        );
+        this.waitingForVideoSync = false;
+        this.seekingToKeyframe = false;
+      }
       return;
     }
 
@@ -7125,6 +7264,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Bumping the seek session ID forces any in-flight processLoop iteration
     // to bail out at its next checkpoint instead of writing stale results.
     this.seekSessionId++;
+    // Release a superseded seek's video-sync flag — this prefetch does its own
+    // re-seek + resume below, so a lingering wait would strand the pipeline in a
+    // permanent loading state (see notifySeekCompletion's superseded branch).
+    this.waitingForVideoSync = false;
     if (wasPlaying) {
       this.clock.pause();
       if (!this.disableAudio) this.audioRenderer.pause();
@@ -7829,6 +7972,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.animationFrameId = null;
           }
           const mySessionId = ++this.seekSessionId;
+          // Release a superseded seek's video-sync flag (this recovery seek is
+          // filter-only and owns its own resume) so the pipeline can't strand in
+          // a permanent wait — see notifySeekCompletion's superseded branch.
+          this.waitingForVideoSync = false;
 
           try {
             // Flush video decoder only — audio decoder and renderer untouched
@@ -8429,6 +8576,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // The registrar owns destroy(): the element does it on disconnect / on swap.
     this._stopSubtitleRenderLoop();
     this._customSubtitleRenderer = null;
+
+    // Cancel a pending deferred preview warm-up.
+    if (this._previewWarmTimer) {
+      clearTimeout(this._previewWarmTimer);
+      this._previewWarmTimer = null;
+    }
 
     // Stop the ABR timer.
     if (this._abrTimer) {

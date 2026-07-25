@@ -106,10 +106,22 @@ export class CanvasRenderer {
   private _perfStuckWindows: number = 0;
   private _stuckWindowStart: number = 0;
   private _stuckBaseCount: number = 0;
+  // performance.now() when the perf detectors were (re)armed by configure().
+  // The startup grace is measured from here.
+  private _perfArmedAt: number = 0;
   private _onPerformanceDegrade: ((targetFps: number) => void) | null = null;
   private static readonly PERF_WINDOW_MS = 1000;
   private static readonly PERF_DEFICIT_RATIO = 0.7; // achieved < 70% of source rate = struggling
-  private static readonly PERF_DEFICIT_WINDOWS = 2; // consecutive bad windows before engaging
+  private static readonly PERF_DEFICIT_WINDOWS = 4; // consecutive bad windows before engaging
+  // Startup/rendition-switch grace. For the first few seconds after a source
+  // (or rung) is configured, decode FPS is NATURALLY low and unrepresentative:
+  // the decoder is warming up, the buffer is still filling, the thumbnail
+  // pipeline is initialising (a second decoder competing for the GPU), and a
+  // heavy 4K/HDR rung needs a moment to reach steady state. Capping quality in
+  // that window is the "dropped 4K in the first seconds even though the device
+  // could hold it once buffered" case. The detectors still ACCUMULATE during
+  // the grace — they just don't ENGAGE a cap/downshift until it passes.
+  private static readonly PERF_STARTUP_GRACE_MS = 12000;
   // ~4s of near-zero video with healthy audio = decode-bound, not transient
   // recovery (a keyframe hunt restores frames within ~1-2s).
   private static readonly PERF_STUCK_WINDOWS = 4;
@@ -380,6 +392,7 @@ export class CanvasRenderer {
     this._perfDeficitWindows = 0;
     this._perfStuckWindows = 0;
     this._stuckWindowStart = 0;
+    this._perfArmedAt = 0; // stamped on the first sample once playback is live
 
     // Set rotation from metadata
     if (rotation !== undefined) {
@@ -1112,6 +1125,22 @@ export class CanvasRenderer {
       return;
     }
 
+    // Stamp the grace clock on the first live sample (playback actually running,
+    // foreground, normal speed) rather than at configure() — which can run
+    // seconds before the first frame while the source opens.
+    if (this._perfArmedAt === 0) this._perfArmedAt = performance.now();
+    // Within the startup grace the device hasn't had a fair chance yet: hold off
+    // ENGAGING a cap/downshift. Keep the window CLOCKS advancing below (so we're
+    // measuring), but zero the bad-window streaks so a startup deficit can't
+    // carry over and fire the instant the grace ends — the post-grace judgment
+    // starts from a clean slate on steady-state numbers.
+    const inGrace =
+      performance.now() - this._perfArmedAt < CanvasRenderer.PERF_STARTUP_GRACE_MS;
+    if (inGrace) {
+      this._perfDeficitWindows = 0;
+      this._perfStuckWindows = 0;
+    }
+
     // Decode-bound (STUCK) detector — runs BEFORE the frame-warmup gate on its
     // own time-based window, because a near-frozen decoder never advances
     // framesPresented past the warmup count (so the slow-path check below would
@@ -1129,7 +1158,7 @@ export class CanvasRenderer {
       const audioFlowing = this._isAudioHealthy ? this._isAudioHealthy() : true;
       if (audioFlowing && stuckFps < CanvasRenderer.PERF_MIN_ACHIEVED_FPS) {
         this._perfStuckWindows++;
-        if (this._perfStuckWindows >= CanvasRenderer.PERF_STUCK_WINDOWS) {
+        if (this._perfStuckWindows >= CanvasRenderer.PERF_STUCK_WINDOWS && !inGrace) {
           this.engageDecodeBound(stuckFps);
           return;
         }
@@ -1181,7 +1210,7 @@ export class CanvasRenderer {
       achieved < expected * CanvasRenderer.PERF_DEFICIT_RATIO
     ) {
       this._perfDeficitWindows++;
-      if (this._perfDeficitWindows >= CanvasRenderer.PERF_DEFICIT_WINDOWS) {
+      if (this._perfDeficitWindows >= CanvasRenderer.PERF_DEFICIT_WINDOWS && !inGrace) {
         this.engagePresentCap(achieved / (elapsed / 1000));
       }
     } else {
