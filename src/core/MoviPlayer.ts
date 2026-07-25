@@ -185,6 +185,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _abrProbeInFlight: boolean = false;
   // One startup speed test per player (see runStartupSpeedTest).
   private _startupSpeedTestRan: boolean = false;
+  // Bounded retries for a split-audio open that stalled on a contended link.
+  private _splitAudioRetries: number = 0;
+  private static readonly MAX_SPLIT_AUDIO_RETRIES = 3;
   // Last non-zero throughput estimate (bytes/s), carried across source swaps and
   // stale reads. A fully-downloaded single file (premuxed) reports 0 once idle,
   // so without this the ABR would lose its estimate and freeze at the start rung.
@@ -1173,6 +1176,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         audioUrl = this.config.audioSource.url;
       }
 
+      this._splitAudioRetries = 0; // fresh source → fresh retry budget
       if (audioAdapter) {
         await this.setupSplitAudio(audioAdapter);
       } else if (audioUrl) {
@@ -6297,8 +6301,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
     } catch (e) {
       Logger.error(TAG, `Split audio setup failed: ${(e as any)?.message ?? e}`);
+      try { this.audioDemuxer?.close(); } catch {}
+      try { this.audioSource?.close(); } catch {}
       this.audioDemuxer = null;
       this.audioSource = null;
+      // A stall/timeout opening the audio demuxer is usually transient — the
+      // video's opening burst monopolised the link and the audio's first-bytes
+      // read starved out ("Timeout at 0"). Once the video buffer fills and the
+      // link frees up, a retry gets through. Bounded so a genuinely dead audio
+      // URL doesn't loop. Without this the video played on permanently silent.
+      const transient =
+        typeof source === "string" &&
+        /timeout|stall|network|failed to fetch|incomplete/i.test(
+          String((e as any)?.message ?? ""),
+        );
+      if (transient && this._splitAudioRetries < MoviPlayer.MAX_SPLIT_AUDIO_RETRIES) {
+        this._splitAudioRetries++;
+        const delay = 1500 * this._splitAudioRetries;
+        Logger.warn(
+          TAG,
+          `Split audio open stalled — retry ${this._splitAudioRetries}/${MoviPlayer.MAX_SPLIT_AUDIO_RETRIES} in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+        if (this._destroyed) return;
+        await this.setupSplitAudio(source);
+      }
     }
   }
 

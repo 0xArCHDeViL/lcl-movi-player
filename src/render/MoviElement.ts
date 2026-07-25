@@ -7268,16 +7268,30 @@ export class MoviElement extends HTMLElement {
 
     const bits = await probeLinkBandwidth(probeSrc, {
       headers: this._headers || undefined,
-      // Clear the ~2 MB proxy burst, then time a short tail — snappy enough to
-      // not stall startup, big enough to be a real reading.
+      // Clear the ~2 MB proxy burst, then time a short tail. The window is kept
+      // small so a fast link measures in well under a second; the timeout is the
+      // safety cap for a slow/contended start. It runs BEFORE the WASM engine
+      // has finished streaming+compiling, and under that contention (seen in
+      // Safari) a 3s cap fired before the fetch even got going — so the pre-play
+      // probe silently gave up and Auto opened at 144p. 6s covers it; a link too
+      // slow to measure in 6s is slow enough that the smallest rung is right.
       skipBytes: 2_000_000,
       measureBytes: 900_000,
-      timeoutMs: 3000,
+      timeoutMs: 6000,
     });
     if (bits <= 0) return; // slow/timeout → keep the smallest rung
     this._measuredStartBps = bits;
-    // Highest rung the measurement sustains (80% headroom), never below smallest.
-    const affordableBits = bits * 0.8;
+    // Pick the OPENING rung conservatively. Two reasons to leave a wide margin:
+    //  1) The probe measures through a burst-prone proxy, so it can read a bit
+    //     high — opening a rung the link can't actually sustain then saturates
+    //     it and the SPLIT AUDIO's demuxer-open starves (its first-bytes read
+    //     stalls out → "Timeout at 0" → video plays with no audio).
+    //  2) The video isn't the only stream: the separate audio needs headroom to
+    //     open and keep flowing.
+    // 55% of the measured rate leaves that room; the ABR ramps UP from here once
+    // playback is stable, so a fast link still climbs — it just doesn't OPEN on
+    // a rung that chokes the audio.
+    const affordableBits = bits * 0.55;
     let pick = smallest;
     for (const q of byBitrate) {
       const b = q.bandwidth || this._estimateBitrate(q.height);
