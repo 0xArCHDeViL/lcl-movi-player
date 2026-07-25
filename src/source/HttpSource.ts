@@ -85,6 +85,16 @@ export class HttpSource implements SourceAdapter {
   // Stream state
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private abortController: AbortController | null = null;
+  /**
+   * Aborted once on close(), killing every request this source has in flight.
+   *
+   * `abortController` above only covers the sequential stream (it's recycled on
+   * every stream restart), so the ranged reads went out with no signal at all —
+   * a player torn down mid-read (a quality switch, a source error recreate) left
+   * multi-megabyte range requests downloading to nobody, competing for the link
+   * with the replacement that just started.
+   */
+  private lifetimeAbort = new AbortController();
   private streamError: Error | null = null; // Store fatal errors from background stream
 
   // Track maximum buffered position (independent of sliding window)
@@ -470,6 +480,7 @@ export class HttpSource implements SourceAdapter {
         const response = await fetch(this.url, {
           method: "HEAD",
           headers: await this.buildRequestHeaders(),
+          signal: this.lifetimeAbort.signal,
         });
 
         if (!response.ok) {
@@ -553,6 +564,7 @@ export class HttpSource implements SourceAdapter {
       res = await fetch(this.url, {
         method: "GET",
         headers: await this.buildRequestHeaders({ offset: 0, length: 1 }),
+        signal: this.lifetimeAbort.signal,
       });
     } catch {
       return null;
@@ -588,6 +600,7 @@ export class HttpSource implements SourceAdapter {
       res = await fetch(this.url, {
         method: "GET",
         headers: await this.buildRequestHeaders(),
+        signal: this.lifetimeAbort.signal,
       });
     } catch {
       return null;
@@ -1864,6 +1877,7 @@ export class HttpSource implements SourceAdapter {
         const rangeLen = rangeEnd - offset + 1;
         const response = await fetch(this.url, {
           headers: await this.buildRequestHeaders({ offset, length: rangeLen }),
+          signal: this.lifetimeAbort.signal,
         });
         if (response.status === 206 || response.ok) {
           // Guard against a server that ignores the Range header and streams
@@ -1987,6 +2001,9 @@ export class HttpSource implements SourceAdapter {
 
   close(): void {
     this.stopStream();
+    // Kill anything still in flight (ranged reads, a size probe), not just the
+    // sequential stream — otherwise they keep downloading after teardown.
+    this.lifetimeAbort.abort();
     Logger.debug(TAG, "Source closed");
   }
 

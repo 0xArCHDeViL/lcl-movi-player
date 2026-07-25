@@ -6867,6 +6867,44 @@ export class MoviElement extends HTMLElement {
             const picked = this.pickSource(videoSources);
             this._src = picked ? picked.src : videoSources[0].src;
           }
+
+          // Under Auto, the STARTING rung must be sized by the link estimate,
+          // not by the consumer's default (movi-tube marks the HIGHEST as
+          // default — "give me best" — which is right for a manual pick but
+          // wrong for Auto). Otherwise every video starts at the top rung and
+          // the ABR can only walk DOWN from it, gated by a 12s startup grace —
+          // so a link that can't carry 1080p still opens at 1080p and stutters
+          // for those first seconds. Choosing the right rung up front is what
+          // "start at the quality the link can actually play" means.
+          if (this._videoQualities.length > 1 && this._readQualityAutoPref()) {
+            const byBitrate = [...this._videoQualities].sort(
+              (a, b) =>
+                (a.bandwidth || this._estimateBitrate(a.height)) -
+                (b.bandwidth || this._estimateBitrate(b.height)),
+            );
+            const bps = this._readStoredThroughput(); // bytes/s, 0 when cold
+            if (bps <= 0) {
+              // Cold: no estimate yet. Start on the SMALLEST rung — it plays
+              // instantly AND is the speed test: the ABR measures the SUSTAINED
+              // download rate off real playback and upshifts in-place once a
+              // higher rung is confirmed affordable. (A one-shot burst probe was
+              // tried and removed — through a caching/buffering proxy its first
+              // slice reads at cache speed, not the link's, so it wildly
+              // over-measured and opened 1080p on a ~0.7 Mbps link.)
+              this._src = byBitrate[0].src;
+            } else {
+              // Warm: pick the highest rung the estimate sustains (80% headroom
+              // for overhead + bitrate variance), never below the smallest.
+              const affordableBits = bps * 8 * 0.8;
+              let pick = byBitrate[0];
+              for (const q of byBitrate) {
+                const b = q.bandwidth || this._estimateBitrate(q.height);
+                if (b <= affordableBits) pick = q;
+                else break;
+              }
+              this._src = pick.src;
+            }
+          }
         }
 
         // Multi-language audio: when more than one <source kind="audio"> is
@@ -7013,6 +7051,14 @@ export class MoviElement extends HTMLElement {
       TAG,
       `Recreating player at ${h ? h + "p" : "lowest"}, resuming at ${resumeTime.toFixed(0)}s`,
     );
+    // Same as the quality switch: the content is unchanged, so the user's
+    // subtitle/audio picks must survive the rebuild.
+    this._captureTrackSelection();
+    // Keeps the control bar live while the replacement loads — see the
+    // rebuild-in-flight note in updateControlsState. Cleared once the new
+    // player reports a playable state (or fails and surfaces an error).
+    this._fullRecreateInFlight = true;
+    this.updateControlsState();
     // load() tears the old player down and re-inits on a fresh WASM instance,
     // clearing any stuck error state and resuming at _startAt/_pendingSeek.
     this.load();
@@ -7027,6 +7073,63 @@ export class MoviElement extends HTMLElement {
    * loop). Returns false once at the lowest rung or after MAX_DECODE_DOWNSHIFTS,
    * so the caller falls through to the software fallback.
    */
+  // True from the moment a fresh-player recreate starts until the replacement
+  // reaches a playable state. Keeps the controls interactive across the gap.
+  private _fullRecreateInFlight = false;
+  // The user's track picks, held across a rebuild and re-applied to the new
+  // player (see _captureTrackSelection / _restoreTrackSelection).
+  private _carrySubtitleLang: string | null = null;
+  private _carrySubtitleTrackId: number | null = null;
+  private _carryAudioLang: string | null = null;
+
+  /** Snapshot the active subtitle/audio choices before a player rebuild. */
+  private _captureTrackSelection(): void {
+    const p = this.player as any;
+    if (!p) return;
+    try {
+      this._carrySubtitleLang =
+        (p.getSubtitleLangs?.() as { lang: string; active: boolean }[] | undefined)
+          ?.find((t) => t.active)?.lang ?? null;
+      const muxed = p.trackManager?.getActiveSubtitleTrack?.();
+      this._carrySubtitleTrackId = muxed ? muxed.id : null;
+      this._carryAudioLang =
+        (p.getAudioLangs?.() as { lang: string; active: boolean }[] | undefined)
+          ?.find((t) => t.active)?.lang ?? null;
+    } catch {
+      /* a torn-down player has nothing to report */
+    }
+  }
+
+  /**
+   * Re-apply the picks captured before the rebuild. Called once the replacement
+   * reaches a playable state — its track lists only exist after it has opened
+   * the source, so applying earlier would silently find nothing to select.
+   */
+  private _restoreTrackSelection(): void {
+    const p = this.player as any;
+    if (!p) return;
+    const subLang = this._carrySubtitleLang;
+    const subId = this._carrySubtitleTrackId;
+    const audioLang = this._carryAudioLang;
+    this._carrySubtitleLang = null;
+    this._carrySubtitleTrackId = null;
+    this._carryAudioLang = null;
+    try {
+      if (audioLang && p.getAudioLangs?.()?.some((t: any) => t.lang === audioLang)) {
+        void p.selectAudioLang?.(audioLang);
+      }
+      if (subLang && p.getSubtitleLangs?.()?.some((t: any) => t.lang === subLang)) {
+        void p.selectSubtitleLang?.(subLang);
+      } else if (subId !== null) {
+        void p.selectSubtitleTrack?.(subId)?.catch?.(() => {});
+      }
+    } catch {
+      /* best-effort: a missing track just means no restore */
+    }
+    this.updateSubtitleTrackMenu();
+    this.updateAudioTrackMenu();
+  }
+
   private _recreateAtLowerQuality(): boolean {
     if (this._decodeDownshifts >= MoviElement.MAX_DECODE_DOWNSHIFTS) return false;
     const sorted = [...this._videoQualities].sort((a, b) => b.height - a.height);
@@ -7586,6 +7689,12 @@ export class MoviElement extends HTMLElement {
     } catch {
       this._carryAudioEl = null;
     }
+
+    // Carry the user's track choices across the rebuild. A quality switch is a
+    // change of RENDITION, not of content — losing the subtitle they turned on
+    // (or the audio language they picked) every time the ladder moves is the
+    // player forgetting an explicit choice for a reason the user can't see.
+    this._captureTrackSelection();
 
     // Mark in-flight so the src attribute change doesn't re-paint the poster
     // overlay (which would flash the thumbnail in over the last video frame).
@@ -18227,6 +18336,27 @@ export class MoviElement extends HTMLElement {
       // know our internal PlayerState names just to drive a spinner.
       if (state === "playing") this.dispatchEvent(new Event("playing"));
       else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
+      // The replacement player is up — stop holding the controls open on the
+      // rebuild's behalf and let the normal state gating take over again.
+      if (
+        this._fullRecreateInFlight &&
+        (state === "ready" ||
+          state === "paused" ||
+          state === "playing" ||
+          state === "error")
+      ) {
+        this._fullRecreateInFlight = false;
+      }
+      // Track lists exist only once the replacement has opened the source, so
+      // the carried-over subtitle/audio picks are re-applied here.
+      if (
+        (this._carrySubtitleLang !== null ||
+          this._carrySubtitleTrackId !== null ||
+          this._carryAudioLang !== null) &&
+        (state === "ready" || state === "paused" || state === "playing")
+      ) {
+        this._restoreTrackSelection();
+      }
       // Re-sync the enabled/disabled chrome on every state change. It used to
       // run only on loadEnd/preloadcomplete, so a recovery path that reached a
       // playable state without a fresh loadEnd (the recreate calls load()
@@ -20584,8 +20714,18 @@ export class MoviElement extends HTMLElement {
       playerState !== undefined &&
       playerState !== "idle" &&
       playerState !== "loading";
+    // A rebuild of an already-playing video (quality switch, error recreate)
+    // must not black out the controls. The new player sits in "loading" for as
+    // long as the link takes to deliver the first bytes — seconds on a throttled
+    // connection, minutes with the slim build's separate WASM — and disabling
+    // everything meanwhile leaves the user staring at a playing picture with a
+    // dead control bar. We still know the duration and the resume position, so
+    // the transport stays live across the gap.
+    const rebuildInFlight =
+      this._qualitySwitchInProgress || this._fullRecreateInFlight;
     const isInitial =
-      (!this.player || (this.isLoading && !playerReady)) && !this._isUnsupported;
+      (!this.player || (this.isLoading && !playerReady && !rebuildInFlight)) &&
+      !this._isUnsupported;
     const isUnsupported = this._isUnsupported;
 
     // Controls to disable (everything except volume)

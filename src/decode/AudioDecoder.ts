@@ -22,6 +22,14 @@ export class MoviAudioDecoder {
   private onData: ((data: AudioData) => void) | null = null;
   private onPCM: ((frame: PCMFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
+  private onBroken: (() => void) | null = null;
+  private currentExtradata: Uint8Array | undefined = undefined;
+  // How many PCM frames the CURRENT software decoder has produced, and how many
+  // times we've reverted it. A fallback that decodes nothing is worse than the
+  // hardware decoder it replaced — see the revert in initSoftwareDecoder.
+  private swFramesProduced = 0;
+  private swRevertAttempts = 0;
+  private static readonly MAX_SW_REVERTS = 2;
   private currentTrack: AudioTrack | null = null;
   private hasTriedSoftwareFallback: boolean = false; // Track if we've already tried software fallback
   private hasDescription: boolean = false; // Whether decoder was configured with description (AudioSpecificConfig)
@@ -60,8 +68,12 @@ export class MoviAudioDecoder {
    */
   async configure(track: AudioTrack, extradata?: Uint8Array): Promise<boolean> {
     this.currentTrack = track;
+    // Kept so a failed software fallback can rebuild the hardware decoder it
+    // replaced (see the revert in initSoftwareDecoder's broken handler).
+    this.currentExtradata = extradata;
     this.useSoftware = false;
     this.hasTriedSoftwareFallback = false; // Reset fallback flag on new configuration
+    this.swFramesProduced = 0;
 
     if (this.swDecoder) {
       this.swDecoder.close();
@@ -211,6 +223,52 @@ export class MoviAudioDecoder {
     return transcodingCodecs.includes(codec.toLowerCase());
   }
 
+  /**
+   * The software fallback gave up: 50 packets in a row rejected.
+   *
+   * If it never decoded a single frame, the fallback itself is the problem —
+   * the hardware decoder had been running fine until one EncodingError, and
+   * swapping it for a decoder that rejects EVERYTHING trades a hiccup for
+   * permanent silence (seen in the wild: `sendPacket failed: -1094995529`
+   * repeating for the rest of the video, with a manual seek only resetting the
+   * counter so it could fail another 50 times). So put the hardware decoder
+   * back and let the owner re-align the source.
+   *
+   * If it HAD been producing audio, the stream is just out of step — leave it
+   * in place and let the owner's re-align handle it.
+   */
+  private handleSoftwareBroken(): void {
+    const producedNothing = this.swFramesProduced === 0;
+    if (
+      producedNothing &&
+      this.currentTrack &&
+      this.swRevertAttempts < MoviAudioDecoder.MAX_SW_REVERTS
+    ) {
+      this.swRevertAttempts++;
+      Logger.warn(
+        TAG,
+        `Software fallback decoded nothing — reverting to the hardware decoder (attempt ${this.swRevertAttempts})`,
+      );
+      const track = this.currentTrack;
+      const extradata = this.currentExtradata;
+      if (this.swDecoder) {
+        this.swDecoder.close();
+        this.swDecoder = null;
+      }
+      this.useSoftware = false;
+      // configure() resets hasTriedSoftwareFallback, so a genuine hardware
+      // failure can still fall back again — just not into the same dead end
+      // more than MAX_SW_REVERTS times.
+      void this.configure(track, extradata).then((ok) => {
+        if (!ok) {
+          Logger.error(TAG, "Hardware re-configure after revert failed");
+        }
+      });
+    }
+    // Either way the owner should re-align the audio source at the playhead.
+    this.onBroken?.();
+  }
+
   private async initSoftwareDecoder(): Promise<boolean> {
     if (!this.currentTrack) return false;
     if (!this.bindings) {
@@ -237,6 +295,7 @@ export class MoviAudioDecoder {
     // the renderer is still wired for multi-channel output.
     this.swDecoder.setDownmix(this._downmix);
     this.swDecoder.setOnData((frame) => {
+      this.swFramesProduced++;
       if (this.onPCM) this.onPCM(frame);
       else this.pendingPCM.push(frame);
     });
@@ -244,6 +303,7 @@ export class MoviAudioDecoder {
       Logger.error(TAG, "Software decoder error", e);
       if (this.onError) this.onError(e);
     });
+    this.swDecoder.setOnBroken(() => this.handleSoftwareBroken());
 
     const success = await this.swDecoder.configure(this.currentTrack);
     if (success) {
@@ -461,6 +521,16 @@ export class MoviAudioDecoder {
    */
   setOnError(callback: (error: Error) => void): void {
     this.onError = callback;
+  }
+
+  /**
+   * Fires when the software decoder's failure circuit-breaker trips — every
+   * packet is being rejected and audio has gone silent. The owner is expected
+   * to re-align the audio source (seek it back to the playhead) and flush,
+   * which clears the breaker; a manual seek did exactly that by accident.
+   */
+  setOnBroken(callback: () => void): void {
+    this.onBroken = callback;
   }
 
   /**

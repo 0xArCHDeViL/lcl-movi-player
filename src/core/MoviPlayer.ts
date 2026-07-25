@@ -134,6 +134,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private audioDemuxInFlight: boolean = false;
   private _splitAudioTrackId: number = -1;
   private _splitAudioEof: boolean = false;
+  // Bounded automatic recovery from a decoder that started rejecting every
+  // packet (see recoverBrokenAudio). Counted per source, so a genuinely
+  // undecodable stream ends in silence instead of a seek loop.
+  private _audioRecoveryInFlight = false;
+  private _audioRecoveries = 0;
+  private static readonly MAX_AUDIO_RECOVERIES = 3;
   // A separate audio source can be timed on its own PTS baseline (e.g. an HLS
   // audio rendition starting at PTS 0 while the video TS starts at ~10s).
   // `_splitAudioStartTime` is that source's own start; `_splitAudioPtsDelta`
@@ -658,6 +664,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Audio errors are less fatal - video can continue, just emit the error
       this.emit("error", error);
     });
+    this.audioDecoder.setOnBroken(() => void this.recoverBrokenAudio());
 
     // Forward state changes
     this.stateManager.on("change", (state) => {
@@ -704,6 +711,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Audio errors are less fatal - video can continue, just emit the error
         this.emit("error", error);
       });
+      this.audioDecoder.setOnBroken(() => void this.recoverBrokenAudio());
 
       // Configure decoder for new track
       if (this.demuxer && !this.disableAudio) {
@@ -1457,7 +1465,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._abrPrimed = false; // first upshift jumps without the 2-tick wait
       this._abrPenalizedBandwidth = 0; // fresh Auto session — no stale penalty
       this._abrPenaltyUntil = 0;
-      this.abrTick(); // evaluate immediately
+      this.abrTick(); // evaluate immediately (uses a seed if one exists)
       if (!this._abrTimer) {
         this._abrTimer = setInterval(() => this.abrTick(), 4000);
       }
@@ -1482,6 +1490,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._abrSwitchInProgress ||
       this._dashRenditions.length < 2 ||
       !this.source ||
+      // Audio-only: the video source's prefetch is paused, so the video buffer
+      // can only shrink as the playhead advances. The draining-buffer downshift
+      // below reads that as an unsustainable rung and walks the quality down one
+      // step every tick — a video that was on 8K comes back on 1080p after a
+      // spell of audio-only, even though nothing about the link changed. There's
+      // no video being fetched to adapt, so don't adapt: freeze the ABR here and
+      // clear the buffer baseline so re-enabling video doesn't misfire on the
+      // first post-resume tick.
+      this._audioOnly ||
       // Never switch while a seek is resolving. The in-place swap replaces the
       // video demuxer/source and bumps seekSessionId; doing that concurrently
       // with a user seek races the seek's own demuxer reads and leaves the WASM
@@ -1490,6 +1507,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.stateManager.is("seeking") ||
       this.waitingForVideoSync
     ) {
+      if (this._audioOnly) this._lastBufferAhead = 0;
       return;
     }
     // Best-first: index 0 = highest bitrate.
@@ -4356,6 +4374,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Reset EOF flag after seek - we're now at a new position
       this.eofReached = false;
       this.eofSince = 0;
+      // A seek re-aligns the audio source too, so the automatic-recovery budget
+      // starts fresh — a failure burst earlier in the file shouldn't leave a
+      // later stretch permanently silent.
+      this._audioRecoveries = 0;
 
       // Buffered region restarts from the new position; drop the
       // monotonic clamp so the bar can shrink to reflect the new range,
@@ -5884,89 +5906,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     );
   }
 
-  /**
-   * Setup native <audio> element for separate audio source.
-   * Shared by single audioSource and multi-language audioTracks.
-   */
-  /**
-   * Wire the native <audio> element's media events to player state/time. These
-   * only act in native-audio-only mode (split-source data saver) — where there's
-   * no demux loop to emit timeUpdate / detect EOF — and are inert during normal
-   * split-source playback, which the processLoop drives.
-   */
-  private wireNativeAudioEvents(el: HTMLAudioElement): void {
-    el.addEventListener("timeupdate", () => {
-      if (!this.nativeAudioOnlyPlayback()) return;
-      this.emit("timeUpdate", this.getCurrentTime());
-    });
-    el.addEventListener("durationchange", () => {
-      if (!this.nativeAudioOnlyPlayback()) return;
-      const d = el.duration;
-      if (isFinite(d) && d > 0) {
-        if (this.mediaInfo) this.mediaInfo.duration = d;
-        this.clock.setDuration(d + this.startTime);
-        this.emit("durationChange", d);
-      }
-    });
-    el.addEventListener("ended", () => {
-      if (!this.nativeAudioOnlyPlayback()) return;
-      if (this.stateManager.getState() === "ended") return;
-      const dur = this.getDuration() || 0;
-      this.clock.seek(dur + this.startTime);
-      this.emit("timeUpdate", dur);
-      this.stateManager.setState("ended");
-      this.emit("ended", undefined);
-      this.releaseWakeLock();
-    });
-    // Diagnostics for external-audio failures. A separate <audio> has no visible
-    // surface, so a codec the browser can't decode (e.g. Opus/WebM on Safari) or
-    // a range/seek the audio host won't serve fails SILENTLY — playback rolls on
-    // muted forever with nothing in the log. Surface the real MediaError plus the
-    // network/ready state so the failure mode is identifiable instead of guessed.
-    el.addEventListener("error", () => {
-      const err = el.error;
-      Logger.error(
-        TAG,
-        `Native audio element error: code=${err?.code ?? "?"} message="${err?.message ?? ""}" ` +
-          `networkState=${el.networkState} readyState=${el.readyState} src=${this._nativeAudioLogicalUrl ?? el.currentSrc}`,
-      );
-      // Dead element — stop starving video prefetch on its behalf.
-      this.setSourcePrefetchThrottle(false);
-    });
-    // A separate <audio> track that can't buffer (readyState too low to play)
-    // means the video stream is saturating the connection. Throttle video
-    // prefetch so HTTP backpressure frees bandwidth for the audio to fill; the
-    // audio has a large lead of buffered video to coast on. Release the moment
-    // the audio has enough to play (canplay/playing at readyState >= 3).
-    el.addEventListener("stalled", () => {
-      Logger.warn(
-        TAG,
-        `Native audio stalled: networkState=${el.networkState} readyState=${el.readyState} currentTime=${el.currentTime.toFixed(2)}`,
-      );
-      if (el.readyState < 3 && !el.paused) this.setSourcePrefetchThrottle(true);
-    });
-    el.addEventListener("waiting", () => {
-      Logger.debug(
-        TAG,
-        `Native audio waiting (buffering): readyState=${el.readyState} currentTime=${el.currentTime.toFixed(2)}`,
-      );
-      if (el.readyState < 3 && !el.paused) this.setSourcePrefetchThrottle(true);
-    });
-    el.addEventListener("canplay", () => {
-      this.setSourcePrefetchThrottle(false);
-    });
-    el.addEventListener("pause", () => {
-      // No audio to feed while paused — let video prefetch run full speed.
-      this.setSourcePrefetchThrottle(false);
-    });
-    el.addEventListener("playing", () => {
-      Logger.info(
-        TAG,
-        `Native audio playing: currentTime=${el.currentTime.toFixed(2)} readyState=${el.readyState}`,
-      );
-      if (el.readyState >= 3) this.setSourcePrefetchThrottle(false);
-    });
-  }
 
   /**
    * Throttle (pause) video-stream prefetch so a bandwidth-starved native <audio>
@@ -6397,137 +6336,67 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * One-shot diagnostic: log the external-audio URL and a tiny range request's
-   * response shape (status, content-type, accept-ranges, length). Reveals
-   * whether the source is a progressive native-playable file (AAC/MP4, 206 +
-   * accept-ranges) or something a native <audio> can't load. Best-effort — a
-   * cross-origin host may hide headers; the status/type usually still come
-   * through. Never throws into the caller.
+   * The audio decoder gave up — every packet is being rejected and playback has
+   * gone silent. That's usually a stream the decoder is out of STEP with rather
+   * than one it can't decode (an in-place rendition swap, a demuxer replaced
+   * under the pump, a decoder reset that left the packet stream mid-frame): the
+   * proof is that a manual seek brings the audio straight back, because seeking
+   * re-aligns the source and flushes the breaker.
+   *
+   * So do that automatically, without touching the video: stop the pump, flush,
+   * re-seek the audio source to the playhead, resume. Bounded — if it doesn't
+   * take after a few tries the source really is undecodable and the player stays
+   * silent rather than seeking in a loop.
    */
-  private probeNativeAudioUrl(url: string): void {
-    Logger.info(TAG, `External audio URL: ${url}`);
-    try {
-      fetch(url, {
-        method: "GET",
-        headers: { Range: "bytes=0-1", ...(this.config.headers || {}) },
-      })
-        .then((res) => {
-          Logger.info(
-            TAG,
-            `External audio probe: status=${res.status} type="${res.headers.get("content-type") ?? "?"}" ` +
-              `accept-ranges="${res.headers.get("accept-ranges") ?? "?"}" ` +
-              `content-range="${res.headers.get("content-range") ?? "?"}" ` +
-              `content-length="${res.headers.get("content-length") ?? "?"}"`,
-          );
-        })
-        .catch((e) => {
-          Logger.warn(TAG, `External audio probe failed (CORS/network?): ${e?.message ?? e}`);
-        });
-    } catch (e) {
-      Logger.warn(TAG, `External audio probe threw: ${(e as any)?.message ?? e}`);
-    }
-  }
-
-  private setupNativeAudio(url: string): void {
-    // Diagnostics: surface the external-audio URL and probe how the server
-    // serves it. A native <audio> stuck at readyState 0 with no error usually
-    // means the response isn't a progressive, native-playable file — a segmented
-    // /DASH URL, a non-AAC/MP4 container, or a host that won't range-serve to the
-    // element. content-type + accept-ranges + status tell us which.
-    this.probeNativeAudioUrl(url);
-    const wasPlaying = this.nativeAudioEl && !this.nativeAudioEl.paused;
-    const currentTime = this.nativeAudioEl?.currentTime ?? 0;
-    // Same-source detection: match the logical URL (the blob path rewrites
-    // .src to a blob: URL) OR the element's raw .src (an adopted element from a
-    // quality switch carries the URL but not our logical-URL field).
-    const sameSrc =
-      !!this.nativeAudioEl &&
-      (this._nativeAudioLogicalUrl === url || this.nativeAudioEl.src === url);
-
-    // Reuse or create element
-    if (!this.nativeAudioEl) {
-      this.nativeAudioEl = new Audio();
-      this.wireNativeAudioEvents(this.nativeAudioEl);
-    }
-    this.nativeAudioEl.preload = "auto";
-    // HTMLMediaElement.volume caps at [0,1]; getVolume() can be up to 2 (boost),
-    // which the AudioContext gain handles — the native element just clamps.
-    this.nativeAudioEl.volume = this.muted ? 0 : Math.min(1, this.audioRenderer.getVolume());
-    this.nativeAudioEl.muted = this.muted;
-    this.disableAudio = true;
-
-    // Wire up clock + video renderer to native audio.
-    // When paused (e.g. autoplay blocked) currentTime stays at 0 but
-    // readyState reports HAVE_FUTURE_DATA — Clock would then "sync" to
-    // a frozen 0 and stall video. Return -1 so Clock falls back to wall
-    // clock until the user gesture lets <audio> actually start.
-    const audioEl = this.nativeAudioEl;
-    const self = this;
-    const isAudioReady = () => !audioEl.paused && audioEl.readyState >= 3;
-    this.clock.setAudioProvider({
-      getAudioClock: () => isAudioReady() ? audioEl.currentTime + self.startTime : -1,
-      hasHealthyBuffer: isAudioReady,
-      isAudioPlaying: () => !audioEl.paused,
-    });
-    if (this.videoRenderer) {
-      this.videoRenderer.setAudioTimeProvider(
-        () => isAudioReady() ? audioEl.currentTime + self.startTime : -1,
-        isAudioReady,
+  private async recoverBrokenAudio(): Promise<void> {
+    if (this._destroyed || this._audioRecoveryInFlight) return;
+    if (this._audioRecoveries >= MoviPlayer.MAX_AUDIO_RECOVERIES) {
+      Logger.warn(
+        TAG,
+        `Audio decode kept failing after ${this._audioRecoveries} re-alignments — leaving audio off`,
       );
-    }
-
-    // Restore position and resume after the source is in place. Also resume if
-    // the player has since entered "playing" (e.g. autoplay/play() fired while
-    // the headed blob was still fetching, so the earlier audio play() was a
-    // no-op) — this lets the audio join as soon as it's ready.
-    const restorePlayback = () => {
-      if (currentTime > 0) audioEl.currentTime = currentTime;
-      if (wasPlaying || this.stateManager.is("playing")) {
-        audioEl.play().catch(() => {});
-      }
-    };
-
-    if (sameSrc) {
-      // Adopting an already-playing element with the same URL (quality switch
-      // where the audio track is shared) — reassigning src would reload and
-      // lose the user-activated play() context, so leave it untouched.
-      restorePlayback();
       return;
     }
-
-    this._nativeAudioLogicalUrl = url;
-    const headers = this.config.headers;
-    if (headers && Object.keys(headers).length > 0) {
-      // Native <audio> ignores custom request headers, so the .mpd-split / API
-      // audio file would 401/403 without them. Fetch it ourselves with the
-      // headers and play from an in-memory blob: URL. Trade-off: the whole file
-      // is buffered up front (no range streaming) — acceptable for a separate
-      // audio track, and only taken when headers are actually required.
-      this.revokeNativeAudioObjectUrl();
-      fetch(url, { headers })
-        .then((res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.blob();
-        })
-        .then((blob) => {
-          // A newer setup (track switch / new source) may have superseded this
-          // fetch while it was in flight — bail so we don't clobber it.
-          if (this.nativeAudioEl !== audioEl || this._nativeAudioLogicalUrl !== url) {
-            return;
-          }
-          this._nativeAudioObjectUrl = URL.createObjectURL(blob);
-          audioEl.src = this._nativeAudioObjectUrl;
-          restorePlayback();
-        })
-        .catch((e) => {
-          Logger.error(TAG, `Separate audio with custom headers failed to load: ${url}`, e);
-        });
-    } else {
-      this.revokeNativeAudioObjectUrl();
-      audioEl.src = url;
-      restorePlayback();
+    this._audioRecoveryInFlight = true;
+    this._audioRecoveries++;
+    const playhead = this.getCurrentTime();
+    Logger.info(
+      TAG,
+      `Audio decoder broken — re-aligning the audio source at ${playhead.toFixed(2)}s (attempt ${this._audioRecoveries})`,
+    );
+    try {
+      if (this.audioDemuxer) {
+        this.stopAudioLoop();
+        let guard = 0;
+        while (this.audioDemuxInFlight && guard++ < 200) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        // flush() clears the breaker as well as the codec's own state.
+        await this.audioDecoder.flush();
+        try {
+          await this.audioDemuxer.seek(playhead + this._splitAudioStartTime);
+        } catch (e) {
+          Logger.warn(
+            TAG,
+            `Audio re-align seek failed: ${(e as any)?.message ?? e}`,
+          );
+        }
+        this._splitAudioEof = false;
+        this._lastSplitAudioPts = playhead;
+        this.audioRenderer.reset();
+        this.startAudioLoop();
+      } else {
+        // Muxed audio: the packets keep coming from the main demuxer, so a
+        // flush alone re-arms the decoder at the next keyframe.
+        await this.audioDecoder.flush();
+        this.audioRenderer.reset();
+      }
+    } finally {
+      this._audioRecoveryInFlight = false;
     }
   }
+
+
 
   /** Release the in-memory blob: URL backing a header-authenticated audio file. */
   private revokeNativeAudioObjectUrl(): void {
@@ -6568,18 +6437,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * brand-new — and unactivated — Audio).
    */
   adoptNativeAudio(el: HTMLAudioElement): void {
-    if (this.nativeAudioEl && this.nativeAudioEl !== el) {
-      try { this.nativeAudioEl.pause(); } catch {}
+    // The WASM pipeline no longer plays audio through a media element, so an
+    // element handed over from a previous player has no owner here. Adopting it
+    // would resurrect the second, independently-clocked audio path this class
+    // deliberately dropped; ignoring it would leave it playing the OLD source
+    // forever, since the hand-off drops the last reference to it. Stop it.
+    try {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* noop */
     }
-    this.nativeAudioEl = el;
-    // Reclaim the blob: URL ownership stashed by releaseNativeAudio, so the
-    // same-source check matches (no re-fetch) and destroy() later revokes it.
-    if ((el as any).__moviObjectUrl !== undefined) {
-      this._nativeAudioObjectUrl = (el as any).__moviObjectUrl ?? null;
-      this._nativeAudioLogicalUrl = (el as any).__moviLogicalUrl ?? null;
-      delete (el as any).__moviObjectUrl;
-      delete (el as any).__moviLogicalUrl;
+    const stashed = (el as any).__moviObjectUrl;
+    if (stashed) {
+      try {
+        URL.revokeObjectURL(stashed);
+      } catch {
+        /* noop */
+      }
     }
+    delete (el as any).__moviObjectUrl;
+    delete (el as any).__moviLogicalUrl;
   }
 
   /**
@@ -6647,30 +6526,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (newSource && newSource !== track.adapter) {
         try { newSource.close(); } catch {}
       }
-      // Single-file (DASH) audio can still fall back to a native <audio> element;
-      // segmented (HLS) audio can't be played that way, so stay on the current
-      // language rather than break it.
-      if (track.adapter) return false;
-      this._audioSwitchInProgress = true;
-      this.stopAudioLoop();
-      let g = 0;
-      while (this.audioDemuxInFlight && g++ < 200) {
-        await new Promise((r) => setTimeout(r, 5));
-      }
-      if (this.audioDemuxer) { try { this.audioDemuxer.close(); } catch {} this.audioDemuxer = null; }
-      if (this.audioSource) { try { this.audioSource.close(); } catch {} this.audioSource = null; }
-      this._splitAudioTrackId = -1;
-      await this.audioDecoder.flush();
-      this.audioRenderer.reset();
-      if (!this.disableAudio) {
-        this.audioRenderer.mute();
-        this.disableAudio = true;
-      }
-      this.setupNativeAudio(track.url);
-      this._activeAudioLang = lang;
-      this._audioSwitchInProgress = false;
-      this.emit("audioTrackChange" as any, { lang, label: track.label });
-      return true;
+      // A failed prep leaves the CURRENT language playing, whatever the source
+      // shape. This used to hand single-file audio to a native <audio> element
+      // instead — which meant the WASM pipeline suddenly ran its audio on a
+      // second, independently-clocked media element: its own drift against the
+      // canvas clock, its own volume path (no AudioContext, so no stable-volume
+      // or >100% boost), and an element that outlived teardown often enough to
+      // leave the previous video's audio playing under the next one. Inside the
+      // WASM pipeline audio stays in the WASM pipeline; native audio belongs to
+      // the native fallback surface, which owns its own <audio> deliberately.
+      return false;
     }
 
     // --- ATOMIC SWAP: stop the audio pump, swap the demuxer/source, reconfigure
