@@ -1516,12 +1516,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private async runStartupSpeedTest(): Promise<void> {
     if (this._startupSpeedTestRan) return;
     this._startupSpeedTestRan = true;
-    const rungs = this._dashRenditions.filter((r) => (r.bandwidth || 0) > 0);
+    // The host may have already run a pre-play probe and seeded the estimate
+    // (the element does, to pick the opening rung). Don't probe again then.
+    if (this._lastThroughputBps > 0) return;
+    const rungs = this._dashRenditions
+      .filter((r) => (r.bandwidth || 0) > 0)
+      .sort((a, b) => (a.bandwidth || 0) - (b.bandwidth || 0));
     if (rungs.length < 2) return;
-    const smallest = rungs.reduce((a, b) =>
-      (b.bandwidth || 0) < (a.bandwidth || 0) ? b : a,
-    );
-    const bits = await probeLinkBandwidth(smallest.url, {
+    // Probe a MID rung: the smallest rung's whole file can be too small to skip
+    // the proxy burst and still time a tail (it hit EOF and measured nothing).
+    // The Range header caps the download; the link measured is the same.
+    const probe =
+      rungs[Math.min(rungs.length - 1, Math.floor(rungs.length / 2))];
+    const bits = await probeLinkBandwidth(probe.url, {
       headers: this.config.headers,
     });
     if (this._destroyed || bits <= 0) return;

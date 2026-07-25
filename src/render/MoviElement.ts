@@ -31,6 +31,7 @@ import { QoECollector, beaconSink, type QoESink, type QoESession } from "../util
 import { VERSION } from "../version";
 import { IS_SLIM, BUILD } from "../build-flags";
 import { setWasmUrl } from "../wasm/FFmpegLoader";
+import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 
 const TAG = "MoviElement";
 
@@ -7220,6 +7221,76 @@ export class MoviElement extends HTMLElement {
 
   /** Rough H.264 bitrate (bps) for a resolution height — used to size premuxed
    *  renditions for the ABR when a source declares no explicit bitrate. */
+  // Sustained link throughput (bits/s) measured by the pre-play speed test, so
+  // the player's ABR starts from a real number and doesn't re-measure. 0 = not
+  // measured (slow link / timeout / not applicable).
+  private _measuredStartBps = 0;
+  // One pre-play probe per source (reset when src changes).
+  private _startProbeDone = false;
+
+  /**
+   * Pre-play speed test: measure the link, then set the opening rung from it.
+   *
+   * Runs before the player is built (initializePlayer awaits it), so Auto opens
+   * DIRECTLY on the quality the link can carry instead of starting on the
+   * smallest rung and visibly ramping up — the "good internet but started ugly-
+   * low" complaint. The probe measures the SUSTAINED rate past the proxy burst
+   * (see probeLinkBandwidth), bounded so it never delays startup by more than a
+   * few seconds; a link too slow to measure in that window is genuinely slow, so
+   * the smallest rung `_parseChildSources` already chose stands.
+   */
+  private async _pickStartRungByProbe(): Promise<void> {
+    if (this._startProbeDone) return;
+    if (
+      this._videoQualities.length < 2 ||
+      !this._readQualityAutoPref() ||
+      typeof this._src !== "string"
+    ) {
+      return;
+    }
+    this._startProbeDone = true;
+    const byBitrate = [...this._videoQualities].sort(
+      (a, b) =>
+        (a.bandwidth || this._estimateBitrate(a.height)) -
+        (b.bandwidth || this._estimateBitrate(b.height)),
+    );
+    const smallest = byBitrate[0];
+    if (!smallest?.src) return;
+
+    // Probe a MID rung, not the smallest. The smallest rung's whole file can be
+    // just a couple of MB (a 144p clip of a short video), too small to skip the
+    // proxy burst AND time a tail — the probe hit EOF and returned nothing, so
+    // Auto stayed at 144p. A mid rung's file is comfortably larger; the Range
+    // header caps the download either way, and the link it measures is the same.
+    const probeSrc =
+      byBitrate[Math.min(byBitrate.length - 1, Math.floor(byBitrate.length / 2))]
+        ?.src || smallest.src;
+
+    const bits = await probeLinkBandwidth(probeSrc, {
+      headers: this._headers || undefined,
+      // Clear the ~2 MB proxy burst, then time a short tail — snappy enough to
+      // not stall startup, big enough to be a real reading.
+      skipBytes: 2_000_000,
+      measureBytes: 900_000,
+      timeoutMs: 3000,
+    });
+    if (bits <= 0) return; // slow/timeout → keep the smallest rung
+    this._measuredStartBps = bits;
+    // Highest rung the measurement sustains (80% headroom), never below smallest.
+    const affordableBits = bits * 0.8;
+    let pick = smallest;
+    for (const q of byBitrate) {
+      const b = q.bandwidth || this._estimateBitrate(q.height);
+      if (b <= affordableBits) pick = q;
+      else break;
+    }
+    this._src = pick.src;
+    Logger.info(
+      TAG,
+      `Pre-play speed test: ${(bits / 1e6).toFixed(1)}Mbps → opening on ${pick.label || pick.height + "p"}`,
+    );
+  }
+
   private _estimateBitrate(height: number): number {
     if (height <= 0) return 0;
     const tiers: [number, number][] = [
@@ -7316,12 +7387,13 @@ export class MoviElement extends HTMLElement {
           })),
         activeSrc,
       );
-      // Deliberately NOT seeding the ABR from the stored throughput. That value
-      // is carried from a previous video and goes stale when the network
-      // changes — seeding it made the ABR's first decision jump to a rung the
-      // CURRENT link can't carry (a 0.7 Mbps link "sized" to 1080p off an old
-      // fast reading). Auto now starts low and ramps from the SUSTAINED rate it
-      // measures off real playback, which is honest on every link.
+      // Seed the ABR with the FRESH pre-play measurement (not a stored cross-
+      // video value, which goes stale when the network changes). This is the
+      // same number the opening rung was picked from, so the ABR agrees with the
+      // starting quality and won't immediately re-adjust.
+      if (this._measuredStartBps > 0) {
+        player?.seedNetworkThroughputBps?.(this._measuredStartBps / 8);
+      }
       // Re-apply a persisted Auto preference (survives the per-video element
       // rebuild) before reading isAuto, so a fresh video lands on Auto.
       if (this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
@@ -16662,6 +16734,9 @@ export class MoviElement extends HTMLElement {
           // Same for the `engine` priority walk — the new source starts at the
           // top of the author's list, not wherever the last one gave up.
           this._engineTried.clear();
+          // Fresh source → fresh pre-play speed test.
+          this._startProbeDone = false;
+          this._measuredStartBps = 0;
           this._forcedDashRendition = null;
           if (newValue !== oldSrc) {
             this._hasEverPlayed = false;
@@ -17634,10 +17709,27 @@ export class MoviElement extends HTMLElement {
 
     this.isLoading = true;
 
-    // Hide empty state indicator when loading begins
+    // Hide the empty-state ("No Video") and show the loading spinner NOW —
+    // before the pre-play probe below, whose await would otherwise leave the
+    // "Add a video source" placeholder on screen for a few seconds even though a
+    // source is loading.
     if (this.emptyStateIndicator) {
       this.emptyStateIndicator.style.display = "none";
     }
+    {
+      const loadingIndicator = this.shadowRoot?.querySelector(
+        ".movi-loading-indicator",
+      ) as HTMLElement | null;
+      if (loadingIndicator) loadingIndicator.style.display = "flex";
+    }
+
+    // Auto quality, premuxed ladder, no measurement yet: run a quick speed test
+    // BEFORE building the player and pick the opening rung from it, so playback
+    // starts at the quality the link can actually carry instead of opening on
+    // the smallest rung and visibly ramping up. Bounded (~3s) — a link too slow
+    // to even clear the proxy burst in that time IS a slow link, so the timeout
+    // falls back to the smallest rung, which is the right answer anyway.
+    await this._pickStartRungByProbe();
 
     try {
       // Determine source type (URL or File) — skipped entirely when the

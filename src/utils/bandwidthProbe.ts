@@ -61,39 +61,53 @@ export async function probeLinkBandwidth(
 
     reader = res.body.getReader();
     let received = 0;
-    // Stopwatch state: armed the moment we cross the burst boundary.
+    let firstByteAt = 0; // time the first chunk arrived
+    // Stopwatch state for the post-burst (sustained) window.
     let measureStart = 0;
     let measureStartBytes = 0;
 
     for (;;) {
       const { done, value } = await reader.read();
+      const now = performance.now();
       if (done) break;
       if (!value) continue;
-      const prev = received;
+      if (firstByteAt === 0) firstByteAt = now;
       received += value.length;
 
-      // Arm the stopwatch at the first read that reaches past the burst.
+      // Arm the post-burst stopwatch the first time we cross the burst
+      // boundary. Note the chunk that crosses it may carry bytes past the
+      // boundary too — measuring from `received` here just means the window is
+      // slightly conservative, which is fine.
       if (measureStart === 0 && received >= skipBytes) {
-        measureStart = performance.now();
+        measureStart = now;
         measureStartBytes = received;
         continue;
       }
-      // Enough measured — done.
+      // Enough sustained data timed — return that rate.
       if (measureStart !== 0 && received - measureStartBytes >= measureBytes) {
-        const seconds = (performance.now() - measureStart) / 1000;
+        const seconds = (now - measureStart) / 1000;
         const bytes = received - measureStartBytes;
-        return seconds > 0 ? (bytes / seconds) * 8 : -1;
+        if (seconds > 0) return (bytes / seconds) * 8;
       }
-      // Keep the linter honest about `prev` (kept for readability of the delta).
-      void prev;
     }
 
-    // Stream ended (or timed out) before the full measure window. Use whatever
-    // we timed past the burst, if it's a big enough sample to trust.
+    // Stream ended (or timed out). Prefer the post-burst window if it gathered
+    // a usable sample...
+    const end = performance.now();
     if (measureStart !== 0) {
-      const seconds = (performance.now() - measureStart) / 1000;
+      const seconds = (end - measureStart) / 1000;
       const bytes = received - measureStartBytes;
       if (bytes >= 262144 && seconds >= 0.15) return (bytes / seconds) * 8;
+    }
+    // ...otherwise fall back to the WHOLE-download rate. This is the fast-link
+    // case: the requested range arrived in one/few big chunks, so there was no
+    // throttled tail to isolate — which only happens when the link delivered it
+    // all quickly, i.e. it IS fast, so the (burst-inclusive) whole rate is a
+    // fair, high reading. A throttled link instead produces a slow tail and
+    // takes the post-burst path above.
+    if (firstByteAt !== 0 && received >= 500_000) {
+      const seconds = (end - firstByteAt) / 1000;
+      if (seconds >= 0.1) return (received / seconds) * 8;
     }
     return -1;
   } catch {
