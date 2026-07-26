@@ -3628,28 +3628,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._decoderStuckSince = 0;
     }
 
-    // When video buffer/decoder queue is full but audio is starving, don't block demuxing —
-    // set a flag so the demux loop skips video decode while keeping audio flowing.
-    // This is critical for high-FPS content (120fps) where the video decoder queue fills
-    // faster than hardware can process, which would otherwise starve the audio pipeline.
-    // ONLY at non-1x rates: at 1x, video/audio are consumed at the same rate so skipping
-    // video is unnecessary and causes early EOF (video never decoded → queues empty → ended).
-    // Skipping non-keyframe AV1 packets also corrupts the decoder reference chain → decode
-    // errors every few seconds. Mobile audio drift is fixed via queue sizing, not by
-    // dropping packets at 1x.
+    // When the video buffer/decoder queue is full but audio is STARVING, don't
+    // block demuxing — set a flag so the demux loop skips video DELTA decode
+    // while keeping audio flowing. Critical for content the decoder can't
+    // sustain in real time: 120fps, and (the case this was missing) a heavy 8K
+    // AV1 MUXED file at 1x, where the decoder falls behind, the backpressure
+    // gate stops the whole demux loop, and the muxed audio then underruns and
+    // rebuffers every few seconds even though the network is fast.
     //
-    // Threshold was 0.5s back when AudioContext used latencyHint="playback" (~200ms
-    // output buffer). With latencyHint="interactive" the scheduled buffer hovers in
-    // the 50-150ms range steady-state, so anything close to 500ms reads as "always
-    // starving" and the skip engaged every demux tick — dropping AV1 non-keyframes
-    // constantly, which fired EncodingError once per GOP on non-1x rates. 100ms
-    // matches the interactive buffer's real safety margin; below it audio is
-    // genuinely about to underrun and warrants the packet-drop tradeoff.
-    const isNon1xRate = Math.abs(rate - 1.0) > 0.01;
+    // Once gated to non-1x only, on two now-obsolete worries:
+    //   - "1x skipping causes early EOF" — the EOF check is near-end-gated
+    //     (currentTime >= duration - 0.5), so a mid-file skip can't trip it.
+    //   - "skipping AV1 deltas corrupts the reference chain" — the skip below
+    //     drops ONLY deltas, keeps every keyframe, and latches
+    //     videoChainBrokenUntilKeyframe, so nothing the decoder gets is orphaned
+    //     (no EncodingError). Video updates ~1 frame/GOP until audio recovers.
+    // So the rate gate is gone. The tight trigger — audio within 100ms of
+    // underrun AND the video decoder/buffer genuinely full — means it only ever
+    // engages when the pipeline truly can't keep up, never on healthy playback.
+    //
+    // The 100ms threshold matches latencyHint="interactive"'s ~50-150ms
+    // steady-state scheduled buffer; below it audio is genuinely about to
+    // underrun and warrants the packet-drop tradeoff.
     const audioStarving = !this.disableAudio && audioBuffered < 0.1;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
-    const skipVideoDecodeForAudio = isNon1xRate && !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
+    const skipVideoDecodeForAudio = !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
 
     // Split (separate-URL) audio is decoded by its OWN loop (audioProcessLoop),
     // not this one. Its buffer intentionally runs a several-second lead, which is
