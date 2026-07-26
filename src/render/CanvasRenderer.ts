@@ -2025,18 +2025,29 @@ export class CanvasRenderer {
     if (this.rafId !== null) return;
 
     this.isPlaying = true;
-    this.presentationStartTime = performance.now();
 
     // Only reset timing if we don't have frames (fresh start/seek)
     // If we have queue, we are resuming, so keep last known PTS to avoid jumps
     if (this.frameQueue.length === 0) {
       this.lastPresentedPts = -1;
       this.framesPresented = 0; // Reset frame counter for fresh start
-      // Keep presentationStartPts as-is when frameQueue is empty
-      // It will sync to audio or first frame time when available
       this.syncedToAudio = false;
+      // Do NOT anchor the wall clock yet on a fresh start. If we set
+      // presentationStartTime here — before the first frame has decoded or
+      // audio has begun (8K/AV1 decode warmup can take ~1s) — getVideoTime
+      // accrues that elapsed against a stream that isn't playing, so the video
+      // clock races ahead. That surfaced as a ~1s startup "drift" that then
+      // hard-resets to audio, and in timing variants where a frame is already
+      // queued during the wait it presents frames at high speed (a startup
+      // fast-forward flash). Leave it at 0 so getVideoTime reports "not
+      // started" until the first frame / first audio sample anchors it cleanly
+      // (getVideoTime's videoTime<0 reset, or the first-frame present path).
+      this.presentationStartTime = 0;
+      this.presentationStartPts = 0;
     } else {
-      // Resuming with frames: reset anchor to last presented time to prevent restart from 0
+      // Resuming with frames: the stream is already playing, so start the wall
+      // clock now and anchor it to the last presented time to prevent a jump.
+      this.presentationStartTime = performance.now();
       if (this.lastPresentedPts >= 0) {
         this.presentationStartPts = this.lastPresentedPts;
       } else {
