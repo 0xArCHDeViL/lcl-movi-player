@@ -289,6 +289,11 @@ export class CanvasRenderer {
   private subtitleDelay: number = 0;
 
   // Animation state for object-fit transitions
+  // Content dimensions the current scale was derived from. A change means the
+  // scale's frame of reference moved (a rendition switch), so interpolating
+  // from it would animate through sizes that never made sense — snap instead.
+  private _scaleContentW: number = 0;
+  private _scaleContentH: number = 0;
   private currentScaleX: number = 0;
   private currentScaleY: number = 0;
   private lastTargetScaleX: number = 0;
@@ -1882,6 +1887,8 @@ export class CanvasRenderer {
           // Reset smoothing state so it doesn't interpolate from old dimensions
           this.currentScaleX = 0;
           this.currentScaleY = 0;
+          this._scaleContentW = 0;
+          this._scaleContentH = 0;
 
           if (this.frameQueue.length > 0) {
             this.drawFrame(this.frameQueue[0], true);
@@ -2631,7 +2638,28 @@ export class CanvasRenderer {
       this.lastTargetScaleX = targetScaleX;
       this.lastTargetScaleY = targetScaleY;
 
-      if (this.currentScaleX === 0 || this.currentScaleY === 0 || force) {
+      // The scale maps CONTENT pixels to display pixels, so it only means the
+      // same thing while the content size holds. A rendition switch changes it
+      // (3840x2160 → 1920x1080 doubles the scale for an identical picture on
+      // screen), which made the interpolation below animate from the outgoing
+      // rung's scale to the incoming one — the video visibly grew or shrank
+      // into place over ~30 frames, each of them a full re-draw of a 4K/8K
+      // texture at a size that was simply wrong. Snap instead: there is nothing
+      // to animate between two renditions of the same picture. Genuine fit-mode
+      // and container changes keep their animation, since the content size is
+      // unchanged across those.
+      const contentChanged =
+        this._scaleContentW !== contentWidth ||
+        this._scaleContentH !== contentHeight;
+      this._scaleContentW = contentWidth;
+      this._scaleContentH = contentHeight;
+
+      if (
+        this.currentScaleX === 0 ||
+        this.currentScaleY === 0 ||
+        force ||
+        contentChanged
+      ) {
         this.currentScaleX = targetScaleX;
         this.currentScaleY = targetScaleY;
       } else {
