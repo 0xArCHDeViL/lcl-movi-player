@@ -910,8 +910,13 @@ export class MoviElement extends HTMLElement {
           </svg>
         </div>
         <div class="movi-empty-text">
-          <h3 class="movi-empty-title">No Video</h3>
-          <p class="movi-empty-message">Add a video source to start playback</p>
+          <!-- Two things this copy must not do. It can't say "video": the
+               player takes audio sources too (and collapses to the audio strip
+               for them). And it can't tell the viewer to pick a file — on an
+               embed the source is set by the page, so there is nothing for them
+               to choose. State the situation, don't instruct. -->
+          <h3 class="movi-empty-title">Nothing to Play</h3>
+          <p class="movi-empty-message">No media has been loaded</p>
         </div>
       </div>
     `;
@@ -15159,6 +15164,9 @@ export class MoviElement extends HTMLElement {
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
+        /* Same reasoning as the message below — a three-word title that wraps
+           to "Can't Play This" / "Video" reads badly. */
+        text-wrap: balance;
       }
       
       .movi-broken-text {
@@ -15174,6 +15182,22 @@ export class MoviElement extends HTMLElement {
         margin: 0;
         font-weight: 400;
         text-align: center;
+        /* Even out the lines. Centred prose that wraps greedily leaves a stub
+           on one line and a crowd on the next — most visibly a lone word left
+           hanging after a full stop, which reads as a mistake. balance sizes
+           the lines to each other instead; pretty is the fallback where it
+           isn't supported, and both degrade to normal wrapping. */
+        text-wrap: pretty;
+        text-wrap: balance;
+        /* Keep the width where prose is comfortable to read rather than
+           letting it run the full width of a large player. */
+        max-width: 46ch;
+        margin-inline: auto;
+        /* Never split a word across lines — a break inside "re-pick" or a URL
+           looks like corrupted text. Long unbreakable strings still get to
+           overflow-wrap as a last resort so they can't blow out the layout. */
+        hyphens: none;
+        overflow-wrap: anywhere;
       }
       
       .movi-sw-fallback-btn,
@@ -15336,6 +15360,12 @@ export class MoviElement extends HTMLElement {
         color: rgba(255, 255, 255, 0.5);
         margin: 0;
         font-weight: 400;
+        text-align: center;
+        /* Balanced lines, and never a word split in half — same treatment as
+           the error overlay's copy. */
+        text-wrap: balance;
+        max-width: 40ch;
+        hyphens: none;
       }
 
       /* Mobile Responsiveness for Context Menu - Side Panel Mode */
@@ -18240,11 +18270,22 @@ export class MoviElement extends HTMLElement {
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
       Logger.error(TAG, "Failed to initialize MoviPlayer", error);
 
-      let message = "An unexpected error occurred while loading the video.";
-      let title = "Initialization Failed";
+      // "Initialization Failed" is our vocabulary, not the viewer's — it reads
+      // like a crash report. Say what they experienced and what to try.
+      // No "pick another file" here either — on an embed there is nothing for
+      // the viewer to pick. One sentence, which also breaks cleanly.
+      let message = "Something went wrong while loading this video.";
+      let title = "Can't Play This Video";
 
       if (error instanceof Error) {
-        message = error.message;
+        // The raw message is DIAGNOSTIC text — byte offsets, timeouts, WASM
+        // abort codes. It goes to the log above and to the `error` event
+        // (detail: error) for hosts that want it, never to the overlay: what
+        // reaches the viewer has to say what happened and what to do about it,
+        // in words that mean something to someone who didn't write the player.
+        // Every branch below therefore MATCHES on `raw` and SETS `message`; the
+        // default stays the generic line already assigned above.
+        const raw = error.message;
 
         // A src whose scheme isn't fetchable (typo like "httpss://", or no
         // scheme) fails at fetch() with a generic "Failed to fetch" that reads
@@ -18252,30 +18293,40 @@ export class MoviElement extends HTMLElement {
         // branches that would otherwise swallow it. See hasUnfetchableSrcScheme.
         if (
           this.hasUnfetchableSrcScheme() ||
-          /invalid url|failed to construct 'url'/i.test(message)
+          /invalid url|failed to construct 'url'/i.test(raw)
         ) {
-          title = "Invalid Video URL";
+          title = "Invalid Video Link";
           message =
-            "The video URL is malformed or uses an unsupported scheme. Use a full, valid http(s):// URL.";
+            "This video link doesn't look right. Check the address and try again.";
+        } else if (
+          // A local file the browser will no longer read: the picked handle
+          // went stale (page restored from bfcache, file moved/renamed, or the
+          // permission lapsed). Nothing is broken and there's nothing to retry
+          // — the viewer just has to choose it again, so say exactly that.
+          /file handle|FileSource read timeout|revoked/i.test(raw)
+        ) {
+          title = "Can't Read This File";
+          message =
+            "The browser no longer has access to this file. Choose it again to keep watching.";
         } else if (
           // CORS errors — these typically show as a "Load failed" TypeError
-          message.includes("Load failed") ||
-          message.toLowerCase().includes("cors") ||
-          message.toLowerCase().includes("access-control-allow-origin")
+          raw.includes("Load failed") ||
+          raw.toLowerCase().includes("cors") ||
+          raw.toLowerCase().includes("access-control-allow-origin")
         ) {
-          title = "Network Error";
+          title = "Can't Load Video";
           message =
-            "Failed to fetch video resource. Check your connection or CORS settings.";
-        } else if (message.includes("fetch")) {
-          title = "Network Error";
+            "Couldn't load the video from where it's hosted. Check your connection, then try again.";
+        } else if (raw.includes("fetch")) {
+          title = "Can't Load Video";
           message =
-            "Failed to fetch video resource. Check your connection or try again.";
-        } else if (message.includes("does not support range requests")) {
-          title = "Server Not Supported";
+            "Couldn't load the video. Check your connection, then try again.";
+        } else if (raw.includes("does not support range requests")) {
+          title = "Can't Play Video";
           message =
-            "This server doesn't support byte-range requests, which Movi needs to stream video. Serve the file with Range support (Accept-Ranges), or host it somewhere that does.";
+            "This video is hosted in a way this player can't stream from. Try a different source.";
         } else if (
-          /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
+          /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(raw)
         ) {
           // Emscripten WASM crash (FFmpeg ran out of memory or hit an
           // OOB in a codec path). The "Try Software Decoding" button on
@@ -18283,13 +18334,34 @@ export class MoviElement extends HTMLElement {
           title = "Playback Error";
           message =
             "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
-        } else if (message.includes("decode")) {
+        } else if (/timeout at \d+|read timeout|timed out/i.test(raw)) {
+          // HttpSource gives up on a byte range as "Timeout at 0" — a file
+          // offset, which means nothing to anyone but us. From the viewer's
+          // side the server simply never sent the data.
+          title = "Video Won't Load";
+          message =
+            "The video is taking too long to load. Check your connection, then try again.";
+        } else if (/corrupt|unsupported format/i.test(raw)) {
+          // The demuxer couldn't make sense of the bytes — a damaged file, or
+          // something that isn't the video it claims to be.
+          title = "Can't Play This File";
+          message =
+            "This file isn't a video the player can read. It may be damaged, or in a format that isn't supported.";
+        } else if (/not found/i.test(raw)) {
+          title = "Video Not Found";
+          message = "This video is no longer available at that link.";
+        } else if (raw.includes("decode")) {
           title = "Playback Error";
-        } else if (/\(HTTP \d|was denied|could not be found|video server/i.test(message)) {
-          // The stream wrapper already produced a precise HTTP reason (403/404/
-          // 5xx/…); "Initialization Failed" reads like a player bug, so use a
-          // neutral title and let the specific message carry the detail.
+          message =
+            "This video couldn't be decoded. The file may use a format this browser can't play.";
+        } else if (/\(HTTP \d|was denied|could not be found|video server/i.test(raw)) {
+          // The one case where the raw text IS the user-facing text: the stream
+          // wrapper writes these as plain sentences ("the video server denied
+          // the request (HTTP 403)"), so they carry the useful specifics.
+          // "Initialization Failed" reads like a player bug — use a neutral
+          // title and let that message speak.
           title = "Can't Play Video";
+          message = raw;
         }
       }
 
@@ -18863,44 +18935,65 @@ export class MoviElement extends HTMLElement {
       // the user to take a screenshot of the overlay.
       Logger.error(TAG, "Player error event", error);
 
-      let message = "An error occurred during playback.";
+      let message = "Something went wrong while playing this video.";
       let title = "Playback Error";
 
+      // Diagnostic text — matched against below, logged above, and handed to
+      // hosts via the `error` event. It must not reach the overlay: the raw
+      // strings here are things like "HTTP 503", "Stream failed after maximum
+      // retries" or an emscripten abort, which tell a viewer nothing.
+      let raw = "";
       if (error instanceof Error) {
-        message = error.message;
+        raw = error.message;
       } else if (typeof error === "string") {
-        message = error;
+        raw = error;
       }
 
       // Prettify the raw HttpSource messages — surfaced verbatim they read
       // like "HTTP 503" or "Stream failed after maximum retries" which means
       // nothing to a user staring at a buffering UI that just gave up.
-      const httpMatch = message.match(/^HTTP (\d{3})/);
+      const httpMatch = raw.match(/^HTTP (\d{3})/);
       if (this.hasUnfetchableSrcScheme()) {
         // Bad/typo'd URL scheme fails at fetch() and surfaces here as a generic
         // network error — blame the URL, not the network. Checked first: a bad
         // scheme never gets far enough to produce an HTTP status code.
-        title = "Invalid Video URL";
+        title = "Invalid Video Link";
         message =
-          "The video URL is malformed or uses an unsupported scheme. Use a full, valid http(s):// URL.";
+          "This video link doesn't look right. Check the address and try again.";
       } else if (httpMatch) {
+        // Status codes stay out of the sentence — the log has them. What the
+        // viewer needs is which of the three situations this is: gone, not
+        // allowed, or the server having a bad day.
         const code = httpMatch[1];
-        title = "Network Error";
-        if (code === "404") message = "Video not found (HTTP 404).";
-        else if (code === "403") message = "Access denied (HTTP 403). Check video permissions.";
-        else if (code === "401") message = "Authentication required (HTTP 401).";
-        else if (code.startsWith("5")) message = `Server error (HTTP ${code}). Try again later.`;
-        else message = `Network error (HTTP ${code}).`;
-      } else if (message.includes("Stream failed after")) {
-        title = "Network Error";
-        message = "Connection lost. The server stopped responding.";
+        title = "Can't Play Video";
+        if (code === "404") message = "This video is no longer available.";
+        else if (code === "403" || code === "401")
+          message = "You don't have permission to view this video.";
+        else if (code.startsWith("5"))
+          message = "The video server isn't responding. Try again in a bit.";
+        else message = "Couldn't load the video. Check your connection, then try again.";
+      } else if (/file handle|FileSource read timeout|revoked/i.test(raw)) {
+        title = "Can't Read This File";
+        message =
+          "The browser no longer has access to this file. Choose it again to keep watching.";
+      } else if (/timeout at \d+|read timeout|timed out/i.test(raw)) {
+        title = "Video Won't Load";
+        message =
+          "The video is taking too long to load. Check your connection, then try again.";
+      } else if (raw.includes("Stream failed after")) {
+        title = "Connection Lost";
+        message = "The connection dropped while playing. Check your network, then try again.";
       } else if (
-        message.toLowerCase().includes("cors") ||
-        message.includes("Failed to fetch video resource")
+        raw.toLowerCase().includes("cors") ||
+        raw.includes("Failed to fetch video resource")
       ) {
-        title = "Network Error";
-      } else if (message.includes("does not support range requests")) {
-        title = "Server Not Supported";
+        title = "Can't Load Video";
+        message =
+          "Couldn't load the video. Check your connection, then try again.";
+      } else if (raw.includes("does not support range requests")) {
+        title = "Can't Play Video";
+        message =
+          "This video is hosted in a way this player can't stream from. Try a different source.";
       } else if (
         // WebAssembly OOM / OOB from the FFmpeg WASM runtime — surfaces
         // verbatim as "Out of bounds memory access (evaluating 'qe(...$e)')"
@@ -18908,11 +19001,11 @@ export class MoviElement extends HTMLElement {
         // emscripten/JS-engine text with something useful and steer the
         // user to the software-decode fallback that already handles the
         // codec variants where the hardware path explodes.
-        /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
+        /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(raw)
       ) {
         title = "Playback Error";
         message =
-          "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
+          "This video was too heavy to decode the usual way. Try software decoding — it handles files like this.";
       }
 
       // If we got here after cycling every rendition (recovery exhausted), the
