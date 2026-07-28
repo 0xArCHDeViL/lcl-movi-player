@@ -269,12 +269,6 @@ export class MoviElement extends HTMLElement {
   // for) from the synthetic "paused" state the initial poster seek
   // lands in before the user has even pressed play.
   private _hasEverPlayed: boolean = false;
-  // Set briefly by the loop handler so the next end → play transition
-  // doesn't surface the centre pause-confirmation icon. Loop replay
-  // isn't a user click, so the "I clicked and now it's playing" flash
-  // would just look like a glitch at every loop boundary. Cleared
-  // once the player has settled into "playing" again.
-  private _loopRestartInFlight: boolean = false;
   private _pendingPlay: boolean = false;
   // True while loading spinner + play() must wait for FileSource preload to
   // complete (mobile only, height >= 2160). Released by the player's
@@ -9470,10 +9464,14 @@ export class MoviElement extends HTMLElement {
       if (centerBtn) centerBtn.style.cursor = "";
     }
 
-    // Mirror the hide path — when controls come back, the center play
-    // button should reappear if the player is paused/ready, since
-    // hideControls now strips its visible class. Without this, the
-    // big play button stayed gone until the next state change.
+    // The centre button is NOT part of the chrome. Showing the bar must not
+    // bring it along: hovering a paused video should reveal the bar and leave
+    // the picture alone, rather than dropping a second play control on top of
+    // the one that just appeared in the bar.
+    //
+    // It only belongs on screen where there is no bar control to duplicate:
+    // before the first play (the poster's big play button) and at the end
+    // (replay). Both are handled in updatePlayPauseIcon; nothing to add here.
     //
     // Gate on the loading INDICATOR's display, not the `isLoading`
     // field. The field stays true through the entire initializePlayer
@@ -9481,8 +9479,7 @@ export class MoviElement extends HTMLElement {
     // seek(0) (suppressSpinner) — so visually nothing is loading,
     // yet the field-based guard kept the big play button hidden on
     // first paint when autoplay is off. Match the same source-of-
-    // truth `updatePlayPauseIcon` uses (line ~13024) so the two
-    // can't disagree.
+    // truth `updatePlayPauseIcon` uses so the two can't disagree.
     const centerPlayPause = this.shadowRoot?.querySelector(
       ".movi-center-play-pause",
     ) as HTMLElement | null;
@@ -9497,7 +9494,7 @@ export class MoviElement extends HTMLElement {
       !this._autoplayStarting
     ) {
       const state = this.player?.getState();
-      if (state !== "playing" && state !== "buffering") {
+      if (!this._hasEverPlayed || state === "ended") {
         centerPlayPause.classList.add("movi-center-visible");
       }
     }
@@ -16937,7 +16934,6 @@ export class MoviElement extends HTMLElement {
           // "ended" event, so the just-bound loop handler never runs and
           // playback sits stuck. Kick off the replay here instead.
           if (this._loop && this.player.getState() === "ended") {
-            this._loopRestartInFlight = true;
             this.play();
           }
         }
@@ -18431,7 +18427,6 @@ export class MoviElement extends HTMLElement {
     // Handle loop
     if (this._loop) {
       const loopHandler = () => {
-        this._loopRestartInFlight = true;
         this.play();
       };
       this.player.on("ended", loopHandler);
@@ -18696,11 +18691,6 @@ export class MoviElement extends HTMLElement {
           this.maybeShowResumeDialog();
         }
         this._hasEverPlayed = true;
-        // Loop boundary fully settled (updatePlayPauseIcon above
-        // already ran with the flag set, so the pause-confirmation
-        // flash got suppressed). Clear here so a subsequent *user*
-        // click still flashes the icon as confirmation.
-        this._loopRestartInFlight = false;
         this.dispatchEvent(new Event("play"));
         // Autoplay had no user gesture, so there's no click to confirm —
         // hide the controls immediately rather than running the 200ms
@@ -19691,17 +19681,6 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
     const isLoading = loadingIndicator?.style.display === "flex";
 
-    // A suppressed seek (rate-change correction, first play, replay,
-    // poster seek) briefly drops state to "seeking" with the spinner
-    // hidden. Treat it like loading here so the centre play/pause icon
-    // doesn't flash play→pause during that invisible seek — without this
-    // it momentarily flips to the play icon and back, which reads as a
-    // glitchy blink even though nothing is actually loading.
-    const playerState = this.player?.getState();
-    const isSuppressedSeek =
-      (playerState === "seeking" || playerState === "buffering") &&
-      !!this.player?.suppressSeekSpinner;
-
     const contextMenuPlayIcon = this.shadowRoot?.querySelector(
       ".movi-context-menu-play-icon",
     ) as HTMLElement;
@@ -19744,37 +19723,15 @@ export class MoviElement extends HTMLElement {
       // tick would revert the click handler's optimistic flip). With intent,
       // it reconciles to pause and rides the same fade-out logic below.
       //
-      // While playing, the center button briefly surfaces as a pause
-      // icon for visual confirmation of the user's click, then fades
-      // out with the controls bar (the stateChange handler's 200ms
-      // setTimeout strips both together). The controlsHidden gate
-      // below ensures the periodic UI refresh (250ms tick) doesn't
-      // re-add the button after that fade-out — otherwise the icon
-      // kept flickering back on every tick while controls were still
-      // hidden but state was still "playing".
+      // Playing: the centre button is gone, full stop. It used to surface as a
+      // pause icon to confirm the click and then fade out with the bar, which
+      // meant pressing play left a big icon sitting over the video for as long
+      // as the chrome was up — and hovering brought it back. The bar's own
+      // play/pause icon already flips on the click; that is the confirmation.
       if (centerPlayPauseBtn) {
         centerPlayIcon?.style.setProperty("display", "none");
         centerPauseIcon?.style.setProperty("display", "block");
-        const controlsHidden =
-          !this._controls ||
-          this.controlsContainer?.classList.contains("movi-controls-hidden");
-        // Skip the brief pause-confirmation flash on an autoplay start
-        // OR on a loop boundary — there was no user click to confirm
-        // in either case, so the centre button shouldn't flash. The
-        // loop flag is cleared by the stateChange handler once the
-        // player has settled back into "playing".
-        if (
-          isLoading ||
-          isSuppressedSeek ||
-          this._isUnsupported ||
-          controlsHidden ||
-          this._autoplayStarting ||
-          this._loopRestartInFlight
-        ) {
-          centerPlayPauseBtn.classList.remove("movi-center-visible");
-        } else {
-          centerPlayPauseBtn.classList.add("movi-center-visible");
-        }
+        centerPlayPauseBtn.classList.remove("movi-center-visible");
       }
     } else {
       // Centre icon only — bottom-bar + context-menu icons already set above.
@@ -19809,22 +19766,17 @@ export class MoviElement extends HTMLElement {
           centerPlayIcon?.style.setProperty("display", "block");
           centerPauseIcon?.style.setProperty("display", "none");
 
-          // Paused/ready: the big play icon rides WITH the bottom bar rather
-          // than standing on its own. YouTube shows it as part of the chrome —
-          // it appears when the chrome does and leaves when the chrome leaves,
-          // so a paused frame you've stopped touching is just the frame. This
-          // used to ignore the bar entirely and keep a permanent "click to
-          // resume" affordance parked over the picture.
+          // The centre button is not a resume affordance and not part of the
+          // chrome. Once playback has started it stays off: pausing hides it,
+          // and revealing the bar does not bring it back — the bar has its own
+          // play control, and a second one over the picture is just clutter on
+          // a frame the viewer paused to look at.
           //
-          // Two exceptions keep their persistent icon, because in both the
-          // centre button IS the interface rather than a duplicate of the bar's
-          // play control:
+          // It earns the screen only where no bar control duplicates it:
           //   - before the first play, over the poster
           //   - at the end of playback, where it reads as replay
-          const barHidden =
-            this.controlsContainer?.classList.contains("movi-controls-hidden");
           const standalone = !this._hasEverPlayed || currentState === "ended";
-          if (this._controls && (standalone || !barHidden)) {
+          if (this._controls && standalone) {
             // Surface the icon synchronously. We only reach this branch when
             // the spinner is already hidden (isLoading false above) and the
             // player isn't playing/loading/unsupported — i.e. genuinely
