@@ -6741,8 +6741,12 @@ export class MoviElement extends HTMLElement {
           const menu = this.shadowRoot?.querySelector(
             ".movi-quality-menu",
           ) as HTMLElement;
-          if (menu) menu.style.display = "none";
+          // Same as the other quality menus: clear `is-open` (what
+          // isAnyMenuOpen reads) rather than just hiding it, then re-arm the
+          // auto-hide the open menu had blocked.
+          this.setBottomMenuOpen(menu, false);
           this.updateQualityMenu();
+          this.showControls();
           this.dispatchEvent(new CustomEvent("qualitychange", { detail: { trackId } }));
         }
       });
@@ -7482,7 +7486,13 @@ export class MoviElement extends HTMLElement {
       const menu = this.shadowRoot?.querySelector(
         ".movi-quality-menu",
       ) as HTMLElement;
-      if (menu) menu.style.display = "none";
+      // Close through setBottomMenuOpen, NOT by poking display: "open" is the
+      // `is-open` class, which is what isAnyMenuOpen() reads. Hiding the menu
+      // without clearing it left the player believing a menu was still open
+      // forever — so showControls() below refused to arm the auto-hide timer
+      // (and the stateChange→playing hide bailed on the same gate), and the
+      // bar simply never went away after picking a quality.
+      this.setBottomMenuOpen(menu, false);
       // Re-arm auto-hide (menu-open gate blocked it; in-place switch doesn't
       // reload to reset the timer).
       this.showControls();
@@ -7554,7 +7564,9 @@ export class MoviElement extends HTMLElement {
       const menu = this.shadowRoot?.querySelector(
         ".movi-quality-menu",
       ) as HTMLElement;
-      if (menu) menu.style.display = "none";
+      // Via setBottomMenuOpen so the `is-open` class goes with the display —
+      // isAnyMenuOpen() reads the class, and a stale one pins the bar open.
+      this.setBottomMenuOpen(menu, false);
       // Re-arm the auto-hide timer: while the menu was open showControls()
       // refused to set it (isAnyMenuOpen gate), and the in-place switch doesn't
       // reload the player to reset it, so the bar would otherwise stay up.
