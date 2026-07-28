@@ -10407,6 +10407,74 @@ export class MoviElement extends HTMLElement {
     }, MoviElement.CENTER_FLASH_MS + 200);
   }
 
+  /**
+   * `themecolor` takes either form:
+   *
+   *   themecolor="#8B5CF6"
+   *   themecolor='{"primary":"#8B5CF6","secondary":"#22D3EE"}'
+   *
+   * A bare value is the primary colour, exactly as before. The object form
+   * exists because an attribute can only ever be a string — a host that wants
+   * both colours would otherwise need a second attribute for what is really one
+   * decision. The `themeColor` property accepts the object directly and does
+   * the stringifying for you.
+   *
+   * Anything unparseable clears both rather than half-applying: a typo'd JSON
+   * blob shouldn't leave the player wearing one colour of a pair.
+   */
+  private applyThemeColor(raw: string | null): void {
+    this.style.removeProperty("--movi-primary");
+    this.style.removeProperty("--movi-secondary");
+    const trimmed = raw?.trim();
+    if (!trimmed) return;
+
+    let primary: string | null = null;
+    let secondary: string | null = null;
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed) as {
+          primary?: unknown;
+          secondary?: unknown;
+        };
+        if (typeof parsed.primary === "string" && parsed.primary.trim()) {
+          primary = parsed.primary.trim();
+        }
+        if (typeof parsed.secondary === "string" && parsed.secondary.trim()) {
+          secondary = parsed.secondary.trim();
+        }
+      } catch {
+        Logger.warn(TAG, `themecolor: ignoring unparseable value ${trimmed}`);
+        return;
+      }
+    } else {
+      primary = trimmed;
+    }
+
+    if (primary) this.style.setProperty("--movi-primary", primary);
+    if (secondary) this.style.setProperty("--movi-secondary", secondary);
+  }
+
+  /**
+   * Theme colour as set. Accepts a colour string (primary only) or
+   * `{ primary, secondary }`; reads back the raw attribute.
+   */
+  get themeColor(): string | null {
+    return this.getAttribute("themecolor");
+  }
+
+  set themeColor(
+    value: string | { primary?: string; secondary?: string } | null,
+  ) {
+    if (value == null) {
+      this.removeAttribute("themecolor");
+      return;
+    }
+    this.setAttribute(
+      "themecolor",
+      typeof value === "string" ? value : JSON.stringify(value),
+    );
+  }
+
   private updateControlsVisibility(): void {
     const container = this.controlsContainer;
     if (!container) return;
@@ -11080,23 +11148,23 @@ export class MoviElement extends HTMLElement {
 
       /* Light Theme Center Play Button */
       :host([theme="light"]) .movi-center-play-pause {
-        background: color-mix(in srgb, var(--movi-primary) 15%, transparent) !important;
-        border-color: color-mix(in srgb, var(--movi-primary) 30%, transparent) !important;
-        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 10%, transparent) !important;
+        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 15%, transparent) !important;
+        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent) !important;
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 10%, transparent) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover {
-        background: color-mix(in srgb, var(--movi-primary) 25%, transparent) !important;
-        border-color: color-mix(in srgb, var(--movi-primary) 50%, transparent) !important;
-        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-primary) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 15%, transparent) !important;
+        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent) !important;
+        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 50%, transparent) !important;
+        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 15%, transparent) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause svg {
-        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-primary) 30%, transparent)) !important;
+        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent)) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 50%, transparent)) !important;
+        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 50%, transparent)) !important;
       }
 
       /* Light Theme Context Menu */
@@ -14351,9 +14419,9 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:hover,
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
-           background: color-mix(in srgb, var(--movi-primary) 40%, transparent) !important;
-           border-color: color-mix(in srgb, var(--movi-primary) 60%, transparent) !important;
-           box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 40%, transparent) !important;
+           background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent) !important;
+           border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent) !important;
+           box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent) !important;
         }
 
         .movi-center-play-pause svg {
@@ -14366,7 +14434,7 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:focus svg {
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
-           filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 60%, transparent)) !important;
+           filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent)) !important;
         }
 
         .movi-btn:hover svg,
@@ -14466,9 +14534,9 @@ export class MoviElement extends HTMLElement {
         width: 96px;
         height: 96px;
         border-radius: 50%;
-        background: color-mix(in srgb, var(--movi-primary) 25%, transparent);
+        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent);
         padding: 0;
-        border: 2px solid color-mix(in srgb, var(--movi-primary) 40%, transparent);
+        border: 2px solid color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -14477,7 +14545,7 @@ export class MoviElement extends HTMLElement {
         visibility: hidden;
         pointer-events: none;
         transition: opacity var(--movi-transition-bounce), transform var(--movi-transition-bounce), top var(--movi-transition-normal), visibility 0s linear 0.3s;
-        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 25%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
       }
 
       .movi-center-play-pause.movi-center-visible {
@@ -14500,9 +14568,9 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause:hover {
-        background: color-mix(in srgb, var(--movi-primary) 40%, transparent);
-        border-color: color-mix(in srgb, var(--movi-primary) 60%, transparent);
-        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-primary) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent);
+        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent);
+        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
       }
 
       /* Toggle receipt: pop in, fade out, gone. Carries !important because the
@@ -14533,7 +14601,7 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 60%, transparent));
+        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent));
       }
 
       /* Play icon — bumped up ~15% so the triangle isn't dwarfed by
@@ -14549,8 +14617,8 @@ export class MoviElement extends HTMLElement {
 
       .movi-center-play-pause:focus {
         outline: none !important;
-        border-color: color-mix(in srgb, var(--movi-primary) 50%, transparent);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-primary) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
+        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 50%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
       }
       
       /* Mobile center button — previously shrank to 72px here, but the
@@ -16517,9 +16585,7 @@ export class MoviElement extends HTMLElement {
     }
 
     this._themeColor = this.getAttribute("themecolor");
-    if (this._themeColor) {
-      this.style.setProperty("--movi-primary", this._themeColor);
-    }
+    this.applyThemeColor(this._themeColor);
 
     // Update controls visibility based on initial attributes
     this.updateControlsVisibility();
@@ -16902,11 +16968,7 @@ export class MoviElement extends HTMLElement {
         break;
       case "themecolor":
         this._themeColor = newValue;
-        if (newValue) {
-          this.style.setProperty("--movi-primary", newValue);
-        } else {
-          this.style.removeProperty("--movi-primary");
-        }
+        this.applyThemeColor(newValue);
         break;
       case "buffersize":
         this._bufferSize = newValue ? parseFloat(newValue) : 0;
