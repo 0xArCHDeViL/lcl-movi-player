@@ -6392,6 +6392,9 @@ export class MoviElement extends HTMLElement {
     // pseudo fallback — so this is the one place a fullscreen-scoped
     // `titlemode` needs to re-evaluate.
     this.updateTitle();
+    // And the one place the fullscreen button's exemption from the disabled
+    // chrome flips: it stays live only while there is a fullscreen to leave.
+    this.updateControlsState();
   }
 
   /**
@@ -21490,14 +21493,19 @@ export class MoviElement extends HTMLElement {
 
     controlsToDisable.forEach((control) => {
       const el = control as HTMLElement;
-      // Fullscreen is the way OUT, so it can never be part of the dead chrome.
-      // Disabled while an error was on screen in fullscreen, the viewer was
-      // sealed in: the overlay covers the video, the bar is inert behind it,
-      // and the only escape left is a keyboard the page may not have (touch).
-      // It stays live in the error state, and in the initial one too — there is
-      // no reason to trap someone who entered fullscreen before a source
-      // resolved.
-      if (el.classList.contains("movi-fullscreen-btn")) {
+      // Fullscreen is the way OUT, so while the player IS fullscreen it can
+      // never be part of the dead chrome. Disabled with an error on screen in
+      // fullscreen, the viewer was sealed in: the overlay covers the video, the
+      // bar is inert behind it, and the only escape left is a keyboard the page
+      // may not have (touch).
+      //
+      // Only while fullscreen, though. Exempting it unconditionally left one lit
+      // button in an otherwise dead bar on the "Nothing to Play" screen — an
+      // invitation to fullscreen an empty player.
+      if (
+        el.classList.contains("movi-fullscreen-btn") &&
+        this.isFullscreenActive()
+      ) {
         el.style.opacity = "1";
         el.style.pointerEvents = "auto";
         if (el.tagName === "BUTTON") (el as HTMLButtonElement).disabled = false;
