@@ -10249,20 +10249,22 @@ export class MoviElement extends HTMLElement {
       if (centerBtn) centerBtn.style.cursor = "none";
     }
 
-    // The center play/pause button is a separate sibling, so the bar's
-    // hidden class doesn't reach it. Only strip it when the player is
-    // actually playing — that's the pause-confirmation flash from a
-    // click, which should fade out alongside the bar. When the player
-    // is paused/ready/ended, keep the big play icon visible so the
-    // user always has a "click to resume" affordance even after the
-    // bottom bar has auto-hidden. updatePlayPauseIcon's paused branch
-    // will re-add the class on the next 250ms tick anyway, but the
-    // visible flicker between strip-and-re-add is what we're avoiding.
+    // The center play/pause button is a separate sibling, so the bar's hidden
+    // class doesn't reach it — strip it here so it leaves WITH the bar, the way
+    // YouTube does it. It used to be kept alive whenever the player was paused,
+    // as a permanent "click to resume" affordance, which is what left a big
+    // icon sitting over an otherwise clean paused frame forever.
+    //
+    // Two states keep it — the same pair updatePlayPauseIcon exempts, and they
+    // must agree or the two fight each other into a flicker: before the first
+    // play (the big play button over the poster IS the interface) and at the
+    // end of playback (where it reads as replay).
     const centerPlayPause = this.shadowRoot?.querySelector(
       ".movi-center-play-pause",
     ) as HTMLElement | null;
-    const state = this.player?.getState();
-    if (centerPlayPause && state === "playing") {
+    const centerIsStandalone =
+      !this._hasEverPlayed || this.player?.getState?.() === "ended";
+    if (centerPlayPause && !centerIsStandalone) {
       centerPlayPause.classList.remove("movi-center-visible");
     }
     // Bar hidden → centre button + loading spinner sit at the true centre.
@@ -19807,16 +19809,22 @@ export class MoviElement extends HTMLElement {
           centerPlayIcon?.style.setProperty("display", "block");
           centerPauseIcon?.style.setProperty("display", "none");
 
-          // Paused/ready state: surface the big play icon whenever
-          // controls are enabled — independent of the bottom bar's
-          // current visibility. The bar may be auto-hidden (no hover
-          // on touch, or after the play→pause flash on desktop), but
-          // the user still needs a "click here to resume" affordance.
-          // The playing branch above keeps the controlsHidden gate so
-          // the pause-confirmation flash continues to fade out with
-          // the bar — that's about the click-confirmation flow, not
-          // the resume affordance.
-          if (this._controls) {
+          // Paused/ready: the big play icon rides WITH the bottom bar rather
+          // than standing on its own. YouTube shows it as part of the chrome —
+          // it appears when the chrome does and leaves when the chrome leaves,
+          // so a paused frame you've stopped touching is just the frame. This
+          // used to ignore the bar entirely and keep a permanent "click to
+          // resume" affordance parked over the picture.
+          //
+          // Two exceptions keep their persistent icon, because in both the
+          // centre button IS the interface rather than a duplicate of the bar's
+          // play control:
+          //   - before the first play, over the poster
+          //   - at the end of playback, where it reads as replay
+          const barHidden =
+            this.controlsContainer?.classList.contains("movi-controls-hidden");
+          const standalone = !this._hasEverPlayed || currentState === "ended";
+          if (this._controls && (standalone || !barHidden)) {
             // Surface the icon synchronously. We only reach this branch when
             // the spinner is already hidden (isLoading false above) and the
             // player isn't playing/loading/unsupported — i.e. genuinely
