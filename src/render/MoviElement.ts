@@ -5830,7 +5830,11 @@ export class MoviElement extends HTMLElement {
     .movi-subtitle-overlay { position: absolute; z-index: 5; pointer-events: none; text-align: center; box-sizing: border-box; }
     .movi-subtitle-anchor { display: block; width: 100%; text-align: left; box-sizing: border-box; }
     .movi-subtitle-block { display: inline-block; max-width: 100%; border-radius: 4px; padding: 4px 12px; text-align: left; box-sizing: border-box; }
-    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block { background: rgba(var(--movi-sub-bg-rgb, 8, 8, 8), var(--movi-sub-bg-alpha, 0.75)); }
+    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block { background: none; padding: 0; }
+    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line { width: fit-content; max-width: 100%; padding: 2px 12px; border-radius: 4px; background: rgba(var(--movi-sub-bg-rgb, 8, 8, 8), var(--movi-sub-bg-alpha, 0.75)); }
+    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line + .movi-subtitle-line { margin-top: 2px; }
+    .movi-subtitle-block.movi-subtitle-advance { animation: movi-subtitle-line-advance 300ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+    @keyframes movi-subtitle-line-advance { from { transform: translateY(var(--movi-sub-adv, 0px)); } to { transform: translateY(0); } }
     .movi-subtitle-line {
       display: block;
       color: var(--movi-sub-color, #FFFFFF);
@@ -14615,11 +14619,57 @@ export class MoviElement extends HTMLElement {
         cursor: pointer;
       }
 
+      /* VTT gets its backdrop PER LINE, not one box around the cue. A shared
+         backdrop squares off to the widest line, so a long line above a short
+         one leaves a big empty slab of black hanging off the end of the short
+         one. Each line carrying its own pill is what YouTube does — and it is
+         what makes the rolling karaoke read as two separate lines rather than
+         one growing block. The wrapper keeps its min-width anchor (that is what
+         holds the left edge still while words type in); it just doesn't paint. */
       .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block {
+        background: none;
+        padding: 0;
+      }
+
+      .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line {
+        /* fit-content, or the block-level line stretches to the wrapper's
+           min-width and the pills merge back into the same slab. */
+        width: fit-content;
+        max-width: 100%;
+        padding: 2px 12px;
+        border-radius: 4px;
         background: rgba(
           var(--movi-sub-bg-rgb, 8, 8, 8),
           var(--movi-sub-bg-alpha, 0.75)
         );
+      }
+
+      /* Enough of a gap that the two pills read as separate, not enough to
+         break them apart as a block of text. */
+      .movi-subtitle-overlay.movi-subtitle-format-vtt
+        .movi-subtitle-line
+        + .movi-subtitle-line {
+        margin-top: 2px;
+      }
+
+      /* A new line just pushed the previous one up. Start the whole block one
+         line lower and let it settle, so the earlier line glides upward
+         instead of jumping — the scroll YouTube's rolling captions have. The
+         offset is measured and set inline as --movi-sub-adv; the class is only
+         applied on the render where the line count actually grew, so ordinary
+         karaoke ticks don't re-run it. */
+      .movi-subtitle-block.movi-subtitle-advance {
+        animation: movi-subtitle-line-advance 300ms
+          cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+
+      @keyframes movi-subtitle-line-advance {
+        from {
+          transform: translateY(var(--movi-sub-adv, 0px));
+        }
+        to {
+          transform: translateY(0);
+        }
       }
 
       .movi-subtitle-line {

@@ -261,6 +261,9 @@ export class CanvasRenderer {
   // delta of the next karaoke cue so only the new word fades in, instead
   // of the whole line re-animating each tick.
   private _lastRenderedSubtitlePlain: string = "";
+  // Rendered line count of the previous subtitle paint. A growth in this while
+  // the same sentence is still building is what triggers the scroll-up.
+  private _lastSubtitleLineCount: number = 0;
   // Canvas + cached font string used to measure a karaoke cue's full
   // final-sentence width so the line can hold a stable min-width
   // anchor. The font cache is keyed by viewport width because the
@@ -3281,6 +3284,7 @@ export class CanvasRenderer {
     this.activeSubtitleCue = null;
     this._lastRenderedSubtitleKey = "";
     this._lastRenderedSubtitlePlain = "";
+    this._lastSubtitleLineCount = 0;
     // Clear all subtitle elements from overlay if it exists
     if (this.subtitleOverlay) {
       this.subtitleOverlay.innerHTML = "";
@@ -3430,6 +3434,7 @@ export class CanvasRenderer {
           this.subtitleOverlay.innerHTML = ""; // Clear any image elements too
           this._lastRenderedSubtitleKey = "";
           this._lastRenderedSubtitlePlain = "";
+          this._lastSubtitleLineCount = 0;
         }
         this.subtitleOverlay.style.display = "none";
       }
@@ -3854,6 +3859,30 @@ export class CanvasRenderer {
         `<div class="movi-subtitle-anchor"${anchorStyle}>` +
         `<div class="movi-subtitle-block">${linesHtml}</div>` +
         `</div>`;
+
+      // A karaoke cue that just wrapped onto another line has pushed whatever
+      // was showing upward. Left alone that is a jump; sliding the block up
+      // from where it sat a moment ago turns it into the scroll YouTube's
+      // rolling captions do. Only on the render where the count actually grew —
+      // the innerHTML above is rebuilt on every word, so an unconditional
+      // animation would re-run on each karaoke tick — and only while the same
+      // sentence is growing, so a brand-new cue simply appears.
+      const lineCountGrew =
+        isCumulativeGrowth && lines.length > this._lastSubtitleLineCount;
+      this._lastSubtitleLineCount = lines.length;
+      if (lineCountGrew) {
+        const blockEl = this.subtitleOverlay.querySelector(
+          ".movi-subtitle-block",
+        ) as HTMLElement | null;
+        // Measure rather than assume a line box: font size, the user's size
+        // multiplier and the per-line padding all feed into it.
+        const firstLine = blockEl?.firstElementChild as HTMLElement | null;
+        const advance = firstLine?.offsetHeight ?? 0;
+        if (blockEl && advance > 0) {
+          blockEl.style.setProperty("--movi-sub-adv", `${advance}px`);
+          blockEl.classList.add("movi-subtitle-advance");
+        }
+      }
 
       return;
     }
