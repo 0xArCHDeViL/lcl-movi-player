@@ -2655,6 +2655,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // Pause requested while a seek is still in flight. The seek owns the state
+    // machine until it completes, so we do NOT force "paused" here — that would
+    // race handleSeekComplete's own final-state transition. Instead drop the
+    // resume intent, which lands the seek in its "Seek completed in paused
+    // state" branch, and stop the output side immediately so the tap feels
+    // instant. Without this the pause was silently dropped ("Cannot pause in
+    // current state") and playback resumed on its own once the seek landed —
+    // wide open on a software-decoded phone, where seeks run for seconds and
+    // the frozen picture reads as "already paused".
+    if (this.stateManager.getState() === "seeking") {
+      this.wasPlayingBeforeSeek = false;
+      this.wasPlayingBeforeRebuffer = false;
+      this.releaseWakeLock();
+      this.clock.pause();
+      if (!this.disableAudio) this.audioRenderer.pause();
+      if (this.nativeAudioEl) this.nativeAudioEl.pause();
+      if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+      this.stopBackgroundTimer();
+      Logger.info(TAG, "Paused during seek — seek will settle into paused");
+      return;
+    }
+
     // During buffering, transition to paused and stop auto-resume
     if (this.stateManager.getState() === "buffering") {
       this.wasPlayingBeforeRebuffer = false;
