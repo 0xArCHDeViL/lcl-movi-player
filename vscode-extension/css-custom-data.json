@@ -2,6 +2,45 @@
   "version": 1.1,
   "properties": [
     {
+      "name": "--movi-title-font",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `clamp(16px, 4vw, 20px)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-title-line",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `calc(var(--movi-title-font) * 1.4)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-title-pad-top",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `16px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-primary",
       "description": {
         "kind": "markdown",

@@ -571,6 +571,18 @@
           ],
           "cssProperties": [
             {
+              "name": "--movi-title-font",
+              "description": "Movi Player theme variable.\n\nDefault: `clamp(16px, 4vw, 20px)`"
+            },
+            {
+              "name": "--movi-title-line",
+              "description": "Movi Player theme variable.\n\nDefault: `calc(var(--movi-title-font) * 1.4)`"
+            },
+            {
+              "name": "--movi-title-pad-top",
+              "description": "Movi Player theme variable.\n\nDefault: `16px`"
+            },
+            {
               "name": "--movi-primary",
               "description": "Movi Player theme variable.\n\nDefault: `#8B5CF6`"
             },
