@@ -101,6 +101,14 @@ export class CanvasRenderer {
   // — without it that watchdog reads a slow decoder as a stuck pipeline and
   // keeps issuing corrective seeks that cannot help. Cleared by configure().
   private _decodeBound: boolean = false;
+  private _videoBacklog: (() => number) | null = null;
+  // Whether the decoder held any queued work at ANY point in the current
+  // window. Sampling it once per window would miss it: the queue drains and
+  // refills within a window even on a decoder that is genuinely behind (an 8K
+  // trace showed 0-30 packets oscillating every few hundred ms), so a single
+  // unlucky read would excuse a device that really can't keep up.
+  private _backlogSeenStuck: boolean = false;
+  private _backlogSeenDeficit: boolean = false;
   private _perfWindowStart: number = 0; // performance.now() of the current window, 0 = not started
   private _perfWindowBaseCount: number = 0; // framesPresented at window start
   private _perfDeficitWindows: number = 0; // consecutive struggling windows
@@ -395,6 +403,8 @@ export class CanvasRenderer {
     this._presentFpsCap = 0;
     this._perfDegradeChecked = false;
     this._decodeBound = false;
+    this._backlogSeenStuck = false;
+    this._backlogSeenDeficit = false;
     this._perfWindowStart = 0;
     this._perfDeficitWindows = 0;
     this._perfStuckWindows = 0;
@@ -1094,6 +1104,16 @@ export class CanvasRenderer {
     return this._decodeBound;
   }
 
+  /**
+   * How many packets are queued in the video decoder. The perf detectors use it
+   * to tell a decoder that is too SLOW (work piled up in front of it) from one
+   * that is merely STARVED (nothing arriving) — both look identical from the
+   * present side, which is all this renderer can otherwise see.
+   */
+  setVideoBacklogProvider(cb: () => number): void {
+    this._videoBacklog = cb;
+  }
+
   setOnPerformanceDegrade(cb: (targetFps: number) => void): void {
     this._onPerformanceDegrade = cb;
   }
@@ -1160,6 +1180,12 @@ export class CanvasRenderer {
     // never even start). Audio healthy = playback is genuinely running, so
     // sustained near-zero video = the device can't decode this rung → tell ABR
     // to drop. A rendition switch re-arms us via configure().
+    // Roll the "did the decoder have anything to do?" latches for both windows.
+    if (this._videoBacklog ? this._videoBacklog() > 0 : true) {
+      this._backlogSeenStuck = true;
+      this._backlogSeenDeficit = true;
+    }
+
     const nowStuck = performance.now();
     if (this._stuckWindowStart === 0) {
       this._stuckWindowStart = nowStuck;
@@ -1169,7 +1195,22 @@ export class CanvasRenderer {
         (this.framesPresented - this._stuckBaseCount) /
         ((nowStuck - this._stuckWindowStart) / 1000);
       const audioFlowing = this._isAudioHealthy ? this._isAudioHealthy() : true;
-      if (audioFlowing && stuckFps < CanvasRenderer.PERF_MIN_ACHIEVED_FPS) {
+      // Audio flowing is NOT enough on its own to call this a device limit.
+      // Video outweighs audio by two orders of magnitude (an 8K60 rung runs
+      // ~36 Mbit/s against ~200 kbit/s of Opus), so a link that cannot carry
+      // the video keeps audio perfectly healthy while no frames arrive — which
+      // is indistinguishable from a decoder that can't keep up, from here. The
+      // decoder's own backlog separates them: work piled up in front of it
+      // means slow, nothing queued means starved. Measured on a Drive-hosted
+      // 8K60 AV1 file whose link tops out at 4.3 MB/s: the startup window read
+      // as decode-bound, which downshifts ABR and (until it was gated) sent the
+      // frozen-video watchdog seeking, even though the same file then sustained
+      // a full 60fps once data was ahead of the playhead.
+      if (
+        audioFlowing &&
+        this._backlogSeenStuck &&
+        stuckFps < CanvasRenderer.PERF_MIN_ACHIEVED_FPS
+      ) {
         this._perfStuckWindows++;
         if (this._perfStuckWindows >= CanvasRenderer.PERF_STUCK_WINDOWS && !inGrace) {
           this.engageDecodeBound(stuckFps);
@@ -1180,6 +1221,7 @@ export class CanvasRenderer {
       }
       this._stuckWindowStart = nowStuck;
       this._stuckBaseCount = this.framesPresented;
+      this._backlogSeenStuck = false;
     }
 
     // framesPresented resets to 0 on start/seek, so a low count during the
@@ -1216,8 +1258,13 @@ export class CanvasRenderer {
     // decoder recovery. Genuine decode-bound playback stays well above the floor.
     const producing = achievedFps >= CanvasRenderer.PERF_MIN_ACHIEVED_FPS;
 
+    // Same discriminator as the stuck detector above: only a decoder with work
+    // queued can be "too slow". An empty backlog across the whole window means
+    // the frames simply aren't arriving, and capping the present rate (or
+    // dropping a rung) does nothing about that.
     if (
       audioHealthy &&
+      this._backlogSeenDeficit &&
       producing &&
       expected > 0 &&
       achieved < expected * CanvasRenderer.PERF_DEFICIT_RATIO
@@ -1231,6 +1278,7 @@ export class CanvasRenderer {
     }
     this._perfWindowStart = now;
     this._perfWindowBaseCount = this.framesPresented;
+    this._backlogSeenDeficit = false;
   }
 
   private engagePresentCap(achievedFps: number): void {

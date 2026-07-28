@@ -562,6 +562,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer.setShouldMeasurePerf(
           () => !(this.isBackgrounded && !this.isPiPActive),
         );
+        // Lets the perf detectors tell a slow decoder from a starved one — see
+        // setVideoBacklogProvider. Read live rather than cached: the queue
+        // drains and refills between windows.
+        this.videoRenderer.setVideoBacklogProvider(
+          () => this.videoDecoder?.queueSize ?? 0,
+        );
 
         Logger.info(
           TAG,
