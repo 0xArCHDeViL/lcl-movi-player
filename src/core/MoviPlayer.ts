@@ -4547,6 +4547,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     const mySessionId = ++this.seekSessionId;
     this._lastSeekAt = performance.now();
+    // Retire the ABR's buffer baseline with it. A seek restarts the buffered
+    // range at the new playhead, so the next tick would compare a fresh ~2s
+    // against the tens of seconds measured before the seek and read a massive
+    // DRAIN — the ground-truth signal that the rung can't be sustained. The
+    // absolute-low half of that check is already held off for 12s after a seek
+    // for exactly this reason; the draining half only had the 4s
+    // postSeekSettling window, so scrubbing around dropped the quality a few
+    // seconds after the user stopped, on a link that was carrying the rung
+    // perfectly. Zeroing it makes the next tick establish a post-seek baseline
+    // instead (draining requires a positive previous reading), so a real drain
+    // is still caught one tick later. The in-place rendition swap already does
+    // the same thing for the same reason.
+    this._lastBufferAhead = 0;
     this.stateManager.setState("seeking");
     this.emit("seeking", seconds);
 
