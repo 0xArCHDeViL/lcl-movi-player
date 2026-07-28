@@ -1058,6 +1058,16 @@ export class HttpSource implements SourceAdapter {
         let downloadedBytes = 0;
         let lastLogBytes = 0;
         const startTime = Date.now();
+        // Time this loop spends PARKED at the prefetch gate, which is our own
+        // throttle rather than anything the link did. It has to come out of the
+        // throughput windows below: with it in, a stream that is deliberately
+        // paced reads as a slow link. That is how a connection delivering
+        // ~4 MB/s reported 0.07 MB/s once the buffer was ahead — and the ABR,
+        // which sizes rungs off exactly this number, then crawled up the ladder
+        // one step at a time instead of settling on the quality the link
+        // actually carries.
+        let gateMsWindow = 0; // parked since the last speed sample
+        let gateMsTotal = 0; // parked across this whole stream
 
         // Initialize network stats timing
         if (this.streamStartTime === 0) {
@@ -1068,7 +1078,11 @@ export class HttpSource implements SourceAdapter {
         // Read Loop
         while (this.atomicIsStreaming()) {
           // Yield the network to a bandwidth-starved native <audio> track.
+          const parkedAt = Date.now();
           await this.awaitPrefetchGate();
+          const parkedMs = Date.now() - parkedAt;
+          gateMsWindow += parkedMs;
+          gateMsTotal += parkedMs;
           // Bail if the stream stopped OR was superseded while we were parked
           // (this.reader swapped to a new stream's reader — reading it here would
           // corrupt the new stream and can be null mid-swap).
@@ -1085,20 +1099,23 @@ export class HttpSource implements SourceAdapter {
             // Track global network stats
             this.totalBytesDownloaded += value.length;
             const now = Date.now();
-            const speedElapsed = (now - this.lastSpeedTime) / 1000;
+            // Active (unparked) time only — see gateMsWindow above.
+            const speedElapsed = (now - this.lastSpeedTime - gateMsWindow) / 1000;
             if (speedElapsed >= 0.5) {
               const bytesSinceLast = this.totalBytesDownloaded - this.lastSpeedBytes;
               this.currentSpeed = bytesSinceLast / speedElapsed;
               this.lastSpeed = this.currentSpeed;
               this.lastSpeedBytes = this.totalBytesDownloaded;
               this.lastSpeedTime = now;
+              gateMsWindow = 0;
             }
 
             if (downloadedBytes - lastLogBytes > 1024 * 1024) {
               // Log every 1MB
-              const elapsed = (Date.now() - startTime) / 1000;
+              const elapsed = (Date.now() - startTime - gateMsTotal) / 1000;
               // Per-1MB active rate (bytes/s) — captured even for a sub-0.5s
-              // download that the window above never gets to measure.
+              // download that the window above never gets to measure. Parked
+              // time is excluded here for the same reason as the window.
               if (elapsed > 0) this.lastSpeed = downloadedBytes / elapsed;
               const speed =
                 elapsed > 0 ? downloadedBytes / 1024 / 1024 / elapsed : 0;

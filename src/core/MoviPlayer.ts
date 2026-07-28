@@ -1820,7 +1820,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // UPSHIFT — only to a higher rung that fits with a safety margin, and only
     // after it holds for two consecutive ticks so a lone spike (a cache-served
     // burst, one fast chunk) doesn't bounce quality up then straight back down.
-    let affordableBits = throughputBits * 0.85;
+    //
+    // A deep, non-draining buffer means the download is PACING-limited, not
+    // link-limited: the server (YouTube's CDN throttles each stream to roughly
+    // its own bitrate once the opening burst is over) hands over exactly as much
+    // as playback needs and no more. The sustained reading then measures the
+    // rung's bitrate rather than the link, so it can only ever justify the next
+    // rung up — which is how a connection doing 4 MB/s climbed 144p → 240p → …
+    // one 12-second cooldown at a time and never arrived anywhere near the top.
+    //
+    // While the buffer is that healthy, the sustained number is a FLOOR, and the
+    // range probe — a fresh request, served at burst speed — is the better
+    // reading. It is still only used to size the CANDIDATE; the confirmation
+    // below, the 0.85 margin, and the drain/penalty machinery all still apply, so
+    // a rung the link can't really hold gets dropped again on its own.
+    // 12s: comfortably above the 6s/4s marks the downshift path treats as
+    // trouble, and low enough that a modest `buffersize` still reaches it.
+    const paced = bufferAhead >= 12 && !draining;
+    let sizingBits = throughputBits;
+    if (
+      paced &&
+      this._lastProbeBits > 0 &&
+      now - this._lastProbeAt < MoviPlayer.ABR_PROBE_FRESH_MS
+    ) {
+      sizingBits = Math.max(sizingBits, this._lastProbeBits);
+    }
+    let affordableBits = sizingBits * 0.85;
     // Never climb into a resolution this device has proven (twice) it can't
     // decode. The cap lives at module level (survives player recreates), so it
     // holds across every video this session — convert the capped heights to a
@@ -1883,8 +1908,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // lower. So the probe only ever catches a stale-high estimate, it can't
         // inflate a real one.
         const probeBits = await this.probeRungThroughput(up.url);
+        if (probeBits > 0) {
+          this._lastProbeBits = probeBits;
+          this._lastProbeAt = now;
+        }
+        // MIN normally: through a caching proxy the probe can read at cache
+        // speed, so it must not be able to talk the estimate UP past what
+        // playback actually sustains. MAX when paced: there the sustained
+        // number is not a ceiling at all (see above), it is just how fast the
+        // server chose to feed a healthy buffer, and holding the decision down
+        // to it is what pinned quality at the bottom of the ladder.
         const effectiveBits =
-          probeBits > 0 ? Math.min(throughputBits, probeBits) : throughputBits;
+          probeBits > 0
+            ? paced
+              ? Math.max(throughputBits, probeBits)
+              : Math.min(throughputBits, probeBits)
+            : throughputBits;
         if (effectiveBits * 0.85 < (up.bandwidth || 0)) {
           // Can't sustain the higher rung — fold the tighter number into the
           // estimate and hold; the next tick re-decides on the truer value.
@@ -1924,6 +1963,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * draining, and adding a probe fetch into a struggling link would only slow
    * the recovery, so downshift stays reactive.
    */
+  /** Last usable range-probe reading, and when it was taken. Reused to size the
+   *  upshift candidate while the buffer is deep — see the paced-link note in
+   *  abrTick. */
+  private _lastProbeBits = 0;
+  private _lastProbeAt = 0;
+  /** How long a probe reading stays fresh enough to size a candidate from. */
+  private static readonly ABR_PROBE_FRESH_MS = 60_000;
+
   private async probeRungThroughput(url: string): Promise<number> {
     if (this._abrProbeInFlight || this._destroyed) return -1;
     this._abrProbeInFlight = true;
