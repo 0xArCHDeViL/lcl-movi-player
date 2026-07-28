@@ -11749,17 +11749,9 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-controls-color);
         height: auto;
         min-height: var(--movi-controls-height);
-        /* Hairline top accent. Reads as a separator between video
-           and chrome the way YouTube's progress bar does, but with a
-           wider feel since our progress bar sits inside the bar. */
-        box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
-      }
-
-      /* Light theme bar uses the same dark gradient — keep the
-         hairline accent so the separator between video and chrome
-         is just as visible. */
-      :host([theme="light"]) .movi-controls-bar {
-        box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+        /* No hairline top accent: the bar background already fades out
+           into the picture, and a hard 1px line across that fade drew a
+           visible edge where the gradient is meant to have none. */
       }
 
       .movi-progress-container {
