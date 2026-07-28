@@ -29,6 +29,14 @@ export interface BandwidthProbeOptions {
 const DEFAULT_SKIP_BYTES = 2_500_000; // past the ~2 MB proxy read-ahead burst
 const DEFAULT_MEASURE_BYTES = 1_500_000; // ~1.5 MB of real, throttled stream
 const DEFAULT_TIMEOUT_MS = 6000;
+/**
+ * Ceiling for the "it arrived instantly" reading below. A cache hit is proof
+ * the bytes are local, not proof the LINK is that fast — the rest of the file
+ * may still have to stream — so the reading is capped at a rate that opens a
+ * comfortable rung (1080p-ish) and lets the ABR climb from there on real
+ * samples rather than on a number the network never earned.
+ */
+const INSTANT_HIT_CAP_BPS = 25_000_000;
 
 /**
  * Measure sustained link throughput in BITS/second, or -1 if it couldn't get a
@@ -52,6 +60,7 @@ export async function probeLinkBandwidth(
   const timer = setTimeout(() => ac.abort(), timeoutMs);
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const requestedAt = performance.now();
   try {
     const res = await fetch(url, {
       headers: { Range: `bytes=0-${wantBytes - 1}`, ...(opts.headers || {}) },
@@ -108,6 +117,19 @@ export async function probeLinkBandwidth(
     if (firstByteAt !== 0 && received >= 500_000) {
       const seconds = (end - firstByteAt) / 1000;
       if (seconds >= 0.1) return (received / seconds) * 8;
+
+      // Under 100ms for the whole range: the response came out of the HTTP
+      // cache. Safari hands a cached range back as a single chunk, so there is
+      // no tail to time AND firstByteAt lands on top of the end — every window
+      // above measures zero and the probe used to give up with -1. "Unmeasured"
+      // then meant "open on the smallest rung", which is how a video the viewer
+      // had already watched once started at 144p for a second or two.
+      //
+      // Instant delivery is not a failed measurement, it is a fast one. Time it
+      // from the request instead of the first byte (the only window with any
+      // duration in it) and cap the result — see INSTANT_HIT_CAP_BPS.
+      const wallSeconds = Math.max((end - requestedAt) / 1000, 0.005);
+      return Math.min((received / wallSeconds) * 8, INSTANT_HIT_CAP_BPS);
     }
     return -1;
   } catch {
