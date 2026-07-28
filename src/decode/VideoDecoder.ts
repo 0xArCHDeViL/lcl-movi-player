@@ -41,6 +41,10 @@ export class MoviVideoDecoder {
   private currentTrack: VideoTrack | null = null;
   private lastErrorTime: number = 0;
   private openGopErrorCount: number = 0;
+  // Latched when an in-place reset()+configure() restart wasn't enough for this
+  // stream — its keyframe was rejected afterwards — so later flushes go straight
+  // to a full close()+new decoder. Per source; cleared by configure().
+  private _hardRecreateNeeded: boolean = false;
   private hardwareRetryCount: number = 0;
   private lastHardwareRetryTime: number = 0;
   private isResurrecting: boolean = false;
@@ -134,6 +138,9 @@ export class MoviVideoDecoder {
     this.openGopErrorCount = 0;
     this.hardwareRetryCount = 0;
     this.lastHardwareRetryTime = 0;
+    // A new source/rendition gets a fresh verdict on whether the cheap in-place
+    // re-arm is enough for it.
+    this._hardRecreateNeeded = false;
     if (this.swDecoder) {
       this.swDecoder.close();
       this.swDecoder = null;
@@ -536,6 +543,40 @@ export class MoviVideoDecoder {
   /**
    * Recreate the decoder after a fatal error
    */
+  /**
+   * Re-arm the decoder for a random-access restart WITHOUT tearing the instance
+   * down. reset() drops the queue, the pending callbacks and the configuration,
+   * so the configure() that follows is a genuine fresh configuration — the same
+   * state a brand-new decoder is in, which is what makes an open-GOP CRA
+   * acceptable as `key` again. What it does NOT do is destroy and re-acquire the
+   * platform decoder, which is the expensive, visibly glitchy half of a full
+   * recreate (and, per the Firefox bug below, the crash-prone one).
+   *
+   * Returns false if the decoder can't be re-armed in place, in which case the
+   * caller falls back to the full recreate.
+   *
+   * Refs: https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder/reset
+   *       https://bugzilla.mozilla.org/show_bug.cgi?id=1976929
+   */
+  private softRecreateDecoder(): boolean {
+    if (this.useSoftware || !this.decoder || !this.lastConfig) return false;
+    if (this.decoder.state === "closed") return false;
+    try {
+      this.decoder.reset();
+      this.decoder.configure(this.lastConfig);
+      this.isConfigured = true;
+      // Same post-restart contract as the full recreate: no reference frames are
+      // held, so the stream must resume on a keyframe, and an open-GOP CRA must
+      // go in as `key` rather than being downgraded to `delta`.
+      this.justFlushed = true;
+      this.setWaitingForKeyframe(true);
+      return true;
+    } catch (error) {
+      Logger.warn(TAG, "In-place decoder re-arm failed, falling back", error);
+      return false;
+    }
+  }
+
   private recreateDecoder(): boolean {
     if (this.useSoftware) return false;
     if (!this.lastConfig) return false;
@@ -957,6 +998,12 @@ export class MoviVideoDecoder {
         TAG,
         `Decoding warning: Frame was marked as keyframe but decoder rejected it (Open GOP?). Timestamp: ${this.lastChunkInfo?.timestamp}. Count (OpenGOP): ${this.openGopErrorCount}`,
       );
+      // This stream needs the heavier restart: an in-place reset()+configure()
+      // left the platform decoder unwilling to take its random-access point.
+      // Latch it so every later flush skips straight to the full recreate
+      // instead of paying for a re-arm that we now know won't be accepted.
+      // Cleared when a new configuration arrives (new source or rendition).
+      this._hardRecreateNeeded = true;
 
       // Post-flush keyframe rejection: some HW decoders refuse the first keyframe
       // after a seek-flush for certain streams (10-bit BT.2020/PQ HDR HEVC has
@@ -1313,6 +1360,15 @@ export class MoviVideoDecoder {
     const codec = this.lastConfig?.codec ?? "";
     const isHevc = codec.startsWith("hvc1.") || codec.startsWith("hev1.");
     if (isHevc && !this.forceSoftware && !this.useSoftware) {
+      // Prefer re-arming in place. A full recreate destroys and re-acquires the
+      // platform decoder on EVERY seek and rate change, which is the visible
+      // hitch; reset()+configure() reaches the same fresh-configuration state
+      // that makes a CRA acceptable as `key`, without that cost. Streams that
+      // prove the in-place path isn't enough (a keyframe rejection after it)
+      // latch _hardRecreateNeeded and get the full recreate from then on.
+      if (!this._hardRecreateNeeded && this.softRecreateDecoder()) {
+        return;
+      }
       if (this.recreateDecoder()) {
         return; // fresh decoder is configured and waiting for a keyframe
       }
