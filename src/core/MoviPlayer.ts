@@ -6136,19 +6136,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   private hasHealthyAudioAnchor(): boolean {
     // Native <audio> path (separate / multi-language source): the element owns
-    // its own clock and re-times smoothly on a playbackRate change, so there's
-    // no demuxer read-ahead pivot to correct.
+    // its own clock and re-times smoothly on a playbackRate change, and there is
+    // no demuxer audio read-ahead to strand — nothing for the seek to correct.
     if (this.nativeAudioEl) return true;
-    // Software-mixed path: only when AudioRenderer is actually the clock master
-    // and its buffer is healthy — the same signal Clock uses to let audio drive
-    // A/V sync. If audio isn't anchoring (video-only, starving, mid-resync),
-    // fall through so the corrective seek still runs.
-    return (
-      this.clock.isSyncedToAudio() &&
-      !!this.audioRenderer &&
-      this.audioRenderer.getAudioClock() >= 0 &&
-      this.audioRenderer.hasHealthyBuffer()
-    );
+    // Software-mixed path deliberately does NOT skip the seek, however healthy
+    // the buffer looks. AudioRenderer's re-anchor drops the scheduled audio,
+    // which leaves the demuxer parked at its read-ahead position — seconds of
+    // media beyond the playhead at a fast rate. The next chunk to arrive then
+    // reads as an underrun and pivots the whole clock onto that read-ahead
+    // media time (AudioRenderer's "Pivot global clock if we underrun"), so the
+    // playhead jumps forward and the video queue, now entirely in the past, is
+    // discarded: measured 1.5-3.6s of the film SKIPPED on every speed change,
+    // plus a 1-2s freeze while decode refills. The seek is what rewinds the
+    // demuxer back to the saved position and keeps that from happening. A brief
+    // hitch is the correct trade against silently skipping content.
+    return false;
   }
 
 
