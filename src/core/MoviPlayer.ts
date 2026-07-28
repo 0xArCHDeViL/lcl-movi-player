@@ -147,6 +147,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // (videoStart − audioStart) is added to each audio packet's PTS so it lands
   // on the video's timeline. Both are 0 when the two share a baseline (DASH).
   private _splitAudioStartTime: number = 0;
+  // Media time below which split-audio packets are dropped after a seek
+  // completes, so the audio demuxer's own (earlier) landing point can't drag
+  // the clock back behind the first video frame. -1 = no filter armed.
+  private _splitAudioSkipBefore: number = -1;
   private _splitAudioPtsDelta: number = 0;
   // True while an audio-track switch tears the audio demuxer down and re-stands
   // it up. hasAudibleSource() honors it so the volume control doesn't blink out
@@ -2994,6 +2998,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.pendingAudioPackets = this.pendingAudioPackets.filter(
         (p) => p.timestamp >= cutoff,
       );
+      // Split (separate-URL) audio never passes through pendingAudioPackets —
+      // its own loop decodes straight from the audio demuxer — so that filter
+      // left it untouched and the two paths disagreed about where playback
+      // resumes. The audio demuxer's seek lands on ITS container boundary,
+      // which can sit well before the target, and its in-flight guard
+      // (seekTargetTime) is released the moment this completion runs. Those
+      // early packets were then decoded and scheduled, the clock followed audio
+      // backwards, and the picture sat frozen on a full renderer queue until
+      // the clock crawled back up to the first video frame.
+      //
+      // It bites hardest exactly where the video starts LATE: an open-GOP CRA
+      // whose keyframe the decoder rejects resumes video a good half second
+      // past the target, so the audio-behind gap is at its widest. Measured on
+      // a split source: video resumed at 10.552s against a 10.000s target while
+      // audio started at 9.47s — 616ms of frozen picture. Hand the same cutoff
+      // to the split loop so it drops the stale head too.
+      if (this.audioDemuxer) this._splitAudioSkipBefore = cutoff;
     }
 
     // Transition to final state
@@ -4428,6 +4449,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.audioRenderer.reset();
       try {
         // Seek in the audio source's own PTS baseline (may differ from video's).
+        this._splitAudioSkipBefore = -1;
         await this.audioDemuxer.seek(t + this._splitAudioStartTime);
       } catch (e) {
         Logger.warn(TAG, `Split audio-only seek failed: ${(e as any)?.message ?? e}`);
@@ -4621,6 +4643,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
         try {
           // Seek in the audio source's own PTS baseline (may differ from video's).
+          // Retire any filter armed by the PREVIOUS seek — this one will arm its
+          // own on completion, and a stale cutoff would silently eat the head of
+          // the new position's audio.
+          this._splitAudioSkipBefore = -1;
           await this.audioDemuxer.seek(seconds + this._splitAudioStartTime);
         } catch (e) {
           Logger.warn(TAG, `Split audio seek failed: ${(e as any)?.message ?? e}`);
@@ -6565,6 +6591,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Skip packets before an in-flight seek target (mirror the video path).
         if (this.seekTargetTime !== -1 && pts < this.seekTargetTime) {
           continue;
+        }
+        // …and keep skipping past completion, up to where the seek actually
+        // resumed (see _splitAudioSkipBefore). Cleared by the first packet that
+        // reaches it, so it costs one comparison per packet afterwards.
+        if (this._splitAudioSkipBefore >= 0) {
+          if (pts < this._splitAudioSkipBefore) continue;
+          this._splitAudioSkipBefore = -1;
         }
         this.audioDecoder.decode(pkt.data, pts, pkt.keyframe);
         // Track the last PTS 0-based (content time) to match the pump's lead
