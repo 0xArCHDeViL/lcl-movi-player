@@ -5708,13 +5708,25 @@ export class MoviElement extends HTMLElement {
   }
 
   private async toggleFullscreen(): Promise<void> {
-    if (this.isLoading || this._isUnsupported || !this.player) {
+    // LEAVING fullscreen is always allowed. Every guard below is about whether
+    // there is anything worth going fullscreen FOR — none of them is a reason
+    // to hold someone in it. Gating the whole toggle meant an error arriving
+    // mid-fullscreen made the exit control do nothing at all: enabled, clicked,
+    // and silently swallowed here, with no Escape key on touch.
+    const currentlyActive = this.isFullscreenActive();
+
+    if (
+      !currentlyActive &&
+      (this.isLoading || this._isUnsupported || !this.player)
+    ) {
       return;
     }
     // Audio-only sources (bare strip OR cover-art view) have nothing to show
     // fullscreen. Block it at this single chokepoint so double-click, the F
-    // key, and the button are all covered, in both audio layouts.
-    if (this.classList.contains("movi-audio-mode")) {
+    // key, and the button are all covered, in both audio layouts. (Entering
+    // only — a source that turns out to be audio while already fullscreen must
+    // still be escapable.)
+    if (!currentlyActive && this.classList.contains("movi-audio-mode")) {
       return;
     }
 
@@ -5722,7 +5734,6 @@ export class MoviElement extends HTMLElement {
     // requestFullscreen is blocked, or embedded apps that drive their own
     // fullscreen layout). Hosts call event.preventDefault() and then drive
     // setHostFullscreen() themselves to keep the UI in sync.
-    const currentlyActive = this.isFullscreenActive();
     const requestEvent = new CustomEvent("movi-fullscreen-request", {
       cancelable: true,
       bubbles: true,
