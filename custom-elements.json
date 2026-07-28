@@ -168,7 +168,7 @@
             },
             {
               "name": "themecolor",
-              "description": "Sets a custom primary color for the player UI (progress bar, buttons, accents)."
+              "description": "Sets the player's accent colors — one or two, separated by a space."
             },
             {
               "name": "buffersize",
@@ -181,6 +181,10 @@
             {
               "name": "showtitle",
               "description": "Shows the title bar overlay at the top of the player."
+            },
+            {
+              "name": "titlemode",
+              "description": "Decides where the title bar is allowed to appear, and whether it carries a back arrow. Space- or comma-separated tokens, in any order:"
             },
             {
               "name": "resume",

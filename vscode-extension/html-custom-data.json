@@ -566,7 +566,7 @@
           "name": "themecolor",
           "description": {
             "kind": "markdown",
-            "value": "Sets a custom primary color for the player UI (progress bar, buttons, accents)."
+            "value": "Sets the player's accent colors — one or two, separated by a space."
           },
           "references": [
             {
@@ -611,6 +611,19 @@
             {
               "name": "Documentation",
               "url": "https://moviplayer.com/docs/api/element#showtitle"
+            }
+          ]
+        },
+        {
+          "name": "titlemode",
+          "description": {
+            "kind": "markdown",
+            "value": "Decides where the title bar is allowed to appear, and whether it carries a back arrow. Space- or comma-separated tokens, in any order:"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#titlemode"
             }
           ]
         },

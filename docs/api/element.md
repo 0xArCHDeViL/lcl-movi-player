@@ -329,6 +329,40 @@ Auto-hides with the controls.
 
 ---
 
+#### `titlemode`
+
+Decides where the title bar is allowed to appear, and whether it carries a back arrow. Space- or comma-separated tokens, in any order:
+
+| Token | Effect |
+| --- | --- |
+| `both` | Title bar everywhere (default — you rarely need to write it) |
+| `fullscreen` | Only while fullscreen |
+| `windowed` | Only while **not** fullscreen (aliases: `inline`, `normal`) |
+| `back` | Add a back arrow left of the title |
+| `back-mobile` | Same arrow, only on phones — touch devices, or containers under 480px wide |
+| `back-fullscreen` | Arrow only while fullscreen (combine: `back-mobile-fullscreen`) |
+
+```html
+<!-- title only once the viewer goes fullscreen -->
+<movi-player src="video.mp4" title="Intro" showtitle titlemode="fullscreen"></movi-player>
+
+<!-- inline title with a back arrow, hidden in fullscreen -->
+<movi-player src="video.mp4" title="Intro" showtitle titlemode="windowed back"></movi-player>
+```
+
+The back arrow fires a cancelable `back` event and does nothing else — an embedded player shouldn't navigate its host's page, so what "back" means is yours to decide:
+
+```js
+player.addEventListener('back', () => history.back());
+player.addEventListener('back', () => player.exitFullscreen()); // or leave fullscreen
+```
+
+The arrow's scope is independent of where the bar shows, so `titlemode="back-mobile-fullscreen"` keeps the title everywhere and puts the arrow up only when a phone goes fullscreen.
+
+The placement token only hides the bar. The title still resolves from metadata, `titlechange` still fires, and `resume` keys still work in the mode where the bar isn't shown.
+
+---
+
 ### Advanced Attributes
 
 #### `renderer`
@@ -1658,6 +1692,16 @@ myHostShellOnExit(() => player.setHostFullscreen(false));
 ```
 
 **Use Case:** VS Code webviews (where `requestFullscreen` is blocked by Permissions-Policy), embedded app shells, or any host that wants to drive fullscreen with its own chrome instead of the browser's.
+
+---
+
+#### `exitFullscreen(): void`
+
+Leaves fullscreen by whichever route the player entered it — native, host-driven (`setHostFullscreen`), or the iOS pseudo-fullscreen fallback. `document.exitFullscreen()` only covers the first of those. No-op when the player isn't fullscreen.
+
+```typescript
+player.addEventListener("back", () => player.exitFullscreen());
+```
 
 ---
 

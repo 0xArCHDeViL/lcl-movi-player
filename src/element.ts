@@ -177,6 +177,10 @@ export interface MoviPlayerAttributes {
   renderer?: "canvas";
   /** Show the title-bar overlay at the top of the player. */
   showtitle?: boolean | "";
+  /** Where the title bar may show, plus an optional back arrow. Tokens:
+   *  `both` (default) / `fullscreen` / `windowed`, and `back` — scoped with
+   *  `back-mobile`, `back-fullscreen` or `back-mobile-fullscreen`. */
+  titlemode?: string;
   /** Enable ±10s fast-seek controls. */
   fastseek?: boolean | "";
   /** Enable the double-tap-to-seek gesture. */

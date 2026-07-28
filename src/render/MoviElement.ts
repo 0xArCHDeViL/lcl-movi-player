@@ -392,6 +392,14 @@ export class MoviElement extends HTMLElement {
   private _bufferSize: number = 0; // Custom buffer size in seconds
   private _title: string | null = null; // Video title to display
   private _showTitle: boolean = false; // Show title at top if true
+  /** Where the title bar is allowed to appear — see `applyTitleMode`. */
+  private _titleMode: "both" | "fullscreen" | "windowed" = "both";
+  /** Whether the title bar carries a back arrow (`titlemode` "back" token). */
+  private _titleBack: boolean = false;
+  /** Back arrow restricted to phones (`titlemode` "back-mobile" token). */
+  private _titleBackMobileOnly: boolean = false;
+  /** Back arrow restricted to fullscreen (`titlemode` "back-fullscreen"). */
+  private _titleBackFullscreenOnly: boolean = false;
   private _resume: boolean = false; // Resume playback from last position (opt-in)
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
   // Audio output device routing (AudioContext.setSinkId). _audioOutputDeviceId
@@ -629,6 +637,7 @@ export class MoviElement extends HTMLElement {
       "buffersize",
       "title",
       "showtitle",
+      "titlemode",
       "resume",
       "stablevolume",
       "encrypted",
@@ -1535,7 +1544,16 @@ export class MoviElement extends HTMLElement {
     const titleBar = document.createElement("div");
     titleBar.className = "movi-title-bar";
     titleBar.style.display = "none";
-    titleBar.innerHTML = `<span class="movi-title-text"></span>`;
+    // The back arrow is always in the DOM and hidden by default — the bar is
+    // rebuilt on nothing, so toggling a class beats re-writing markup whenever
+    // `titlemode` changes.
+    titleBar.innerHTML = `<button class="movi-title-back" type="button" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12H3"/><path d="M10 19l-7-7 7-7"/></svg></button><span class="movi-title-text"></span>`;
+    (
+      titleBar.querySelector(".movi-title-back") as HTMLButtonElement
+    ).addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.handleBackClick();
+    });
     shadowRoot.appendChild(titleBar);
 
     // Gear button (top-right) → opens the context menu. This is how touch users
@@ -6347,6 +6365,10 @@ export class MoviElement extends HTMLElement {
   private applyFullscreenUiState(isFullscreen: boolean): void {
     this.updateFullscreenIcon(isFullscreen);
     this.updateFullscreenContextMenu(isFullscreen);
+    // Every fullscreen route lands here — native, host-driven and the iOS
+    // pseudo fallback — so this is the one place a fullscreen-scoped
+    // `titlemode` needs to re-evaluate.
+    this.updateTitle();
   }
 
   /**
@@ -6358,6 +6380,16 @@ export class MoviElement extends HTMLElement {
   public setHostFullscreen(active: boolean): void {
     this._hostFullscreen = active;
     this.applyFullscreenUiState(active);
+  }
+
+  /**
+   * Leave fullscreen by whichever route the player entered it — native,
+   * host-driven or the iOS pseudo fallback. `document.exitFullscreen()` only
+   * covers the first of those, so a host with its own back/close affordance
+   * needs this. No-op when the player isn't fullscreen.
+   */
+  public exitFullscreen(): void {
+    if (this.isFullscreenActive()) void this.toggleFullscreen();
   }
 
   private static readonly ASPECT_ICONS: Record<string, string> = {
@@ -10894,6 +10926,15 @@ export class MoviElement extends HTMLElement {
            dimensions from its parent. */
         contain: layout style paint;
 
+        /* Title bar metrics. Shared because the gear is NOT a child of the
+           title bar — it is absolutely positioned against the host — so the
+           only way it can sit on the title's line is to be centred with the
+           same numbers the title uses. Hardcoding them twice drifts: the gear
+           rode 8px high as soon as the title font grew. */
+        --movi-title-font: clamp(16px, 4vw, 20px);
+        --movi-title-line: calc(var(--movi-title-font) * 1.4);
+        --movi-title-pad-top: 16px;
+
         /* Premium Color Palette */
         --movi-primary: #8B5CF6;
         /* Derived so themecolor attribute cascades to light/dark variants */
@@ -11441,7 +11482,7 @@ export class MoviElement extends HTMLElement {
         right: 0;
         /* Extra right padding keeps the title text from running under the
            settings gear pinned in the top-right corner. */
-        padding: 16px 62px 16px 20px;
+        padding: var(--movi-title-pad-top) 62px var(--movi-title-pad-top) 20px;
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
         z-index: 5;
         opacity: 0;
@@ -11455,17 +11496,112 @@ export class MoviElement extends HTMLElement {
         transform: translateY(0);
       }
 
+      /* Back arrow — opt-in via the "back" token on titlemode. Laid out as a
+         toolbar row with the title rather than pinned to the corner: the arrow
+         and the name it belongs to read as one unit, the way a phone player's
+         top bar does. Only takes clicks while the bar is actually up (the bar
+         itself is pointer-events: none). */
+      .movi-title-bar.movi-title-with-back {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding-left: 10px;
+      }
+      .movi-title-bar.movi-title-with-back .movi-title-text {
+        /* min-width lets a flex item shrink below its content — without it the
+           long-filename ellipsis never kicks in and the title pushes the gear. */
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .movi-title-back {
+        display: none;
+        flex: 0 0 auto;
+        width: 40px;
+        height: 40px;
+        /* The hit area is finger-sized, but it must not set the row height —
+           a 40px button in a shorter text row pushes the whole bar down, and
+           the gear (positioned against the bar's own padding) then no longer
+           lines up. Bleed the difference out symmetrically so the arrow's
+           outer box is exactly one title line tall, whatever that line is. */
+        margin: calc((var(--movi-title-line) - 40px) / 2) 0;
+        padding: 8px;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        cursor: pointer;
+        color: var(--movi-controls-color);
+        background: transparent;
+        border-radius: 50%;
+        transition: background var(--movi-transition-fast), transform var(--movi-transition-fast);
+        pointer-events: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .movi-title-back:active {
+        transform: scale(0.88);
+      }
+      .movi-title-bar.movi-title-with-back .movi-title-back {
+        display: flex;
+      }
+      .movi-title-bar.movi-title-with-back.movi-title-visible .movi-title-back {
+        pointer-events: auto;
+      }
+      .movi-title-back:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
+      .movi-title-back svg {
+        width: 26px;
+        height: 26px;
+        /* Same shadow the title text carries — over a bright frame the top
+           gradient alone doesn't hold a thin white stroke. */
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
+      }
+
+      /* "back-mobile": off by default, back on for touch input — the real
+         "this is a phone" signal — plus genuinely phone-width containers.
+         480px, not the 720px the rest of the compact layout uses: a 640px
+         player on a desktop is a small player, not a mobile one, and it
+         should not sprout a back arrow. Same specificity as the rules above,
+         so source order does the overriding. */
+      .movi-title-bar.movi-title-back-mobile .movi-title-back {
+        display: none;
+      }
+      .movi-title-bar.movi-title-back-mobile {
+        padding-left: 20px;
+      }
+      @media (hover: none) and (pointer: coarse) {
+        .movi-title-bar.movi-title-back-mobile .movi-title-back {
+          display: flex;
+        }
+        .movi-title-bar.movi-title-back-mobile {
+          padding-left: 10px;
+        }
+      }
+      @container movi-host (max-width: 480px) {
+        .movi-title-bar.movi-title-back-mobile .movi-title-back {
+          display: flex;
+        }
+        .movi-title-bar.movi-title-back-mobile {
+          padding-left: 10px;
+        }
+      }
+
       /* Settings gear (top-right) — opens the context menu. Vertically centred
          on the title text (title padding-top 16px + ~half the ~20px line) and
          inset to match; the title bar reserves right padding so the title
          doesn't run under it. */
       .movi-gear-btn {
         position: absolute;
-        top: 9px;
+        /* Centred on the title's first line rather than a fixed inset — see
+           the --movi-title-* vars on :host. Anchored by its own midpoint via
+           translateY(-50%) rather than by subtracting its height: this element
+           also matches .movi-btn and picks up its box from the responsive
+           layout rules, so any height arithmetic here goes stale the moment
+           those change. The slide-in offset rides on the same transform. */
+        top: calc(var(--movi-title-pad-top) + var(--movi-title-line) / 2);
         right: 14px;
         z-index: 30;
-        width: 38px;
-        height: 38px;
+        width: var(--movi-btn-size);
+        height: var(--movi-btn-size);
         padding: 8px;
         display: flex;
         align-items: center;
@@ -11477,14 +11613,14 @@ export class MoviElement extends HTMLElement {
         border-radius: 50%;
         opacity: 0;
         visibility: hidden;
-        transform: translateY(-4px);
+        transform: translateY(calc(-50% - 4px));
         transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease;
         pointer-events: none;
       }
       .movi-gear-btn.movi-gear-visible {
         opacity: 1;
         visibility: visible;
-        transform: translateY(0);
+        transform: translateY(-50%);
         pointer-events: auto;
       }
       /* Hide the gear while a bottom dropdown OR the storyboard timeline is
@@ -11540,7 +11676,7 @@ export class MoviElement extends HTMLElement {
 
       .movi-title-text {
         color: var(--movi-controls-color);
-        font-size: clamp(16px, 4vw, 20px);
+        font-size: var(--movi-title-font);
         font-weight: 500;
         display: block;
         text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
@@ -14465,12 +14601,21 @@ export class MoviElement extends HTMLElement {
           transition: none !important;
         }
 
+        /* The gear is excluded from the transform reset in both this block
+           and the small-container one: it is a .movi-btn, but unlike the bar
+           icons its transform is not decoration — it is what centres it on the
+           title line. Wiping it dropped the gear half its own height below the
+           title. */
         .movi-btn:hover,
         .movi-btn:focus,
         .movi-btn:active {
           background: transparent !important;
-          transform: none !important;
           box-shadow: none !important;
+        }
+        .movi-btn:not(.movi-gear-btn):hover,
+        .movi-btn:not(.movi-gear-btn):focus,
+        .movi-btn:not(.movi-gear-btn):active {
+          transform: none !important;
         }
 
         /* Ensure volume slider container interactions didn't rely on hover */
@@ -15922,6 +16067,10 @@ export class MoviElement extends HTMLElement {
          text — nudge it up so their icon/text vertical centres line up. */
       :host(.movi-audio-strip) .movi-gear-btn {
         top: 1px !important;
+        /* Strip mode positions the gear from the top edge, not from a title
+           line, so the midpoint anchoring the normal layout uses would push it
+           half its height off the strip. */
+        transform: translateY(0) !important;
       }
       /* Push the control row below the title band — only when titled. */
       :host(.movi-audio-strip.movi-has-title) .movi-controls-container,
@@ -17004,6 +17153,9 @@ export class MoviElement extends HTMLElement {
       case "showtitle":
         this._showTitle = newValue !== null;
         this.updateTitle();
+        break;
+      case "titlemode":
+        this.applyTitleMode(newValue);
         break;
       case "resume":
         this._resume = newValue !== null;
@@ -23721,6 +23873,91 @@ export class MoviElement extends HTMLElement {
     this.updateTitle();
   }
 
+  /**
+   * `titlemode` decides WHERE the title bar is allowed to show, and whether it
+   * carries a back arrow. It is a token list so one attribute covers both —
+   * order doesn't matter, and tokens may be separated by spaces or commas:
+   *
+   *   titlemode="fullscreen"        only while fullscreen
+   *   titlemode="windowed"          only while NOT fullscreen (aliases: inline, normal)
+   *   titlemode="both"              everywhere (default, so you rarely write it)
+   *   titlemode="fullscreen back"   fullscreen only, with a back arrow
+   *   titlemode="back"              everywhere, with a back arrow
+   *
+   * The placement token gates the bar rather than the title itself: the
+   * auto-loaded title, `titlechange` and the resume key all keep working in
+   * the mode where the bar is hidden.
+   *
+   * `back` renders an arrow left of the title that fires a cancelable `back`
+   * event. Nothing else happens by default — an embedded player has no
+   * business navigating its host's page, so the host decides what "back"
+   * means. Calling `preventDefault()` is not required; it exists so a host can
+   * mark the event handled for its own delegation.
+   *
+   * The arrow carries its own scope, independent of where the bar shows, so
+   * "title everywhere but an arrow only when a phone goes fullscreen" is one
+   * attribute. Suffix it with any combination of `mobile` and `fullscreen`:
+   *
+   *   titlemode="back-mobile"              arrow on phones
+   *   titlemode="back-fullscreen"          arrow only while fullscreen
+   *   titlemode="back-mobile-fullscreen"   arrow only when a phone is fullscreen
+   *
+   * `mobile` means touch input or a phone-width container, and is decided in
+   * CSS so a desktop window narrowed to phone width counts. `fullscreen` is
+   * decided here, since the pseudo and host-driven fullscreen routes aren't
+   * visible to a media query.
+   */
+  private applyTitleMode(raw: string | null): void {
+    const tokens = (raw ?? "")
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(Boolean);
+    // Anything of the shape back[-mobile][-fullscreen], in any order, with
+    // ":" accepted in place of "-" — both read naturally as a scope.
+    const backToken = tokens.find((t) => /^back([-:](mobile|fullscreen|fs))*$/.test(t));
+    this._titleBack = !!backToken;
+    this._titleBackMobileOnly = !!backToken?.includes("mobile");
+    this._titleBackFullscreenOnly = !!(
+      backToken &&
+      (backToken.includes("fullscreen") || /[-:]fs$/.test(backToken))
+    );
+    if (tokens.includes("fullscreen") || tokens.includes("fs")) {
+      this._titleMode = "fullscreen";
+    } else if (
+      tokens.includes("windowed") ||
+      tokens.includes("inline") ||
+      tokens.includes("normal")
+    ) {
+      this._titleMode = "windowed";
+    } else {
+      this._titleMode = "both";
+    }
+    this.updateTitle();
+  }
+
+  /** Title bar placement + back arrow. Reads back the raw attribute. */
+  get titleMode(): string | null {
+    return this.getAttribute("titlemode");
+  }
+  set titleMode(value: string | null) {
+    if (value == null) this.removeAttribute("titlemode");
+    else this.setAttribute("titlemode", value);
+  }
+
+  /** Whether the title bar may show in the CURRENT fullscreen state. */
+  private titleAllowedHere(): boolean {
+    if (this._titleMode === "both") return true;
+    return this._titleMode === "fullscreen"
+      ? this.isFullscreenActive()
+      : !this.isFullscreenActive();
+  }
+
+  private handleBackClick(): void {
+    this.dispatchEvent(
+      new CustomEvent("back", { cancelable: true, bubbles: true, composed: true }),
+    );
+  }
+
   private updateTitle() {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
@@ -23841,7 +24078,21 @@ export class MoviElement extends HTMLElement {
       }
     }
 
-    if (this._showTitle && this._title) {
+    // Placement gate is applied here, after the auto-load block above: a mode
+    // that hides the bar must still resolve the title, since `titlechange`
+    // and the resume key both depend on it.
+    // The fullscreen half of the arrow's scope is decided here rather than in
+    // CSS — :fullscreen wouldn't catch the iOS pseudo or host-driven routes.
+    const backHere =
+      this._titleBack &&
+      (!this._titleBackFullscreenOnly || this.isFullscreenActive());
+    titleBar.classList.toggle("movi-title-with-back", backHere);
+    titleBar.classList.toggle(
+      "movi-title-back-mobile",
+      backHere && this._titleBackMobileOnly,
+    );
+
+    if (this._showTitle && this._title && this.titleAllowedHere()) {
       // Detect "title just appeared" — either the text content changed,
       // or the bar was previously hidden. Covers both explicit-attribute
       // and auto-load paths: in autoplay+muted with no user interaction
@@ -23852,7 +24103,9 @@ export class MoviElement extends HTMLElement {
         titleText.textContent !== this._title ||
         titleBar.style.display === "none";
       titleText.textContent = this._title;
-      titleBar.style.display = "block";
+      // Inline display beats the stylesheet, so the arrow layout has to be
+      // chosen here too — a class rule setting flex would never win against it.
+      titleBar.style.display = backHere ? "flex" : "block";
 
       // Surface the bottom bar alongside the title only after playback
       // has actually started — otherwise the YouTube-style first paint
@@ -23876,7 +24129,10 @@ export class MoviElement extends HTMLElement {
     // Strip mode reads this to grow into a 2-row layout (title band + control
     // row) only when a title is actually present — keeps the untitled audio
     // strip at its thin 56px height.
-    this.classList.toggle("movi-has-title", !!(this._showTitle && this._title));
+    this.classList.toggle(
+      "movi-has-title",
+      !!(this._showTitle && this._title && this.titleAllowedHere()),
+    );
   }
 
   /**

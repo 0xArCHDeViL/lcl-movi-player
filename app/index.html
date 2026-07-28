@@ -3842,6 +3842,7 @@
                 thumb
                 fastseek
                 showtitle
+                titlemode="back-mobile-fullscreen"
                 ambientmode
                 ambientwrapper="player-ambient"
                 resume
@@ -5664,6 +5665,11 @@
       player.addEventListener("playing", () => setPlayingClass(true));
       player.addEventListener("pause", () => setPlayingClass(false));
       player.addEventListener("ended", () => setPlayingClass(false));
+
+      // The title-bar back arrow only exists on a phone in fullscreen, so
+      // "back" there means the one thing the viewer can't otherwise reach
+      // without hunting for the toolbar: get out of fullscreen.
+      player.addEventListener("back", () => player.exitFullscreen());
 
       player.addEventListener("ended", () => {
         // Mark watched on completion
