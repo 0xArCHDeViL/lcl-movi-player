@@ -6218,6 +6218,29 @@ export class MoviElement extends HTMLElement {
   private _pseudoFullscreen = false;
   private _prevBodyOverflow = "";
 
+  /** Touch-first device — no hover to fall back on, so affordances that a
+   *  mouse can do without (the centre play button while the chrome is up) have
+   *  to be on screen. Read live: a 2-in-1 can switch input mid-session. */
+  private _touchLikeMql: MediaQueryList | null = null;
+  private isTouchLike(): boolean {
+    // The list object is kept because this is read from the 250ms UI tick —
+    // re-parsing the query string on every tick is pointless, but the live
+    // object still reports the current answer.
+    if (!this._touchLikeMql && typeof window !== "undefined") {
+      this._touchLikeMql =
+        window.matchMedia?.("(hover: none) and (pointer: coarse)") ?? null;
+    }
+    return this._touchLikeMql?.matches === true;
+  }
+
+  /** Whether the control bar is currently up. */
+  private areControlsVisible(): boolean {
+    return (
+      this.controlsContainer?.classList.contains("movi-controls-visible") ===
+      true
+    );
+  }
+
   /** True when the player is fullscreen by any route: native element FS, a
    *  host-driven FS, or the iOS pseudo-fullscreen fallback. */
   private isFullscreenActive(): boolean {
@@ -9540,7 +9563,10 @@ export class MoviElement extends HTMLElement {
       !this._autoplayStarting
     ) {
       const state = this.player?.getState();
-      if (!this._hasEverPlayed || state === "ended") {
+      // On touch the centre button IS the play control while the chrome is up
+      // — a tap on the picture only toggles the chrome there. See
+      // updatePlayPauseIcon, which has to agree with this or the two fight.
+      if (!this._hasEverPlayed || state === "ended" || this.isTouchLike()) {
         centerPlayPause.classList.add("movi-center-visible");
       }
     }
@@ -10364,8 +10390,10 @@ export class MoviElement extends HTMLElement {
    * then let it fade. It shows the action just taken (pause glyph when you
    * paused), NOT the resulting state — the bar's icon covers state.
    *
-   * This is the only thing that puts the centre button on screen mid-playback:
-   * it never rides in with the chrome, and it never stays.
+   * On a mouse this is the only thing that puts the centre button on screen
+   * mid-playback: it never rides in with the chrome, and it never stays. On
+   * touch the button IS a control while the chrome is up, so there it presses
+   * in and springs back instead of flashing — see the early return below.
    *
    * Driven by the Web Animations API rather than a CSS class, because a class
    * cannot survive this element: the 250ms UI tick, showControls and
@@ -10382,6 +10410,24 @@ export class MoviElement extends HTMLElement {
       ".movi-center-play-pause",
     ) as HTMLElement | null;
     if (!btn) return;
+
+    // When the button is already on screen as a control — touch with the chrome
+    // up, the poster, the replay state — the flash is the wrong animation
+    // entirely: it fades the button out and the class immediately puts it back,
+    // which reads as a stutter. There the glyph is state, not a receipt, so
+    // leave it to updatePlayPauseIcon and just acknowledge the press.
+    if (btn.classList.contains("movi-center-visible")) {
+      this._centerFlashAnim?.cancel();
+      btn.animate(
+        [
+          { transform: "translate(-50%, -50%) scale(0.86)" },
+          { transform: "translate(-50%, -50%) scale(1)" },
+        ],
+        { duration: 220, easing: "cubic-bezier(0.2, 0.9, 0.3, 1)", fill: "none" },
+      );
+      return;
+    }
+
     const playIcon = btn.querySelector(
       ".movi-center-icon-play",
     ) as HTMLElement | null;
@@ -10401,17 +10447,23 @@ export class MoviElement extends HTMLElement {
 
     // Full opacity on the first frame, then one ease-out to bigger-and-gone.
     // visibility rides along because the button's resting state is hidden.
+    //
+    // Scale is tuned against the button's 96px resting size: it starts a
+    // touch under it and ends a touch over (roughly 79px → 104px). Ending
+    // well past that (the old 1.22) read as a second, oversized button;
+    // staying entirely under it read as a shrunken one. Landing either side
+    // of the resting size keeps it recognisably the same disc, popping.
     const anim = btn.animate(
       [
         {
           visibility: "visible",
           opacity: 1,
-          transform: "translate(-50%, -50%) scale(0.88)",
+          transform: "translate(-50%, -50%) scale(0.82)",
         },
         {
           visibility: "visible",
           opacity: 0,
-          transform: "translate(-50%, -50%) scale(1.22)",
+          transform: "translate(-50%, -50%) scale(1.08)",
         },
       ],
       {
@@ -14026,11 +14078,17 @@ export class MoviElement extends HTMLElement {
         }
 
         /* Keyframe animations off on small/compact layouts for perf, but keep
-           CSS transitions so the controls + centre button still move smoothly
-           here too (the PiP / mini player is a small container). */
+           CSS transitions so the controls still move smoothly here too (the
+           PiP / mini player is a small container).
+
+           The centre button is deliberately NOT in this list. It needs a
+           transform to be centred at all, so it used to be pinned back with
+           an important declaration right below — and important outranks a
+           script animation, which meant the press/flash animation on it was
+           silently reduced to an opacity change on exactly the devices that
+           run this block. That is the stutter: no scale, just a jump. */
         .movi-controls-overlay,
-        .movi-center-play-pause,
-        .movi-btn,
+        .movi-btn:not(.movi-gear-btn),
         .movi-progress-handle {
           animation: none !important;
           transform: none !important;
@@ -14057,19 +14115,22 @@ export class MoviElement extends HTMLElement {
            transform: none !important;
         }
         
-        /* Restore explicit transforms that are structural, not animated.
-           Sized to a finger-friendly tap target on phones (was 68×68 +
+        /* Sized to a finger-friendly tap target on phones (was 68×68 +
            32×32 svg, which read as undersized next to the bottom bar);
-           96×96 + 50×50 keeps parity with the desktop default. */
+           96×96 + 50×50 keeps parity with the desktop default.
+
+           No !important on the transforms: they only need to beat the base
+           stylesheet, which they already do by cascade order, and marking
+           them important would put them above the press/flash animation. */
         .movi-center-play-pause {
            /* Center button needs transform for centering */
-           transform: translate(-50%, -50%) scale(0.7) !important;
+           transform: translate(-50%, -50%) scale(0.7);
            width: 96px !important;
            height: 96px !important;
            border-width: 1.5px !important;
         }
         .movi-center-play-pause.movi-center-visible {
-           transform: translate(-50%, -50%) scale(1) !important;
+           transform: translate(-50%, -50%) scale(1);
         }
         .movi-center-play-pause svg {
            width: 50px !important;
@@ -14589,10 +14650,33 @@ export class MoviElement extends HTMLElement {
            filter: none !important;
         }
 
-        /* Center button: Keep structural transform but remove transition */
-        .movi-center-play-pause {
-           transform: translate(-50%, -50%) !important;
-           transition: none !important;
+        /* Center button: keep the structural transform, and keep a short
+           opacity fade.
+
+           NOT !important on the transform — this block applies to every touch
+           device, and an important transform outranks a script animation, so
+           the press/flash on the centre button was being flattened to a bare
+           opacity change here. That is what "the animation stutters on touch"
+           was: the scale simply never ran.
+
+           The fade matters for the same reason: on touch this button appears
+           and disappears with the chrome, and pressing play can hide it while
+           the press animation is still running. With transitions off that was
+           a hard cut mid-animation. Opacity is cheap enough on phones — the
+           expensive keyframe/slide animations stay off.
+
+           :host is here for specificity only. The base rule further down the
+           sheet also matches .movi-center-play-pause, and it parks the hidden
+           state at scale(0.8) — so the button fell from 1 to 0.8 in a single
+           frame the moment it was hidden, which a transition can't smooth
+           because it happens as the press animation ends. On touch, hiding is
+           a fade and nothing else. */
+        :host .movi-center-play-pause {
+           transform: translate(-50%, -50%);
+           transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0.18s !important;
+        }
+        .movi-center-play-pause.movi-center-visible {
+           transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0s !important;
         }
 
         /* Override button states to prevent white background flash */
@@ -14735,8 +14819,15 @@ export class MoviElement extends HTMLElement {
          which loses to !important) would simply be ignored there. The two-class
          selector out-specifies it. pointer-events stays off: it's feedback, not
          a target, and it must never eat a click meant for the video. */
-      .movi-center-play-pause.movi-center-visible:hover {
-        transform: translate(-50%, -50%) scale(1.08);
+      /* Hover grow is gated on a real hovering pointer. A tap leaves :hover
+         stuck on the element until the next tap somewhere else, so on touch
+         this rule was firing the moment the press animation finished — the
+         button settled to scale 1 and then snapped to 1.08 and stayed there.
+         That snap is what read as the jitter. */
+      @media (hover: hover) {
+        .movi-center-play-pause.movi-center-visible:hover {
+          transform: translate(-50%, -50%) scale(1.08);
+        }
       }
 
       .movi-center-play-pause:active {
@@ -20101,11 +20192,17 @@ export class MoviElement extends HTMLElement {
       // tick would revert the click handler's optimistic flip). With intent,
       // it reconciles to pause and rides the same fade-out logic below.
       //
-      // Playing: the centre button is gone, full stop. It used to surface as a
-      // pause icon to confirm the click and then fade out with the bar, which
-      // meant pressing play left a big icon sitting over the video for as long
-      // as the chrome was up — and hovering brought it back. The bar's own
-      // play/pause icon already flips on the click; that is the confirmation.
+      // Playing: on a mouse the centre button is gone, full stop. It used to
+      // surface as a pause icon to confirm the click and then fade out with
+      // the bar, which meant pressing play left a big icon sitting over the
+      // video for as long as the chrome was up — and hovering brought it back.
+      // The bar's own play/pause icon already flips on the click; that is the
+      // confirmation, and clicking the picture toggles playback anyway.
+      //
+      // Touch has neither of those outs: a tap on the picture is chrome-only
+      // (native behaviour), so without the centre button the only way to pause
+      // is the small bar icon. So on touch it rides with the chrome, the way it
+      // does in every phone player.
       if (centerPlayPauseBtn) {
         // A flash owns the glyph while it runs — it shows the ACTION taken
         // (the pause bars when you paused), which is the opposite of what the
@@ -20114,7 +20211,10 @@ export class MoviElement extends HTMLElement {
           centerPlayIcon?.style.setProperty("display", "none");
           centerPauseIcon?.style.setProperty("display", "block");
         }
-        centerPlayPauseBtn.classList.remove("movi-center-visible");
+        centerPlayPauseBtn.classList.toggle(
+          "movi-center-visible",
+          this._controls && this.isTouchLike() && this.areControlsVisible(),
+        );
       }
     } else {
       // Centre icon only — bottom-bar + context-menu icons already set above.
@@ -20160,7 +20260,12 @@ export class MoviElement extends HTMLElement {
           // It earns the screen only where no bar control duplicates it:
           //   - before the first play, over the poster
           //   - at the end of playback, where it reads as replay
-          const standalone = !this._hasEverPlayed || currentState === "ended";
+          //   - on touch, whenever the chrome is up: a tap on the picture only
+          //     toggles the chrome there, so this is the play control
+          const standalone =
+            !this._hasEverPlayed ||
+            currentState === "ended" ||
+            (this.isTouchLike() && this.areControlsVisible());
           if (this._controls && standalone) {
             // Surface the icon synchronously. We only reach this branch when
             // the spinner is already hidden (isLoading false above) and the
