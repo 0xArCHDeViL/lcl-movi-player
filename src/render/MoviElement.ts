@@ -9555,8 +9555,13 @@ export class MoviElement extends HTMLElement {
     // The source gate keeps the bar pinned in the empty "No Video"
     // state — with nothing loaded there's nothing to interact with,
     // so hiding the controls would just look broken.
+    // Same reasoning for the error overlay: there is nothing playing to get out
+    // of the way of, and hiding the bar there is worse than useless — in
+    // fullscreen it takes the exit control with it and leaves the viewer
+    // staring at an error with no way out but the keyboard.
     if (
       this.hasMediaSource() &&
+      !this._isUnsupported &&
       !this.isOverControls &&
       !this.isDragging &&
       !this.isTouchDragging &&
@@ -18274,8 +18279,8 @@ export class MoviElement extends HTMLElement {
       // like a crash report. Say what they experienced and what to try.
       // No "pick another file" here either — on an embed there is nothing for
       // the viewer to pick. One sentence, which also breaks cleanly.
-      let message = "Something went wrong while loading this video.";
-      let title = "Can't Play This Video";
+      let message = "Something went wrong while loading this file.";
+      let title = "Can't Play This File";
 
       if (error instanceof Error) {
         // The raw message is DIAGNOSTIC text — byte offsets, timeouts, WASM
@@ -18295,9 +18300,9 @@ export class MoviElement extends HTMLElement {
           this.hasUnfetchableSrcScheme() ||
           /invalid url|failed to construct 'url'/i.test(raw)
         ) {
-          title = "Invalid Video Link";
+          title = "Invalid Link";
           message =
-            "This video link doesn't look right. Check the address and try again.";
+            "This link doesn't look right. Check the address and try again.";
         } else if (
           // A local file the browser will no longer read: the picked handle
           // went stale (page restored from bfcache, file moved/renamed, or the
@@ -18314,17 +18319,17 @@ export class MoviElement extends HTMLElement {
           raw.toLowerCase().includes("cors") ||
           raw.toLowerCase().includes("access-control-allow-origin")
         ) {
-          title = "Can't Load Video";
+          title = "Can't Load File";
           message =
-            "Couldn't load the video from where it's hosted. Check your connection, then try again.";
+            "Couldn't load it from where it's hosted. Check your connection, then try again.";
         } else if (raw.includes("fetch")) {
-          title = "Can't Load Video";
+          title = "Can't Load File";
           message =
-            "Couldn't load the video. Check your connection, then try again.";
+            "Couldn't load it. Check your connection, then try again.";
         } else if (raw.includes("does not support range requests")) {
-          title = "Can't Play Video";
+          title = "Can't Play This File";
           message =
-            "This video is hosted in a way this player can't stream from. Try a different source.";
+            "This is hosted in a way the player can't stream from. Try a different source.";
         } else if (
           /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(raw)
         ) {
@@ -18333,34 +18338,34 @@ export class MoviElement extends HTMLElement {
           // the broken-source overlay drives the fallback for this.
           title = "Playback Error";
           message =
-            "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
+            "This file was too heavy to open the usual way. Try software decoding — it handles files like this.";
         } else if (/timeout at \d+|read timeout|timed out/i.test(raw)) {
           // HttpSource gives up on a byte range as "Timeout at 0" — a file
           // offset, which means nothing to anyone but us. From the viewer's
           // side the server simply never sent the data.
-          title = "Video Won't Load";
+          title = "Taking Too Long";
           message =
-            "The video is taking too long to load. Check your connection, then try again.";
+            "This is taking too long to load. Check your connection, then try again.";
         } else if (/corrupt|unsupported format/i.test(raw)) {
           // The demuxer couldn't make sense of the bytes — a damaged file, or
           // something that isn't the video it claims to be.
           title = "Can't Play This File";
           message =
-            "This file isn't a video the player can read. It may be damaged, or in a format that isn't supported.";
+            "The player can't read this file. It may be damaged, or in a format that isn't supported.";
         } else if (/not found/i.test(raw)) {
-          title = "Video Not Found";
-          message = "This video is no longer available at that link.";
+          title = "Not Found";
+          message = "This is no longer available at that link.";
         } else if (raw.includes("decode")) {
           title = "Playback Error";
           message =
-            "This video couldn't be decoded. The file may use a format this browser can't play.";
+            "This couldn't be decoded. It may use a format this browser can't play.";
         } else if (/\(HTTP \d|was denied|could not be found|video server/i.test(raw)) {
           // The one case where the raw text IS the user-facing text: the stream
           // wrapper writes these as plain sentences ("the video server denied
           // the request (HTTP 403)"), so they carry the useful specifics.
           // "Initialization Failed" reads like a player bug — use a neutral
           // title and let that message speak.
-          title = "Can't Play Video";
+          title = "Can't Play This File";
           message = raw;
         }
       }
@@ -18935,7 +18940,7 @@ export class MoviElement extends HTMLElement {
       // the user to take a screenshot of the overlay.
       Logger.error(TAG, "Player error event", error);
 
-      let message = "Something went wrong while playing this video.";
+      let message = "Something went wrong during playback.";
       let title = "Playback Error";
 
       // Diagnostic text — matched against below, logged above, and handed to
@@ -18957,29 +18962,29 @@ export class MoviElement extends HTMLElement {
         // Bad/typo'd URL scheme fails at fetch() and surfaces here as a generic
         // network error — blame the URL, not the network. Checked first: a bad
         // scheme never gets far enough to produce an HTTP status code.
-        title = "Invalid Video Link";
+        title = "Invalid Link";
         message =
-          "This video link doesn't look right. Check the address and try again.";
+          "This link doesn't look right. Check the address and try again.";
       } else if (httpMatch) {
         // Status codes stay out of the sentence — the log has them. What the
         // viewer needs is which of the three situations this is: gone, not
         // allowed, or the server having a bad day.
         const code = httpMatch[1];
-        title = "Can't Play Video";
-        if (code === "404") message = "This video is no longer available.";
+        title = "Can't Play This File";
+        if (code === "404") message = "This is no longer available.";
         else if (code === "403" || code === "401")
-          message = "You don't have permission to view this video.";
+          message = "You don't have permission to open this.";
         else if (code.startsWith("5"))
-          message = "The video server isn't responding. Try again in a bit.";
-        else message = "Couldn't load the video. Check your connection, then try again.";
+          message = "The server isn't responding. Try again in a bit.";
+        else message = "Couldn't load it. Check your connection, then try again.";
       } else if (/file handle|FileSource read timeout|revoked/i.test(raw)) {
         title = "Can't Read This File";
         message =
           "The browser no longer has access to this file. Choose it again to keep watching.";
       } else if (/timeout at \d+|read timeout|timed out/i.test(raw)) {
-        title = "Video Won't Load";
+        title = "Taking Too Long";
         message =
-          "The video is taking too long to load. Check your connection, then try again.";
+          "This is taking too long to load. Check your connection, then try again.";
       } else if (raw.includes("Stream failed after")) {
         title = "Connection Lost";
         message = "The connection dropped while playing. Check your network, then try again.";
@@ -18987,13 +18992,13 @@ export class MoviElement extends HTMLElement {
         raw.toLowerCase().includes("cors") ||
         raw.includes("Failed to fetch video resource")
       ) {
-        title = "Can't Load Video";
+        title = "Can't Load File";
         message =
-          "Couldn't load the video. Check your connection, then try again.";
+          "Couldn't load it. Check your connection, then try again.";
       } else if (raw.includes("does not support range requests")) {
-        title = "Can't Play Video";
+        title = "Can't Play This File";
         message =
-          "This video is hosted in a way this player can't stream from. Try a different source.";
+          "This is hosted in a way the player can't stream from. Try a different source.";
       } else if (
         // WebAssembly OOM / OOB from the FFmpeg WASM runtime — surfaces
         // verbatim as "Out of bounds memory access (evaluating 'qe(...$e)')"
@@ -19005,7 +19010,7 @@ export class MoviElement extends HTMLElement {
       ) {
         title = "Playback Error";
         message =
-          "This video was too heavy to decode the usual way. Try software decoding — it handles files like this.";
+          "This was too heavy to decode the usual way. Try software decoding — it handles files like this.";
       }
 
       // If we got here after cycling every rendition (recovery exhausted), the
@@ -20808,6 +20813,12 @@ export class MoviElement extends HTMLElement {
     this.updateControlsState();
     this.updatePlayPauseIcon();
     this.updateQualityMenu(); // Update quality menu
+    // Surface the bar with the error. If the failure lands while the chrome is
+    // auto-hidden — which is the normal state during playback — the viewer gets
+    // an error over a bare surface with no visible way out, and in fullscreen
+    // that reads as being stuck. showControls() no longer arms the auto-hide in
+    // this state, so once up it stays up.
+    this.showControls();
   }
 
   /**
@@ -20991,6 +21002,19 @@ export class MoviElement extends HTMLElement {
 
     controlsToDisable.forEach((control) => {
       const el = control as HTMLElement;
+      // Fullscreen is the way OUT, so it can never be part of the dead chrome.
+      // Disabled while an error was on screen in fullscreen, the viewer was
+      // sealed in: the overlay covers the video, the bar is inert behind it,
+      // and the only escape left is a keyboard the page may not have (touch).
+      // It stays live in the error state, and in the initial one too — there is
+      // no reason to trap someone who entered fullscreen before a source
+      // resolved.
+      if (el.classList.contains("movi-fullscreen-btn")) {
+        el.style.opacity = "1";
+        el.style.pointerEvents = "auto";
+        if (el.tagName === "BUTTON") (el as HTMLButtonElement).disabled = false;
+        return;
+      }
       if (isUnsupported || isInitial) {
         // Completely hide center play button in error state
         if (el.classList.contains("movi-center-play-pause")) {
