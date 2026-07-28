@@ -564,13 +564,19 @@ Enables/disables double-tap to seek gesture.
 
 #### `themecolor`
 
-Sets a custom primary color for the player UI (progress bar, buttons, accents).
+Sets the player's accent colors — one or two, separated by a space.
 
 ```html
+<!-- primary only: progress bar, buttons, accents -->
 <movi-player src="video.mp4" themecolor="#ff5722"></movi-player>
+
+<!-- primary + secondary: secondary tints the centre play/pause flash -->
+<movi-player src="video.mp4" themecolor="#ff5722 #000000"></movi-player>
 ```
 
-**Value:** Any valid CSS color (hex, rgb, color name).
+**Value:** One or two valid CSS colors (hex, rgb, color name, `color-mix(...)`). Splitting is paren-aware, so `rgb(255 87 34) #000` is two colors, not four.
+
+Without a secondary, everything uses the primary — same as before.
 
 **Use Case:** Match player theme to your brand colors.
 
@@ -1220,8 +1226,12 @@ player.doubletap = false; // Disable double-tap seek
 Gets/sets custom theme color for the player UI.
 
 ```typescript
-player.themecolor = "#ff5722"; // Set custom color
+player.themecolor = "#ff5722"; // Primary only
+player.themecolor = "#ff5722 #000000"; // Primary + secondary
 player.themecolor = null; // Reset to default
+
+// `themeColor` additionally accepts the pair as an object
+player.themeColor = { primary: "#ff5722", secondary: "#000000" };
 ```
 
 ---

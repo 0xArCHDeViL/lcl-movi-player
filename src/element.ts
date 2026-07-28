@@ -138,6 +138,8 @@ export interface MoviPlayerAttributes {
   volume?: number | string;
   playbackrate?: number | string;
   theme?: "dark" | "light";
+  /** One or two CSS colours, space-separated: primary, then optional
+   *  secondary (`"#8B5CF6 #22D3EE"`). */
   themecolor?: string;
   title?: string;
   headers?: string;

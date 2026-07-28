@@ -10408,19 +10408,15 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
-   * `themecolor` takes either form:
+   * `themecolor` is one or two colours, separated by whitespace:
    *
-   *   themecolor="#8B5CF6"
-   *   themecolor='{"primary":"#8B5CF6","secondary":"#22D3EE"}'
+   *   themecolor="#8B5CF6"             primary only
+   *   themecolor="#8B5CF6 #22D3EE"     primary secondary
    *
-   * A bare value is the primary colour, exactly as before. The object form
-   * exists because an attribute can only ever be a string — a host that wants
-   * both colours would otherwise need a second attribute for what is really one
-   * decision. The `themeColor` property accepts the object directly and does
-   * the stringifying for you.
-   *
-   * Anything unparseable clears both rather than half-applying: a typo'd JSON
-   * blob shouldn't leave the player wearing one colour of a pair.
+   * Splitting is paren-aware, so a functional colour keeps its inner spaces:
+   * `rgb(255 0 51) #22D3EE` is two colours, not four tokens. Anything that
+   * isn't exactly two values is taken whole as the primary — one odd-spaced
+   * colour must keep working, and three is a typo, not a theme.
    */
   private applyThemeColor(raw: string | null): void {
     this.style.removeProperty("--movi-primary");
@@ -10428,35 +10424,39 @@ export class MoviElement extends HTMLElement {
     const trimmed = raw?.trim();
     if (!trimmed) return;
 
-    let primary: string | null = null;
-    let secondary: string | null = null;
-    if (trimmed.startsWith("{")) {
-      try {
-        const parsed = JSON.parse(trimmed) as {
-          primary?: unknown;
-          secondary?: unknown;
-        };
-        if (typeof parsed.primary === "string" && parsed.primary.trim()) {
-          primary = parsed.primary.trim();
-        }
-        if (typeof parsed.secondary === "string" && parsed.secondary.trim()) {
-          secondary = parsed.secondary.trim();
-        }
-      } catch {
-        Logger.warn(TAG, `themecolor: ignoring unparseable value ${trimmed}`);
-        return;
-      }
-    } else {
-      primary = trimmed;
-    }
+    const parts = MoviElement.splitTopLevel(trimmed);
+    const primary = parts.length === 2 ? parts[0] : trimmed;
+    const secondary = parts.length === 2 ? parts[1] : null;
 
-    if (primary) this.style.setProperty("--movi-primary", primary);
+    this.style.setProperty("--movi-primary", primary);
     if (secondary) this.style.setProperty("--movi-secondary", secondary);
   }
 
+  /** Split on whitespace that sits outside parentheses, so `rgb(255 0 51)` and
+   *  `color-mix(in srgb, red 40%, blue)` survive as single values. */
+  private static splitTopLevel(value: string): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of value) {
+      if (ch === "(") depth++;
+      else if (ch === ")") depth = Math.max(0, depth - 1);
+      if (depth === 0 && /\s/.test(ch)) {
+        if (current) out.push(current);
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+    if (current) out.push(current);
+    return out;
+  }
+
   /**
-   * Theme colour as set. Accepts a colour string (primary only) or
-   * `{ primary, secondary }`; reads back the raw attribute.
+   * Theme colour as set — `"#8B5CF6"` or `"#8B5CF6 #22D3EE"`. An object is
+   * accepted for hosts that keep the two colours apart; it is written back as
+   * the same whitespace form, so the attribute always reads the way it would
+   * have been authored in markup.
    */
   get themeColor(): string | null {
     return this.getAttribute("themecolor");
@@ -10469,10 +10469,21 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("themecolor");
       return;
     }
-    this.setAttribute(
-      "themecolor",
-      typeof value === "string" ? value : JSON.stringify(value),
-    );
+    if (typeof value !== "string" && !value.primary?.trim()) {
+      // Order carries the meaning here, so a secondary with no primary has no
+      // way to be written down — the lone value would read back as a primary.
+      Logger.warn(TAG, "themeColor: secondary needs a primary alongside it");
+      return;
+    }
+    const serialised =
+      typeof value === "string"
+        ? value
+        : [value.primary, value.secondary].filter(Boolean).join(" ");
+    if (!serialised.trim()) {
+      this.removeAttribute("themecolor");
+      return;
+    }
+    this.setAttribute("themecolor", serialised);
   }
 
   private updateControlsVisibility(): void {
@@ -23670,13 +23681,11 @@ export class MoviElement extends HTMLElement {
   }
   set themecolor(value: string | null) {
     this._themeColor = value;
-    if (value) {
-      this.setAttribute("themecolor", value);
-      this.style.setProperty("--movi-primary", value);
-    } else {
-      this.removeAttribute("themecolor");
-      this.style.removeProperty("--movi-primary");
-    }
+    // Setting the attribute routes through applyThemeColor, which is what
+    // knows about the two-colour form — writing --movi-primary from here
+    // directly would paint "#ff0055 #00e5ff" as one bogus colour.
+    if (value) this.setAttribute("themecolor", value);
+    else this.removeAttribute("themecolor");
   }
 
   get buffersize(): number {

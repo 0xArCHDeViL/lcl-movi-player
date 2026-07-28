@@ -305,7 +305,7 @@ The framework wrappers have slim twins too — `movi-player/react/slim`, `movi-p
   playbackrate="1.25"       <!-- Initial playback speed -->
   poster="thumb.jpg"        <!-- Poster image -->
   theme="dark"              <!-- dark | light -->
-  themecolor="#ff5722"      <!-- Custom primary color (hex/rgb) -->
+  themecolor="#ff5722"      <!-- Accent color; add a second for the secondary -->
   objectfit="contain"       <!-- contain | cover | fill | zoom | control -->
   rotate="90"               <!-- Rotate video: 0 | 90 | 180 | 270 (degrees) -->
   hdr                       <!-- Enable HDR rendering -->
