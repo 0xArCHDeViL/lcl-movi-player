@@ -10319,9 +10319,9 @@ export class MoviElement extends HTMLElement {
   /** How long the centre icon stays up after a play/pause. Long enough to
    *  register as feedback, short enough that it's gone before you look for it
    *  — the same ~half second YouTube and movi-tube's Shorts overlay use. */
-  // Must outlast the CSS animation (460ms) or the class is stripped mid-fade
+  // Must outlast the CSS animation (420ms) or the class is stripped mid-fade
   // and the icon vanishes in one frame instead of easing out.
-  private static readonly CENTER_FLASH_MS = 520;
+  private static readonly CENTER_FLASH_MS = 460;
   private _centerFlashTimer: number | null = null;
 
   /**
@@ -14463,36 +14463,30 @@ export class MoviElement extends HTMLElement {
          which loses to !important) would simply be ignored there. The two-class
          selector out-specifies it. pointer-events stays off: it's feedback, not
          a target, and it must never eat a click meant for the video. */
+      /* Only the motion is special here — the button keeps its normal look
+         (primary fill, border, glow). */
       .movi-center-play-pause.movi-center-flash {
         visibility: visible !important;
         pointer-events: none !important;
-        /* No transform here on purpose — the keyframes own it, and a static
-           declaration (even a matching one) would just be one more thing
-           fighting them. Animations outrank normal declarations, so the base
-           and .movi-center-visible transforms both give way. */
-        animation: movi-center-flash-out 460ms cubic-bezier(0.16, 0.84, 0.44, 1)
-          forwards !important;
+        /* No transform here on purpose — the keyframes own it. Animations
+           outrank normal declarations, so the base and .movi-center-visible
+           transforms both give way; a static one here would just fight them. */
+        animation: movi-center-flash-pop 420ms ease-out forwards !important;
       }
 
-      /* Grows as it fades — the icon reads as "your press landed" and gets out
-         of the way, rather than blinking on and off at a fixed size. Held near
-         full opacity for the first third so it's legible before it goes. */
-      @keyframes movi-center-flash-out {
+      /* One move, no ramp: full opacity on the first frame, then out and away.
+         Fading IN first (and stopping part-way out) is what made this read as a
+         stutter rather than a pop. The growth is smaller than the Shorts
+         overlay's 1.5 because this button is 96px to their 76px and carries a
+         glow — pushed that far it smears instead of popping. */
+      @keyframes movi-center-flash-pop {
         0% {
-          opacity: 0;
-          transform: translate(-50%, -50%) scale(0.72);
-        }
-        15% {
-          opacity: 0.92;
-          transform: translate(-50%, -50%) scale(1);
-        }
-        45% {
-          opacity: 0.82;
-          transform: translate(-50%, -50%) scale(1.08);
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(0.88);
         }
         100% {
           opacity: 0;
-          transform: translate(-50%, -50%) scale(1.42);
+          transform: translate(-50%, -50%) scale(1.22);
         }
       }
 
