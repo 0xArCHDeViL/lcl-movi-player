@@ -95,6 +95,12 @@ export class CanvasRenderer {
   // source, mirroring adaptive DPR — no oscillation.
   private _presentFpsCap: number = 0; // 0 = uncapped
   private _perfDegradeChecked: boolean = false;
+  // Latched once the decode-bound catastrophe fires: this device cannot decode
+  // the current rung at all. Read by the element's frozen-video watchdog, whose
+  // "clock moving, no new frames" trigger this condition satisfies permanently
+  // — without it that watchdog reads a slow decoder as a stuck pipeline and
+  // keeps issuing corrective seeks that cannot help. Cleared by configure().
+  private _decodeBound: boolean = false;
   private _perfWindowStart: number = 0; // performance.now() of the current window, 0 = not started
   private _perfWindowBaseCount: number = 0; // framesPresented at window start
   private _perfDeficitWindows: number = 0; // consecutive struggling windows
@@ -388,6 +394,7 @@ export class CanvasRenderer {
     // detectors and clear any prior cap so the new rung gets a fresh judgment.
     this._presentFpsCap = 0;
     this._perfDegradeChecked = false;
+    this._decodeBound = false;
     this._perfWindowStart = 0;
     this._perfDeficitWindows = 0;
     this._perfStuckWindows = 0;
@@ -1081,6 +1088,12 @@ export class CanvasRenderer {
    *  sustain the source frame rate and engages its adaptive cap. The player
    *  uses it to turn on decode-side non-reference skipping on the software
    *  path. `targetFps` is the capped rate. */
+  /** True once this device has been judged unable to decode the current rung at
+   *  all (see engageDecodeBound). */
+  isDecodeBound(): boolean {
+    return this._decodeBound;
+  }
+
   setOnPerformanceDegrade(cb: (targetFps: number) => void): void {
     this._onPerformanceDegrade = cb;
   }
@@ -1260,6 +1273,7 @@ export class CanvasRenderer {
    *  producing — signal ABR to drop a rung instead (pass 0, no cap). */
   private engageDecodeBound(achievedFps: number): void {
     this._perfDegradeChecked = true; // one-way until configure() re-arms on the switch
+    this._decodeBound = true;
     Logger.warn(
       TAG,
       `Decode-bound: only ~${achievedFps.toFixed(1)}/${this.videoFrameRate}fps presented with healthy audio — signalling ABR to drop a rung`,

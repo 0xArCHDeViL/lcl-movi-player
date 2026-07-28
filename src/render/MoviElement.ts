@@ -10444,6 +10444,19 @@ export class MoviElement extends HTMLElement {
       this._frozenSince = 0;
       return;
     }
+    // Nor does a decoder that simply can't keep up. The renderer has its own
+    // detector for that (near-zero frames presented while audio flows) and by
+    // the time it latches, "clock moving, no new frames" is permanently true —
+    // so this watchdog would fire on it forever. A re-prime seek cannot make an
+    // overloaded decoder faster; what it DOES do is send the source's read head
+    // backwards, which drops the HTTP stream and its read-ahead (measured on an
+    // 8K60 AV1 file: a 20s/136MB cushion thrown away, then a fresh seek timeout
+    // + rebuffer, repeating every few seconds). Leave it to the ABR downshift
+    // the decode-bound signal already triggered.
+    if (p.isDecodeBound?.()) {
+      this._frozenSince = 0;
+      return;
+    }
     const frames = p.getRenderHealth?.()?.framesPresented ?? 0;
     const clockAdvancing = this._frozenLastTime >= 0 && t > this._frozenLastTime + 0.05;
     const framesAdvancing = frames > this._frozenLastFrames;

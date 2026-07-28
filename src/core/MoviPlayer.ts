@@ -7624,6 +7624,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     };
   }
 
+  /**
+   * True once the renderer has judged this device unable to decode the current
+   * rung at all (near-zero frames presented while audio flows). Callers use it
+   * to tell "the pipeline is stuck" apart from "the decoder is simply too slow"
+   * — the recovery for the first (a corrective re-prime seek) is actively
+   * harmful for the second.
+   */
+  isDecodeBound(): boolean {
+    return this.videoRenderer?.isDecodeBound?.() ?? false;
+  }
+
   getStats(): Record<string, string | number | boolean> {
     // HLS mode: delegate to HLS wrapper
     if (this.streamWrapper) {
