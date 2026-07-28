@@ -1412,12 +1412,29 @@ export class AudioRenderer {
     // Stable audio: if starved, buffer is not healthy
     if (this._stableAudio && this.isStarved) return false;
 
-    // Check if decoder has stopped outputting
-    const timeSinceLastDecode = performance.now() - this.lastDecodeTime;
-    if (this.lastDecodeTime > 0 && timeSinceLastDecode > 500) return false;
-
     // Compute buffer ahead time
     const realBufferAhead = this.scheduledTime - this.audioContext.currentTime;
+
+    // Check if decoder has stopped outputting — but only when the scheduled
+    // buffer is genuinely thin. The demux loop refills audio in BURSTS: it
+    // fills to maxAudioBuffered, then backpressure parks the loop for a second
+    // or more before the next burst. So a >500ms decode gap while seconds of
+    // audio are still scheduled is the normal steady state, not a stall — and
+    // reading it as "unhealthy" made this flicker false for roughly half of
+    // every burst cycle. Callers that ask an instantaneous question (the
+    // rate-change corrective-seek guard, the clock's audio-drift sync) then
+    // saw a healthy pipeline as broken: a rate change landing in a quiet
+    // window took the full flush + decoder-recreate seek path and froze the
+    // picture for over a second. With a real cushion ahead, audio can keep
+    // anchoring regardless of when the last chunk decoded.
+    const timeSinceLastDecode = performance.now() - this.lastDecodeTime;
+    if (
+      this.lastDecodeTime > 0 &&
+      timeSinceLastDecode > 500 &&
+      realBufferAhead < 0.5
+    ) {
+      return false;
+    }
     const hasScheduledAudio =
       this.activeSources.length > 0 || realBufferAhead > 0;
 

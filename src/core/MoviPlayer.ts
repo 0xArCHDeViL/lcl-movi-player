@@ -373,6 +373,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
   private _bufferingEntryTime: number = 0; // When we entered buffering state
+  // True when the current buffering state was entered for a playback-rate
+  // change (AudioRenderer's re-anchor), NOT for a real data/decode stall. Those
+  // resume as soon as the pipeline is ready instead of serving the stall floor.
+  private _bufferingForRateChange: boolean = false;
+  private _lastRateChangeAt: number = 0;
+  /** How long after a rate change an audio stall is still attributable to the
+   *  re-anchor that the rate change itself performed. */
+  private static readonly RATE_CHANGE_STALL_WINDOW_MS = 1500;
   private _playStartTime: number = 0; // When play() was called — grace period for stall detection
   private _primingAudio = false; // true while the first-play buffer is filling its startup cushion
   private _decoderStuckSince: number = 0; // When video decoder was first detected stuck
@@ -2996,6 +3004,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.wasPlayingBeforeSeek = false;
       this.wasPlayingBeforeRebuffer = true; // resume intent for buffering→play
       this._bufferingEntryTime = performance.now();
+      this._bufferingForRateChange = false;
       this.stateManager.setState("buffering");
       // Heavy software audio is flushed-cold by the seek. This branch waits for
       // the first video frame — which on an open-GOP CRA source can take a few
@@ -3046,6 +3055,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.beginAudioPrime();
         this.wasPlayingBeforeRebuffer = true; // resume intent for buffering→play
         this._bufferingEntryTime = performance.now();
+        this._bufferingForRateChange = false;
         this.stateManager.setState("buffering");
         this.clock.pause();
         if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
@@ -3228,6 +3238,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.stateManager.setState("buffering");
         this.clock.pause();
         if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+        this._bufferingForRateChange = true;
         Logger.debug(TAG, "Entered buffering state for playback rate change");
       }
       // Continue processing to allow new audio to be decoded and scheduled
@@ -3251,14 +3262,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // experience. Rebuild a real cushion for the software path.
       const softwareAudioStall =
         !this.disableAudio && this.audioDecoder.usesSoftware;
-      const audioTargetS = this._primingAudio || softwareAudioStall ? 2.0 : 0.1;
+      // The 2s cushion is for a decoder that fell BEHIND realtime — rebuilding
+      // a real buffer is the only way out of that. A rate change is the
+      // opposite case: nothing was starving, we discarded the scheduled audio
+      // ourselves in the re-anchor, and the decoder is idle and refilling at
+      // full speed. Demanding 2s there just extends the frozen picture (E-AC3 /
+      // AC-3 / TrueHD / DTS all decode in software, so every such title paid
+      // it on every speed change). Use the light threshold; if the new rate
+      // genuinely can't be sustained, the stall detector re-enters buffering
+      // and the full cushion applies then.
+      const audioTargetS =
+        (this._primingAudio || softwareAudioStall) && !this._bufferingForRateChange
+          ? 2.0
+          : 0.1;
       const audioReady =
         this.disableAudio ||
         !hasAudioTrack ||
         this.audioRenderer.getBufferedDuration() > audioTargetS;
       const videoReady = !this.videoRenderer || this.videoRenderer.getQueueSize() > 0;
       const dwellMs = performance.now() - this._bufferingEntryTime;
-      const minDwell = 1500; // Wait at least 1.5s to accumulate buffer
+      // A rate change is NOT a stall. AudioRenderer.isRebuffering() is raised
+      // only for the rate-change re-anchor, and while it's up the clock is
+      // paused, the AudioContext is suspended and the presentation loop is
+      // stopped — the picture is frozen. The 1.5s floor below exists to stop a
+      // starved pipeline from resuming onto a thin buffer and stalling right
+      // back; neither applies here, where audio is typically still scheduled
+      // seconds ahead and the video queue is full. Holding the freeze for a
+      // fixed 1.5s (every speed change, and again on every change back) was
+      // the entire stall. Let the readiness checks below decide instead.
+      const dwellFloor = this._bufferingForRateChange ? 0 : 1500;
+      const minDwell = dwellFloor; // Wait at least 1.5s to accumulate buffer
       // Cap the prime startup so a very CPU-bound decoder doesn't spin forever;
       // it starts with whatever cushion it built (a residual stall is possible
       // on such machines — the real fix is off-thread audio decode).
@@ -3272,6 +3305,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
       if (canResume) {
         this._primingAudio = false;
+        this._bufferingForRateChange = false;
         this.stateManager.setState("paused");
         this.wasPlayingBeforeRebuffer = false;
         // Resume AudioContext before play() so audio picks up from where it was
@@ -3372,6 +3406,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
           this.wasPlayingBeforeRebuffer = true;
           this._bufferingEntryTime = performance.now();
+          // A stall landing right after a rate change is one WE caused:
+          // AudioRenderer's re-anchor drops the scheduled old-rate audio, so
+          // the buffer reads empty for exactly as long as the decoder needs to
+          // refill. Nothing is actually starving — the decoder is idle and the
+          // video queue is full — so this must not serve the underrun recovery
+          // (1.5s dwell + a 2s cushion for software audio). Without this every
+          // speed change froze the picture for ~1.5-2s.
+          this._bufferingForRateChange =
+            performance.now() - this._lastRateChangeAt <
+            MoviPlayer.RATE_CHANGE_STALL_WINDOW_MS;
           this.stateManager.setState("buffering");
           this.clock.pause();
           // Suspend AudioContext so already-scheduled audio doesn't play ahead of video.
@@ -5987,6 +6031,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.streamWrapper.setPlaybackRate(rate);
     }
 
+    // Idempotent: a re-application of the SAME rate has nothing to do, and
+    // doing it anyway is actively harmful. The element sets its `playbackrate`
+    // attribute AND calls updatePlaybackRate(), so every user speed change
+    // arrives here twice. The first pass re-anchors AudioRenderer (drops the
+    // scheduled old-rate sources, pulls scheduledTime to `now`) — which leaves
+    // the buffer legitimately empty for a moment. The second pass then read
+    // that as "no healthy audio anchor" and took the corrective-seek path:
+    // full decoder flush, HEVC decoder recreate, frame-queue clear. That is
+    // the second-plus freeze on every speed change.
+    if (this.clock.getPlaybackRate() === rate) return;
+
+    // Stamp the change so the stall detector can tell an underrun caused by our
+    // own audio re-anchor from a genuine one (see RATE_CHANGE_STALL_WINDOW_MS).
+    this._lastRateChangeAt = performance.now();
+
     const savedTime = this.getCurrentTime();
     // Only the corrective seek's purpose (undoing the audio read-ahead pivot)
     // applies when playback is actually rolling. At load time the rate is
@@ -5996,6 +6055,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const playingNow =
       this.stateManager.getState() === "playing" ||
       this.stateManager.getState() === "buffering";
+
+    // Snapshot the audio anchor BEFORE anything is re-anchored below. This must
+    // not move: AudioRenderer.setPlaybackRate() stops the scheduled old-rate
+    // sources and pulls scheduledTime back to `now`, and hasHealthyBuffer()
+    // reads exactly those two fields (activeSources empty + zero buffer ahead)
+    // — so asking afterwards ALWAYS answers "unhealthy", and the corrective
+    // seek below fired on every single rate change, which is the freeze this
+    // guard exists to prevent. Read it while the pre-change audio state is
+    // still intact.
+    const audioAnchored = this.hasHealthyAudioAnchor();
 
     this.clock.setPlaybackRate(rate);
 
@@ -6050,7 +6119,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (
       playingNow &&
       !this.isLinearPlayback() &&
-      !this.hasHealthyAudioAnchor()
+      !audioAnchored
     ) {
       this.seek(savedTime, {
         suppressSpinner: true,
