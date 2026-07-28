@@ -17237,9 +17237,21 @@ export class MoviElement extends HTMLElement {
         state === "idle" ||
         state === "loading" ||
         this._sourceHadVideoTrack);
-    const srcIsAudio =
-      typeof this._src === "string" &&
-      this.guessMediaType(this._src).startsWith("audio/");
+    // A File source has no URL to read an extension off, so the string-only
+    // version of this read false for EVERY picked file — including plain audio
+    // ones — and the unresolved-tracks window fell back to the video surface.
+    // The picker's own MIME type is the better signal when it gives a real
+    // one; some pickers hand back "" or application/octet-stream, so the name's
+    // extension is the fallback.
+    const srcMediaType =
+      this._src instanceof File
+        ? /^(audio|video)\//.test(this._src.type)
+          ? this._src.type
+          : this.guessMediaType(this._src.name)
+        : typeof this._src === "string"
+          ? this.guessMediaType(this._src)
+          : "";
+    const srcIsAudio = srcMediaType.startsWith("audio/");
     // Audio-only (data-saver) forces the audio surface even on a video source —
     // we're deliberately not decoding the video, so show album art / strip.
     // Native fallback exposes no track list, so hasVideoTrack is always false —
@@ -19401,12 +19413,22 @@ export class MoviElement extends HTMLElement {
     // audio-mode/strip layout leak into the next track. The classes are
     // re-decided once the new source's tracks land (updateCoverArtOverlay).
     this.coverArtBitmap = null;
+    this._coverArtBgUrl = "";
+    this._coverArtResolved = false;
     if (this._posterCoverBitmap) { try { this._posterCoverBitmap.close(); } catch {} }
     this._posterCoverBitmap = null;
     this._posterCoverUrl = "";
     this._posterCoverLoading = false;
     if (this.coverArtOverlay) this.coverArtOverlay.style.display = "none";
     this.classList.remove("movi-audio-strip", "movi-audio-mode");
+    // Same reason, and the one that actually breaks video→audio: this memory
+    // exists so a quality switch's momentary null video track isn't mistaken
+    // for "the source turned into audio". Left set from the PREVIOUS source it
+    // marks the new one's tracks "unresolved" forever, so audio-mode falls back
+    // to guessing from the src string — which a File has none of. The result is
+    // an audio track rendered as video: black canvas, no album art, and the
+    // video-only controls (fullscreen, PiP, aspect…) still on the bar.
+    this._sourceHadVideoTrack = false;
 
     // Reset transient state
     this.isLoading = false;
