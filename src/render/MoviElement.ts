@@ -10319,9 +10319,8 @@ export class MoviElement extends HTMLElement {
   /** How long the centre icon stays up after a play/pause. Long enough to
    *  register as feedback, short enough that it's gone before you look for it
    *  — the same ~half second YouTube and movi-tube's Shorts overlay use. */
-  // Must outlast the CSS animation (420ms) or the class is stripped mid-fade
-  // and the icon vanishes in one frame instead of easing out.
-  private static readonly CENTER_FLASH_MS = 460;
+  private static readonly CENTER_FLASH_MS = 420;
+  private _centerFlashAnim: Animation | null = null;
   private _centerFlashTimer: number | null = null;
 
   /**
@@ -10331,6 +10330,15 @@ export class MoviElement extends HTMLElement {
    *
    * This is the only thing that puts the centre button on screen mid-playback:
    * it never rides in with the chrome, and it never stays.
+   *
+   * Driven by the Web Animations API rather than a CSS class, because a class
+   * cannot survive this element: the 250ms UI tick, showControls and
+   * hideControls all rewrite its class attribute, and during a flash that
+   * churn was restarting the CSS animation ~80ms in and then cutting it off
+   * before it finished — the "it plays, jerks, and plays again" report. An
+   * animation object is owned here, immune to what anyone does to classList,
+   * and it tells us when it's actually done instead of us guessing with a
+   * timer.
    */
   private flashCenterIcon(kind: "play" | "pause"): void {
     if (!this._controls || this._isUnsupported) return;
@@ -10347,16 +10355,52 @@ export class MoviElement extends HTMLElement {
     playIcon?.style.setProperty("display", kind === "play" ? "block" : "none");
     pauseIcon?.style.setProperty("display", kind === "play" ? "none" : "block");
 
+    // A repeated toggle restarts cleanly — cancel() drops the old one outright
+    // rather than leaving two animations compositing against each other.
+    this._centerFlashAnim?.cancel();
     if (this._centerFlashTimer) clearTimeout(this._centerFlashTimer);
-    // Restart the animation on a repeated toggle — without the reflow the
-    // browser dedupes the class change and the second tap shows nothing.
-    btn.classList.remove("movi-center-flash");
-    void btn.offsetWidth;
-    btn.classList.add("movi-center-flash");
+
+    // Feedback must never swallow a click meant for the video underneath.
+    btn.style.pointerEvents = "none";
+
+    // Full opacity on the first frame, then one ease-out to bigger-and-gone.
+    // visibility rides along because the button's resting state is hidden.
+    const anim = btn.animate(
+      [
+        {
+          visibility: "visible",
+          opacity: 1,
+          transform: "translate(-50%, -50%) scale(0.88)",
+        },
+        {
+          visibility: "visible",
+          opacity: 0,
+          transform: "translate(-50%, -50%) scale(1.22)",
+        },
+      ],
+      {
+        duration: MoviElement.CENTER_FLASH_MS,
+        easing: "ease-out",
+        // No fill: when it ends the element simply returns to its resting
+        // style (hidden), so there is nothing to clean up and no chance of a
+        // stuck frame if the finish handler never runs.
+        fill: "none",
+      },
+    );
+    this._centerFlashAnim = anim;
+    const done = () => {
+      if (this._centerFlashAnim === anim) this._centerFlashAnim = null;
+      btn.style.pointerEvents = "";
+    };
+    anim.addEventListener("finish", done);
+    anim.addEventListener("cancel", done);
+    // Belt and braces: a backgrounded tab can leave the animation unfinished,
+    // and pointer-events must not stay off on a button the poster/ended states
+    // still make clickable.
     this._centerFlashTimer = window.setTimeout(() => {
-      btn.classList.remove("movi-center-flash");
       this._centerFlashTimer = null;
-    }, MoviElement.CENTER_FLASH_MS);
+      done();
+    }, MoviElement.CENTER_FLASH_MS + 200);
   }
 
   private updateControlsVisibility(): void {
@@ -14463,33 +14507,6 @@ export class MoviElement extends HTMLElement {
          which loses to !important) would simply be ignored there. The two-class
          selector out-specifies it. pointer-events stays off: it's feedback, not
          a target, and it must never eat a click meant for the video. */
-      /* Only the motion is special here — the button keeps its normal look
-         (primary fill, border, glow). */
-      .movi-center-play-pause.movi-center-flash {
-        visibility: visible !important;
-        pointer-events: none !important;
-        /* No transform here on purpose — the keyframes own it. Animations
-           outrank normal declarations, so the base and .movi-center-visible
-           transforms both give way; a static one here would just fight them. */
-        animation: movi-center-flash-pop 420ms ease-out forwards !important;
-      }
-
-      /* One move, no ramp: full opacity on the first frame, then out and away.
-         Fading IN first (and stopping part-way out) is what made this read as a
-         stutter rather than a pop. The growth is smaller than the Shorts
-         overlay's 1.5 because this button is 96px to their 76px and carries a
-         glow — pushed that far it smears instead of popping. */
-      @keyframes movi-center-flash-pop {
-        0% {
-          opacity: 1;
-          transform: translate(-50%, -50%) scale(0.88);
-        }
-        100% {
-          opacity: 0;
-          transform: translate(-50%, -50%) scale(1.22);
-        }
-      }
-
       .movi-center-play-pause.movi-center-visible:hover {
         transform: translate(-50%, -50%) scale(1.08);
       }
@@ -19818,7 +19835,7 @@ export class MoviElement extends HTMLElement {
         // A flash owns the glyph while it runs — it shows the ACTION taken
         // (the pause bars when you paused), which is the opposite of what the
         // resulting state would draw here.
-        if (!this._centerFlashTimer) {
+        if (!this._centerFlashAnim) {
           centerPlayIcon?.style.setProperty("display", "none");
           centerPauseIcon?.style.setProperty("display", "block");
         }
@@ -19854,7 +19871,7 @@ export class MoviElement extends HTMLElement {
         }
       } else {
         if (centerPlayPauseBtn) {
-          if (!this._centerFlashTimer) {
+          if (!this._centerFlashAnim) {
             centerPlayIcon?.style.setProperty("display", "block");
             centerPauseIcon?.style.setProperty("display", "none");
           }
