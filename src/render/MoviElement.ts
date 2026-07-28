@@ -4708,12 +4708,43 @@ export class MoviElement extends HTMLElement {
           }
         }, 400);
       } else {
+        // Freeze the WHOLE body portal before we move anything. The menu and its
+        // submenu panels are portaled here with inline VIEWPORT coordinates
+        // (position:fixed / originLeft=Top=0). Returning them to the shadow root
+        // makes those coords resolve against the host box instead, so any element
+        // still painting during the reparent visibly jumps toward the player's
+        // top-left. display:none on the portal host removes everything inside from
+        // rendering for the whole move — no element can paint at a stale position.
+        const portalHost = this._menuPortalHost;
+        if (portalHost) portalHost.style.display = "none";
+
         contextMenu.style.display = "none";
+        // Hide the submenu panels instantly (transition:none) so removing the
+        // visible class can't animate a fade once the host is shown again.
+        // Do NOT clear their inline left/top here: an emptied coord resolves to
+        // 0,0, so a panel later shown WITHOUT re-positioning (e.g. the audio-
+        // output list, whose open handler only toggles the visible class) would
+        // appear pinned to the player's top-left. The panels are hidden now and
+        // every desktop open re-runs showSubmenu to set fresh coords, so leaving
+        // the last values is harmless — and avoids the top-left pin.
+        const closedSubs = this._portaledSubs;
+        for (const sm of closedSubs) {
+          const el = sm as HTMLElement;
+          el.style.transition = "none";
+          el.classList.remove("movi-context-menu-submenu-visible");
+        }
         // Return the menu from the body portal to the shadow root and clear its
         // fixed positioning so the next open (incl. strip/touch modes) starts
         // clean and the submenu query below finds it back home.
         contextMenu.style.position = "";
         this.unportalContextMenu(contextMenu);
+
+        // Portal is empty now; restore its host so the next open can reuse it.
+        if (portalHost) portalHost.style.display = "";
+        // Restore the panels' transition next frame so future opens animate.
+        requestAnimationFrame(() => {
+          for (const sm of closedSubs) (sm as HTMLElement).style.transition = "";
+        });
       }
 
       // Hide all submenus
