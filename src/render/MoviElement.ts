@@ -11837,6 +11837,19 @@ export class MoviElement extends HTMLElement {
         transition-duration: 0.08s;
       }
 
+      /* The gear is centred on the title line with translateY(-50%), and the
+         two rules above REPLACE transform outright rather than adding to it —
+         so pressing the gear dropped it half its own height. That is not just
+         cosmetic: the button moved out from under the finger between touchstart
+         and touchend, so no click was ever dispatched and the menu never
+         opened. Compose the press/hover scale with the centering instead. */
+      .movi-gear-btn:hover {
+        transform: translateY(-50%) scale(1.06);
+      }
+      .movi-gear-btn:active {
+        transform: translateY(-50%) scale(0.94);
+      }
+
       .movi-btn:focus,
       .movi-btn:focus-visible {
         outline: none !important;
