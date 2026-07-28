@@ -3744,11 +3744,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // The 100ms threshold matches latencyHint="interactive"'s ~50-150ms
     // steady-state scheduled buffer; below it audio is genuinely about to
     // underrun and warrants the packet-drop tradeoff.
-    const audioStarving = !this.disableAudio && audioBuffered < 0.1;
-    const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
-    const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
-    const skipVideoDecodeForAudio = !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
-
     // Split (separate-URL) audio is decoded by its OWN loop (audioProcessLoop),
     // not this one. Its buffer intentionally runs a several-second lead, which is
     // far above maxAudioBuffered — so gating THIS (video) loop on the audio
@@ -3756,6 +3751,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // full, draining the video renderer and freezing the picture (audio keeps
     // playing). Exclude the audio conditions when split audio owns the audio.
     const gateOnAudio = !this.disableAudio && !this.audioDemuxer;
+    // The delta-drop below needs that same exclusion, and didn't have it. With
+    // split audio this loop's view of the audio buffer reads ~0 no matter how
+    // far ahead the audio loop actually is, so audioStarving was permanently
+    // true — and every time the video queue filled (which is the normal state
+    // on a healthy 4K source) deltas were dropped until the next keyframe.
+    // Measured on movi-tube, whose YouTube-style sources are always split:
+    // videoChainBrokenUntilKeyframe latched on 9 of 10 seeks with the audio
+    // buffer reading 0.000, punching GOP-sized holes in the decoded video. The
+    // symptom is the picture freezing for ~0.5-1s a second or two after a seek
+    // while the queue sits full and the clock keeps running.
+    // A source with no audio at all reads 0 here for the same reason and just
+    // as permanently — a video-only file (movi-tube serves exactly these,
+    // paired with a separate audio URL) was dropping deltas throughout.
+    const hasAudioToStarve = this.trackManager.getActiveAudioTrack() !== null;
+    const audioStarving = gateOnAudio && hasAudioToStarve && audioBuffered < 0.1;
+    const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
+    const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
+    const skipVideoDecodeForAudio = !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
+
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
       (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
