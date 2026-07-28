@@ -1784,8 +1784,10 @@ export class MoviElement extends HTMLElement {
       if (this.player) {
         const state = this.player.getState();
         if (state === "playing" || state === "buffering") {
+          this.flashCenterIcon("pause");
           this.pause();
         } else {
+          this.flashCenterIcon("play");
           // Play if in ready, paused, ended, or any other non-playing state.
           // If the browser blocked autoplay-with-sound and we fell back to
           // muted playback, this button press is a genuine user gesture —
@@ -1863,8 +1865,10 @@ export class MoviElement extends HTMLElement {
       if (this.player) {
         const state = this.player.getState();
         if (state === "playing" || state === "buffering") {
+          this.flashCenterIcon("pause");
           this.pause();
         } else {
+          this.flashCenterIcon("play");
           // Play if in ready, paused, ended, or any other non-playing state.
           // Flip the centre icon to "pause" right away. The first play has to
           // seek/buffer before the state actually reaches "playing", so keying
@@ -3982,8 +3986,10 @@ export class MoviElement extends HTMLElement {
           e.preventDefault();
           const state = this.player?.getState();
           if (state === "playing" || state === "buffering") {
+            this.flashCenterIcon("pause");
             this.pause();
           } else {
+            this.flashCenterIcon("play");
             this.play();
           }
           break;
@@ -5023,8 +5029,10 @@ export class MoviElement extends HTMLElement {
         if (this.player) {
           const state = this.player.getState();
           if (state === "playing" || state === "buffering") {
+            this.flashCenterIcon("pause");
             this.pause();
           } else {
+            this.flashCenterIcon("play");
             this.play();
           }
         }
@@ -10306,6 +10314,47 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** How long the centre icon stays up after a play/pause. Long enough to
+   *  register as feedback, short enough that it's gone before you look for it
+   *  — the same ~half second YouTube and movi-tube's Shorts overlay use. */
+  private static readonly CENTER_FLASH_MS = 500;
+  private _centerFlashTimer: number | null = null;
+
+  /**
+   * Pop the centre play/pause icon for a moment as the receipt for a toggle,
+   * then let it fade. It shows the action just taken (pause glyph when you
+   * paused), NOT the resulting state — the bar's icon covers state.
+   *
+   * This is the only thing that puts the centre button on screen mid-playback:
+   * it never rides in with the chrome, and it never stays.
+   */
+  private flashCenterIcon(kind: "play" | "pause"): void {
+    if (!this._controls || this._isUnsupported) return;
+    const btn = this.shadowRoot?.querySelector(
+      ".movi-center-play-pause",
+    ) as HTMLElement | null;
+    if (!btn) return;
+    const playIcon = btn.querySelector(
+      ".movi-center-icon-play",
+    ) as HTMLElement | null;
+    const pauseIcon = btn.querySelector(
+      ".movi-center-icon-pause",
+    ) as HTMLElement | null;
+    playIcon?.style.setProperty("display", kind === "play" ? "block" : "none");
+    pauseIcon?.style.setProperty("display", kind === "play" ? "none" : "block");
+
+    if (this._centerFlashTimer) clearTimeout(this._centerFlashTimer);
+    // Restart the animation on a repeated toggle — without the reflow the
+    // browser dedupes the class change and the second tap shows nothing.
+    btn.classList.remove("movi-center-flash");
+    void btn.offsetWidth;
+    btn.classList.add("movi-center-flash");
+    this._centerFlashTimer = window.setTimeout(() => {
+      btn.classList.remove("movi-center-flash");
+      this._centerFlashTimer = null;
+    }, MoviElement.CENTER_FLASH_MS);
+  }
+
   private updateControlsVisibility(): void {
     const container = this.controlsContainer;
     if (!container) return;
@@ -14402,6 +14451,26 @@ export class MoviElement extends HTMLElement {
         background: color-mix(in srgb, var(--movi-primary) 40%, transparent);
         border-color: color-mix(in srgb, var(--movi-primary) 60%, transparent);
         box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-primary) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+      }
+
+      /* Toggle receipt: pop in, fade out, gone. Carries !important because the
+         small-player container query nails transform/animation on this element
+         with !important of its own — a plain declaration (and an animation,
+         which loses to !important) would simply be ignored there. The two-class
+         selector out-specifies it. pointer-events stays off: it's feedback, not
+         a target, and it must never eat a click meant for the video. */
+      .movi-center-play-pause.movi-center-flash {
+        visibility: visible !important;
+        pointer-events: none !important;
+        transform: translate(-50%, -50%) scale(1) !important;
+        animation: movi-center-flash-out var(--movi-center-flash-ms, 500ms)
+          cubic-bezier(0.2, 0, 0.2, 1) forwards !important;
+      }
+
+      @keyframes movi-center-flash-out {
+        0% { opacity: 0.95; }
+        40% { opacity: 0.9; }
+        100% { opacity: 0; }
       }
 
       .movi-center-play-pause.movi-center-visible:hover {
@@ -19729,8 +19798,13 @@ export class MoviElement extends HTMLElement {
       // as the chrome was up — and hovering brought it back. The bar's own
       // play/pause icon already flips on the click; that is the confirmation.
       if (centerPlayPauseBtn) {
-        centerPlayIcon?.style.setProperty("display", "none");
-        centerPauseIcon?.style.setProperty("display", "block");
+        // A flash owns the glyph while it runs — it shows the ACTION taken
+        // (the pause bars when you paused), which is the opposite of what the
+        // resulting state would draw here.
+        if (!this._centerFlashTimer) {
+          centerPlayIcon?.style.setProperty("display", "none");
+          centerPauseIcon?.style.setProperty("display", "block");
+        }
         centerPlayPauseBtn.classList.remove("movi-center-visible");
       }
     } else {
@@ -19763,8 +19837,10 @@ export class MoviElement extends HTMLElement {
         }
       } else {
         if (centerPlayPauseBtn) {
-          centerPlayIcon?.style.setProperty("display", "block");
-          centerPauseIcon?.style.setProperty("display", "none");
+          if (!this._centerFlashTimer) {
+            centerPlayIcon?.style.setProperty("display", "block");
+            centerPauseIcon?.style.setProperty("display", "none");
+          }
 
           // The centre button is not a resume affordance and not part of the
           // chrome. Once playback has started it stays off: pausing hides it,
