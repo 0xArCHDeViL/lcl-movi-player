@@ -7355,11 +7355,20 @@ export class MoviElement extends HTMLElement {
    */
   private async _pickStartRungByProbe(): Promise<void> {
     if (this._startProbeDone) return;
-    if (
-      this._videoQualities.length < 2 ||
-      !this._readQualityAutoPref() ||
-      typeof this._src !== "string"
-    ) {
+    // Every bail is logged. When this doesn't run, the player opens on the
+    // smallest rung and the viewer sees 144p — the single most-reported startup
+    // complaint — and until now a log that simply lacked the "Pre-play speed
+    // test" line gave no way to tell WHICH of these was the reason.
+    if (this._videoQualities.length < 2) {
+      Logger.info(TAG, "Pre-play speed test: skipped — no quality ladder");
+      return;
+    }
+    if (!this._readQualityAutoPref()) {
+      Logger.info(TAG, "Pre-play speed test: skipped — quality is not on Auto");
+      return;
+    }
+    if (typeof this._src !== "string") {
+      Logger.info(TAG, "Pre-play speed test: skipped — source is not a URL");
       return;
     }
     this._startProbeDone = true;
@@ -7380,6 +7389,7 @@ export class MoviElement extends HTMLElement {
       byBitrate[Math.min(byBitrate.length - 1, Math.floor(byBitrate.length / 2))]
         ?.src || smallest.src;
 
+    const startedAt = performance.now();
     const bits = await probeLinkBandwidth(probeSrc, {
       headers: this._headers || undefined,
       // Clear the ~2 MB proxy burst, then time a short tail. The window is kept
@@ -7393,7 +7403,19 @@ export class MoviElement extends HTMLElement {
       measureBytes: 900_000,
       timeoutMs: 6000,
     });
-    if (bits <= 0) return; // slow/timeout → keep the smallest rung
+    if (bits <= 0) {
+      // Unmeasurable — keep the smallest rung. Logged with the elapsed time
+      // because the two causes look identical from the outside and need
+      // opposite fixes: a full 6s means the fetch timed out (slow link, or the
+      // proxy was still opening upstream), while a near-instant give-up means
+      // the response was unusable — too small, an error status, or a shape the
+      // probe couldn't time.
+      Logger.info(
+        TAG,
+        `Pre-play speed test: unmeasured after ${Math.round(performance.now() - startedAt)}ms — opening on the smallest rung`,
+      );
+      return;
+    }
     this._measuredStartBps = bits;
     // Pick the OPENING rung conservatively. Two reasons to leave a wide margin:
     //  1) The probe measures through a burst-prone proxy, so it can read a bit

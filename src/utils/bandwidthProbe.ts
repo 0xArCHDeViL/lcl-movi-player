@@ -39,6 +39,27 @@ const DEFAULT_TIMEOUT_MS = 6000;
 const INSTANT_HIT_CAP_BPS = 25_000_000;
 
 /**
+ * Whether the browser served this URL from cache rather than the network.
+ * `transferSize === 0` with a non-zero body is the Resource Timing signal for a
+ * cache hit. Unknown (no entry, or the API missing) is treated as a network
+ * fetch: the cap this gates only exists to hold cached bytes back from
+ * advertising a link speed they never proved, and applying it to a genuinely
+ * fast connection would cost real quality.
+ */
+function isFromCache(url: string): boolean {
+  try {
+    const entries = performance.getEntriesByName(
+      new URL(url, location.href).href,
+      "resource",
+    ) as PerformanceResourceTiming[];
+    const last = entries[entries.length - 1];
+    return !!last && last.transferSize === 0 && last.decodedBodySize > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Measure sustained link throughput in BITS/second, or -1 if it couldn't get a
  * trustworthy reading (fetch failed, file too small to clear the burst, or the
  * measured window was too short to be meaningful). Never throws.
@@ -126,10 +147,18 @@ export async function probeLinkBandwidth(
       // had already watched once started at 144p for a second or two.
       //
       // Instant delivery is not a failed measurement, it is a fast one. Time it
-      // from the request instead of the first byte (the only window with any
-      // duration in it) and cap the result — see INSTANT_HIT_CAP_BPS.
+      // from the request instead of the first byte — the only window with any
+      // duration in it.
       const wallSeconds = Math.max((end - requestedAt) / 1000, 0.005);
-      return Math.min((received / wallSeconds) * 8, INSTANT_HIT_CAP_BPS);
+      const instantBits = (received / wallSeconds) * 8;
+      // The cap applies to a CACHE HIT only. A cache hit proves the bytes are
+      // local, not that the link can carry them — the rest of the file may still
+      // have to stream, so the reading gets clamped to something a network can
+      // plausibly refill. A live link that simply happens to be fast enough to
+      // deliver the range in under 100ms has earned its number and keeps it;
+      // capping that would hold a very fast connection down to a mid rung.
+      // transferSize === 0 is how the timeline reports "served from cache".
+      return isFromCache(url) ? Math.min(instantBits, INSTANT_HIT_CAP_BPS) : instantBits;
     }
     return -1;
   } catch {
