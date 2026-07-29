@@ -14801,8 +14801,15 @@ export class MoviElement extends HTMLElement {
         left: 50%;
         transform: translate(-50%, -50%) scale(0.8);
         z-index: 5;
-        width: 96px;
-        height: 96px;
+        /* Scales with the PLAYER, not the viewport and not fullscreen: cqw is
+           a percentage of this element's own width (:host is the query
+           container). 10cqw holds the familiar 96px at a ~960px player, grows
+           gently past that, and stops at 112px — a fullscreen 4K pane gets a
+           button that reads at arm's length without turning into a dinner
+           plate. The floor keeps the ladder continuous with the compact
+           blocks below, which pin 96px and 72px for small panes. */
+        width: clamp(96px, 10cqw, 112px);
+        height: clamp(96px, 10cqw, 112px);
         border-radius: 50%;
         background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent);
         padding: 0;
@@ -14825,6 +14832,7 @@ export class MoviElement extends HTMLElement {
         pointer-events: auto;
         transition-delay: 0s;
       }
+
 
       /* Default (the base rule) is the true geometric centre. When the controls
          bar is visible, lift the centre button AND the loading spinner a little
@@ -14869,8 +14877,9 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause svg {
-        width: 52px;
-        height: 52px;
+        /* Same curve as the button so the glyph keeps its proportion. */
+        width: clamp(52px, 5.4cqw, 60px);
+        height: clamp(52px, 5.4cqw, 60px);
         color: var(--movi-controls-color);
         fill: var(--movi-controls-color);
         transition: all var(--movi-transition-fast);
