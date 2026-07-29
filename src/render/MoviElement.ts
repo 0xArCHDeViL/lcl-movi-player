@@ -253,6 +253,9 @@ export class MoviElement extends HTMLElement {
   // over the first frame during the brief pre-play startup window even
   // though the player is about to start on its own.
   private _autoplayStarting: boolean = false;
+  /** Set when pause() lands before playback has started, so the pending
+   *  autoplay/queued play doesn't fire once loading finishes. */
+  private _startCancelled: boolean = false;
   // Autoplay was requested while the tab was hidden — deferred until the tab
   // is visible (a backgrounded first-play seek gets throttled and stalls in
   // buffering). _onVisibilityChange starts it when the tab is shown.
@@ -1801,8 +1804,7 @@ export class MoviElement extends HTMLElement {
     playPauseBtn?.addEventListener("click", (e) => {
       e.stopPropagation(); // Prevent triggering overlay click
       if (this.player) {
-        const state = this.player.getState();
-        if (state === "playing" || state === "buffering") {
+        if (this.shouldPauseOnToggle()) {
           this.flashCenterIcon("pause");
           this.pause();
         } else {
@@ -1882,8 +1884,7 @@ export class MoviElement extends HTMLElement {
     centerPlayPauseBtn?.addEventListener("click", (e) => {
       e.stopPropagation(); // Prevent triggering overlay click
       if (this.player) {
-        const state = this.player.getState();
-        if (state === "playing" || state === "buffering") {
+        if (this.shouldPauseOnToggle()) {
           this.flashCenterIcon("pause");
           this.pause();
         } else {
@@ -2802,8 +2803,7 @@ export class MoviElement extends HTMLElement {
         // If we've passed all the control checks above, toggle play/pause
         // This means the click is on the video area (canvas/overlay), not on controls
         this.focus(); // Make sure it gets focus for keyboard shortcuts
-        const state = this.player?.getState();
-        if (state === "playing" || state === "buffering") {
+        if (this.shouldPauseOnToggle()) {
           this.flashCenterIcon("pause");
           this.pause();
         } else {
@@ -4005,8 +4005,7 @@ export class MoviElement extends HTMLElement {
           // every play/pause. The centre play icon flashes as the
           // confirmation; users that want the bar can hover / tap.
           e.preventDefault();
-          const state = this.player?.getState();
-          if (state === "playing" || state === "buffering") {
+          if (this.shouldPauseOnToggle()) {
             this.flashCenterIcon("pause");
             this.pause();
           } else {
@@ -5048,8 +5047,7 @@ export class MoviElement extends HTMLElement {
 
       if (action === "play-pause") {
         if (this.player) {
-          const state = this.player.getState();
-          if (state === "playing" || state === "buffering") {
+          if (this.shouldPauseOnToggle()) {
             this.flashCenterIcon("pause");
             this.pause();
           } else {
@@ -9415,6 +9413,39 @@ export class MoviElement extends HTMLElement {
    * SourceAdapter, or the encrypted video URL). Used to gate the controls
    * auto-hide — in the empty "No Video" state we keep the bar pinned.
    */
+  /**
+   * Whether a play/pause press should PAUSE right now.
+   *
+   * Not just "is it playing": while a source is still loading, autoplay (or a
+   * queued play()) has already been asked for, the bar is showing the pause
+   * glyph, and the viewer pressing it means "don't start". Reading only the raw
+   * state there turned that press into another PLAY — the press was swallowed
+   * and the video rolled the moment data arrived. Intent is what the icon
+   * shows, so intent is what the press has to act on.
+   */
+  private shouldPauseOnToggle(): boolean {
+    if (this.isStartPending()) return true;
+    const state = this.player?.getState?.();
+    if (state === "playing" || state === "buffering") return true;
+    if (state === "loading" || state === "seeking") {
+      return !!(this.player?.isPlaybackIntended?.() || this._pendingPlay);
+    }
+    return false;
+  }
+
+  /**
+   * A start is queued but hasn't happened yet: autoplay is armed (or a play()
+   * arrived) while the source is still loading. The player has no intent to
+   * report yet — it hasn't been told to play, that happens once loading
+   * settles — but from the viewer's side the video IS about to start, so the
+   * bar shows the pause glyph and a press cancels the start.
+   */
+  private isStartPending(): boolean {
+    if (this._startCancelled || this._isUnsupported) return false;
+    if (!this.isLoading || !this.hasMediaSource()) return false;
+    return this._pendingPlay || (this._autoplay && !this._hasEverPlayed);
+  }
+
   private hasMediaSource(): boolean {
     return (
       !!this._src ||
@@ -11788,7 +11819,10 @@ export class MoviElement extends HTMLElement {
         z-index: 10 !important;
         display: flex;
         flex-direction: column;
-        padding: 4px 20px 12px;
+        /* Bottom inset is deliberately small: the bar is anchored to the
+           bottom edge, so this padding is the only thing lifting the row off
+           it. 12px left the controls floating noticeably above the frame. */
+        padding: 4px 20px 6px;
         background: var(--movi-bar-bg);
         color: var(--movi-controls-color);
         height: auto;
@@ -14557,7 +14591,7 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: 36px;
         }
         .movi-controls-bar {
-          padding: 2px 8px 8px;
+          padding: 2px 8px 4px;
         }
         .movi-buttons-row {
           gap: 4px;
@@ -18048,6 +18082,12 @@ export class MoviElement extends HTMLElement {
    */
   private async _startAutoplay(): Promise<void> {
     if (!this.player || !this._autoplay || this._isUnsupported) return;
+    // The viewer pressed pause while this was still loading — that press was a
+    // "don't start", so honour it instead of rolling the moment data lands.
+    if (this._startCancelled) {
+      Logger.info(TAG, "Autoplay cancelled — paused during load");
+      return;
+    }
     // Suppress the center play overlay through the startup window so the big
     // play icon doesn't flash before playback begins on its own.
     this._autoplayStarting = true;
@@ -19728,6 +19768,7 @@ export class MoviElement extends HTMLElement {
    */
   async play(): Promise<void> {
     if (this._isUnsupported) return;
+    this._startCancelled = false;
     // If a load is in flight, defer the play. initializePlayer() flushes
     // this once loading settles, matching HTMLMediaElement.play() semantics.
     if (this.isLoading) {
@@ -19755,9 +19796,16 @@ export class MoviElement extends HTMLElement {
     // Cancel any queued play() intent so a late load doesn't start playback
     // after the caller explicitly paused.
     this._pendingPlay = false;
+    // …and the AUTOPLAY intent, which doesn't go through _pendingPlay: it is
+    // fired straight at the player once loading settles. Without this, pausing
+    // while the spinner is up did nothing at all — the press was swallowed and
+    // the video started by itself the moment the data arrived.
+    this._startCancelled = true;
+    this._autoplayStarting = false;
     if (this.player && !this.isLoading && !this._isUnsupported) {
       this.player.pause();
     }
+    this.updatePlayPauseIcon();
   }
 
   /**
@@ -20208,7 +20256,8 @@ export class MoviElement extends HTMLElement {
     // stays true through those interruptions. (The centre icon keeps using
     // the raw isPlaying above — that's the resume affordance, not a state
     // indicator, and has its own flicker handling.)
-    const isPlayingIntended = this.player?.isPlaybackIntended() ?? isPlaying;
+    const isPlayingIntended =
+      (this.player?.isPlaybackIntended() ?? isPlaying) || this.isStartPending();
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement;
@@ -21545,6 +21594,23 @@ export class MoviElement extends HTMLElement {
         if (el.tagName === "BUTTON") (el as HTMLButtonElement).disabled = false;
         return;
       }
+      // Play/pause stays live while a source is LOADING. Pausing before
+      // playback has started is a real intent — "don't start" — and with the
+      // button dead the press was swallowed and the video rolled by itself the
+      // moment the data arrived. Only when there's no media at all does it go
+      // dark with the rest: nothing to start, nothing to stop.
+      if (
+        isInitial &&
+        !isUnsupported &&
+        this.hasMediaSource() &&
+        el.classList.contains("movi-play-pause")
+      ) {
+        el.style.opacity = "1";
+        el.style.pointerEvents = "auto";
+        if (el.tagName === "BUTTON") (el as HTMLButtonElement).disabled = false;
+        return;
+      }
+
       if (isUnsupported || isInitial) {
         // Completely hide center play button in error state
         if (el.classList.contains("movi-center-play-pause")) {
