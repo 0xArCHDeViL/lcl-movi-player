@@ -6714,6 +6714,9 @@ export class MoviElement extends HTMLElement {
           }
         });
       });
+      // A track change reaches here from every path - the keyboard, the
+    // panel, a host call - so this is where an open menu learns about it.
+    this.refreshOpenSettingsSurfaces();
   }
 
   /*
@@ -9559,6 +9562,9 @@ export class MoviElement extends HTMLElement {
           }
         });
       });
+      // A track change reaches here from every path - the keyboard, the
+    // panel, a host call - so this is where an open menu learns about it.
+    this.refreshOpenSettingsSurfaces();
   }
 
   /**
@@ -11296,9 +11302,22 @@ export class MoviElement extends HTMLElement {
    * Called from the per-setting UI updaters, so every path that changes a
    * setting goes through it without each one having to remember.
    */
+  private _refreshingSurfaces = false;
   private refreshOpenSettingsSurfaces(): void {
     const sr = this.shadowRoot;
     if (!sr) return;
+    // The track menus call this, and this calls them back when their list is
+    // the open page — guard the loop rather than special-casing the callers.
+    if (this._refreshingSurfaces) return;
+    this._refreshingSurfaces = true;
+    try {
+      this.doRefreshOpenSettingsSurfaces(sr);
+    } finally {
+      this._refreshingSurfaces = false;
+    }
+  }
+
+  private doRefreshOpenSettingsSurfaces(sr: ShadowRoot): void {
     const menu = sr.querySelector(".movi-settings-menu") as HTMLElement | null;
     if (menu && this.isBottomMenuOpen(menu)) {
       if (this._settingsPage) {
