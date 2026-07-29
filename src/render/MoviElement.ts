@@ -1597,8 +1597,13 @@ export class MoviElement extends HTMLElement {
     // movi-gear-visible class is toggled in show/hideControls).
     const gearBtn = document.createElement("button");
     gearBtn.className = "movi-btn movi-gear-btn";
-    gearBtn.setAttribute("aria-label", "Settings");
-    gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    // Not a gear: the bar now has one of those, and two gears on screen ask the
+    // viewer to guess which is which. This one opens the context menu - the
+    // long list of everything, including the items that never had a button - so
+    // it takes the "more" glyph that already means exactly that.
+    gearBtn.setAttribute("aria-label", "More options");
+    gearBtn.setAttribute("title", "More options");
+    gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
     gearBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       // Open the context menu via a synthetic contextmenu event; the flag lets
@@ -7516,6 +7521,17 @@ export class MoviElement extends HTMLElement {
    * other players, so it needs no explaining.
    */
   private _renderGearBadge(): void {
+    // A plain single source never goes through the quality menu, so nothing
+    // ever set a badge for it - but "HD" on a 1080p file is true regardless of
+    // whether there is a ladder to pick from.
+    if (!this._qualityBadge) {
+      const v = this.player
+        ?.getMediaInfo?.()
+        ?.tracks?.find((t) => t.type === "video");
+      if (v?.height) {
+        this._qualityBadge = this._heightBadge(v.height, v.width || 0);
+      }
+    }
     // Same gate as the panel row - the badge must not claim HDR before the
     // bar's own logic has said the source has it.
     const hdrContainer = this.shadowRoot?.querySelector(
@@ -10553,6 +10569,15 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** Resolution of the only rung there is, e.g. "1080p" - shown as a dead row
+   *  when there is nothing to choose between. */
+  private singleQualityLabel(): string {
+    const only = this._videoQualities.length === 1 ? this._videoQualities[0] : null;
+    if (only?.label) return only.label;
+    const v = this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video");
+    return v?.height ? `${v.height}p` : "";
+  }
+
   private buildSettingsRoot(): void {
     const root = this.shadowRoot?.querySelector(
       ".movi-settings-root",
@@ -10579,7 +10604,20 @@ export class MoviElement extends HTMLElement {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
     }
-    page("quality", "Quality", ".movi-quality-container", ".movi-quality-item");
+    if (this.settingsRowAvailable(".movi-quality-container", ".movi-quality-item")) {
+      page("quality", "Quality", ".movi-quality-container", ".movi-quality-item");
+    } else {
+      // One rung only (a plain file, a single <source>). The row still belongs:
+      // "what am I watching" is the question people open this panel with, and
+      // an absent row reads as "the player doesn't know". It just doesn't
+      // pretend to be a menu - no chevron, no hover, not clickable.
+      const label = this.singleQualityLabel();
+      if (label) {
+        rows.push(
+          `<div class="movi-settings-row is-static" aria-disabled="true"><span class="movi-settings-row-label">Quality</span><span class="movi-settings-row-value">${label}</span></div>`,
+        );
+      }
+    }
     rows.push(
       `<button type="button" class="movi-settings-row" data-page="speed"><span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${this.settingsRowValue("speed")}</span>${chevron}</button>`,
     );
@@ -10719,6 +10757,30 @@ export class MoviElement extends HTMLElement {
     this.showAspectOsd(fit);
   }
 
+  /**
+   * Keep the panel inside the player.
+   *
+   * It hangs off the gear, and the gear is not at the right edge (PiP and
+   * fullscreen sit beyond it), so on a phone the panel's own width ran past the
+   * left edge of the frame and got clipped. CSS can't fix that: the offset
+   * needed depends on where the gear happens to sit in the row. So measure once
+   * on open and nudge it back, capping the width to the player first.
+   */
+  private clampSettingsPanel(menu: HTMLElement): void {
+    const host = this.getBoundingClientRect();
+    if (!host.width) return;
+    menu.style.maxWidth = `${Math.max(200, Math.round(host.width - 16))}px`;
+    menu.style.right = "0px";
+    const rect = menu.getBoundingClientRect();
+    const spillLeft = host.left + 8 - rect.left;
+    if (spillLeft > 0) {
+      // Negative `right` pushes it back towards the player's right edge, but
+      // never past it.
+      const room = Math.max(0, host.right - 8 - rect.right);
+      menu.style.right = `${-Math.min(spillLeft, room)}px`;
+    }
+  }
+
   private setupSettingsPanel(shadowRoot: ShadowRoot): void {
     const btn = shadowRoot.querySelector(
       ".movi-settings-btn",
@@ -10751,12 +10813,15 @@ export class MoviElement extends HTMLElement {
       if (open) {
         this.setBottomMenuOpen(menu, false);
         this.closeSettingsPage();
+        menu.style.right = "";
+        menu.style.maxWidth = "";
         return;
       }
       this.closeAllBottomMenus(".movi-settings-menu");
       this.closeSettingsPage();
       this.buildSettingsRoot();
       this.setBottomMenuOpen(menu, true);
+      this.clampSettingsPanel(menu);
     });
 
     menu.addEventListener("click", (e) => {
@@ -10767,6 +10832,10 @@ export class MoviElement extends HTMLElement {
         return;
       }
       const row = target.closest(".movi-settings-row") as HTMLElement | null;
+      if (row?.classList.contains("is-static")) {
+        e.stopPropagation();
+        return;
+      }
       if (row) {
         e.stopPropagation();
         const page = row.dataset.page;
@@ -16080,6 +16149,11 @@ export class MoviElement extends HTMLElement {
            the few pixels they save. */
         min-width: 268px;
         max-width: 340px;
+        /* Capped against the PLAYER's own height (--movi-player-height is set
+           by JS on connect/resize), minus a controls-bar reserve, so a tall
+           list scrolls inside the panel instead of being clipped by the frame.
+           Same cap the track menus use. */
+        max-height: min(calc(var(--movi-player-height, 70vh) - 96px), 460px);
         padding: 8px;
         border-radius: 10px;
         background: var(--movi-glass-bg);
@@ -16116,6 +16190,13 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-row:hover {
         background: rgba(255, 255, 255, 0.1);
+      }
+      /* Informational, not interactive: same type, quieter, no affordances. */
+      .movi-settings-row.is-static,
+      .movi-settings-row.is-static:hover {
+        background: transparent;
+        cursor: default;
+        opacity: 0.62;
       }
       .movi-settings-row-label {
         flex: 1 1 auto;
