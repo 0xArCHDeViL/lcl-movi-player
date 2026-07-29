@@ -10676,6 +10676,23 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!btn || !menu) return;
 
+    // Mirror the menu's open state onto the container. An observer rather than
+    // a line in each handler because the panel is also closed from paths that
+    // never touch this file's code — closeAllBottomMenus, a click elsewhere in
+    // the player — and a gear left mid-turn would be worse than no turn at all.
+    const container = btn.closest(
+      ".movi-settings-container",
+    ) as HTMLElement | null;
+    if (container) {
+      const sync = () =>
+        container.classList.toggle("is-open", menu.classList.contains("is-open"));
+      new MutationObserver(sync).observe(menu, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+      sync();
+    }
+
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const open = this.isBottomMenuOpen(menu);
@@ -15964,8 +15981,11 @@ export class MoviElement extends HTMLElement {
         letter-spacing: 0.02em;
       }
       /* The gear turns with the panel, the way a control that opens something
-         should acknowledge it. */
-      .movi-settings-container:has(.movi-settings-menu.is-open) .movi-settings-btn svg {
+         should acknowledge it. Driven by a class this element sets, NOT by
+         :has(.is-open) — Safari doesn't reliably re-evaluate :has() when the
+         class changes on the descendant, so the turn was skipped on open and
+         then unwound on close. */
+      .movi-settings-container.is-open .movi-settings-btn svg {
         transform: rotate(30deg);
       }
       .movi-settings-btn svg {
