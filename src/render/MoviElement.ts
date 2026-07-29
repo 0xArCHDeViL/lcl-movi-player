@@ -7508,9 +7508,35 @@ export class MoviElement extends HTMLElement {
    * user can see the active quality tier at a glance — same convention
    * as YouTube's player.
    */
-  private _updateQualityBtnBadge(badge: string): void {
-    // Two badges: the old quality button's (kept in the DOM but no longer on
-    // the bar) and the settings gear's, which is the one anybody sees now.
+  /** Last quality badge ("HD", "4K", ...) so the gear can be re-rendered when
+   *  HDR flips without waiting for the next quality change. */
+  private _qualityBadge = "";
+
+  /**
+   * The gear's badge, composed.
+   *
+   * HDR is the headline: on an HDR source it REPLACES "HD" (the resolution is
+   * implied - nothing below HD ships HDR) and rides ALONGSIDE 4K/8K, where the
+   * resolution is the bigger claim. That is the shape people already read on
+   * other players, so it needs no explaining.
+   */
+  private _renderGearBadge(): void {
+    const hdrContainer = this.shadowRoot?.querySelector(
+      ".movi-hdr-container",
+    ) as HTMLElement | null;
+    const hdrAvailable =
+      !!hdrContainer &&
+      hdrContainer.style.display !== "none" &&
+      this.isControlAvailable("hdr");
+    const hdrOn = hdrAvailable && this._hdr;
+    const quality = this._qualityBadge;
+    let text = quality;
+    if (hdrOn) {
+      text =
+        !quality || quality.toUpperCase() === "HD" ? "HDR" : `${quality} HDR`;
+    }
+    // Colour keys off the resolution tier, or HDR when that is all there is.
+    const tone = (quality || "hdr").toLowerCase();
     const targets = [
       [".movi-quality-btn-badge", "movi-quality-btn-badge"],
       [".movi-settings-btn-badge", "movi-settings-btn-badge"],
@@ -7518,15 +7544,20 @@ export class MoviElement extends HTMLElement {
     for (const [sel, base] of targets) {
       const el = this.shadowRoot?.querySelector(sel) as HTMLElement | null;
       if (!el) continue;
-      if (badge) {
-        el.textContent = badge;
-        el.className = `${base} movi-quality-badge-${badge.toLowerCase()}`;
+      if (text) {
+        el.textContent = text;
+        el.className = `${base} movi-quality-badge-${tone}${hdrOn ? " movi-quality-badge-hdr" : ""}`;
         el.style.display = "inline-flex";
       } else {
         el.textContent = "";
         el.style.display = "none";
       }
     }
+  }
+
+  private _updateQualityBtnBadge(badge: string): void {
+    this._qualityBadge = badge || "";
+    this._renderGearBadge();
   }
 
   /**
@@ -15158,6 +15189,21 @@ export class MoviElement extends HTMLElement {
         .movi-controls-right {
           gap: 16px;
         }
+        .movi-settings-menu {
+          min-width: 290px;
+        }
+        .movi-settings-row,
+        .movi-settings-choice,
+        .movi-settings-page-title,
+        .movi-settings-page-body .movi-quality-item,
+        .movi-settings-page-body .movi-speed-item,
+        .movi-settings-page-body .movi-audio-track-item,
+        .movi-settings-page-body .movi-subtitle-track-item {
+          font-size: 15.5px;
+        }
+        .movi-settings-row-value {
+          font-size: 14.5px;
+        }
       }
       
       /* Touch device optimizations */
@@ -15943,6 +15989,13 @@ export class MoviElement extends HTMLElement {
         color: rgba(255, 255, 255, 0.95);
       }
 
+      /* HDR is a claim about the picture, not a resolution tier - give it its
+         own colour so "4K HDR" does not read as just another size label. */
+      .movi-quality-badge-hdr {
+        background: linear-gradient(90deg, #f5a623, #e94b8c);
+        color: #fff;
+      }
+
       /* Settings panel — the gear's list. Everything that used to be its own
          button on the bar lives here now; the old buttons stay in the DOM
          (their menus are what this panel borrows) but are no longer shown. */
@@ -15966,6 +16019,12 @@ export class MoviElement extends HTMLElement {
         position: relative;
         display: flex;
         align-items: center;
+      }
+      /* HDR gets the gradient; anything else keeps the red chip. Two classes
+         so it beats the plain badge rule regardless of sheet order. */
+      .movi-settings-btn-badge.movi-quality-badge-hdr {
+        background: linear-gradient(90deg, #f5a623, #e94b8c);
+        color: #fff;
       }
       .movi-settings-btn-badge {
         position: absolute;
@@ -15996,9 +16055,12 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         bottom: calc(100% + 12px);
         right: 0;
-        min-width: 240px;
-        max-width: 320px;
-        padding: 6px;
+        /* Sized for reading, not for fitting: a settings list is scanned once
+           and dismissed, so cramped 13px rows in a 240px column cost more than
+           the few pixels they save. */
+        min-width: 268px;
+        max-width: 340px;
+        padding: 8px;
         border-radius: 10px;
         background: var(--movi-glass-bg);
         border: 1px solid var(--movi-glass-border);
@@ -16021,13 +16083,14 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         gap: 12px;
         width: 100%;
-        padding: 9px 10px;
+        padding: 11px 12px;
         border: none;
-        border-radius: 6px;
+        border-radius: 7px;
         background: transparent;
         color: inherit;
         font: inherit;
-        font-size: 13px;
+        font-size: 14.5px;
+        line-height: 1.35;
         text-align: left;
         cursor: pointer;
       }
@@ -16043,8 +16106,8 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-row-value {
         flex: 0 0 auto;
-        color: var(--movi-text-mute, rgba(255, 255, 255, 0.6));
-        font-size: 12px;
+        color: var(--movi-text-mute, rgba(255, 255, 255, 0.62));
+        font-size: 13.5px;
         max-width: 45%;
         white-space: nowrap;
         overflow: hidden;
@@ -16052,9 +16115,9 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-chevron {
         flex: 0 0 auto;
-        width: 14px;
-        height: 14px;
-        opacity: 0.5;
+        width: 15px;
+        height: 15px;
+        opacity: 0.55;
       }
       .movi-settings-divider {
         height: 1px;
@@ -16094,13 +16157,13 @@ export class MoviElement extends HTMLElement {
         justify-content: space-between;
         gap: 12px;
         width: 100%;
-        padding: 9px 10px;
+        padding: 11px 12px;
         border: none;
-        border-radius: 6px;
+        border-radius: 7px;
         background: transparent;
         color: inherit;
         font: inherit;
-        font-size: 13px;
+        font-size: 14.5px;
         text-align: left;
         cursor: pointer;
       }
@@ -16119,10 +16182,10 @@ export class MoviElement extends HTMLElement {
       .movi-settings-back {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         width: 100%;
-        padding: 8px 10px;
-        margin-bottom: 4px;
+        padding: 10px 12px;
+        margin-bottom: 6px;
         border: none;
         border-bottom: 1px solid var(--movi-glass-border);
         border-radius: 6px 6px 0 0;
@@ -16136,8 +16199,22 @@ export class MoviElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.1);
       }
       .movi-settings-back svg {
-        width: 16px;
-        height: 16px;
+        width: 17px;
+        height: 17px;
+      }
+      .movi-settings-page-title {
+        font-size: 14.5px;
+        font-weight: 600;
+      }
+      /* The borrowed lists were sized for their own tight dropdowns; inside the
+         panel they sit next to these rows and have to match them. */
+      .movi-settings-page-body .movi-quality-item,
+      .movi-settings-page-body .movi-speed-item,
+      .movi-settings-page-body .movi-audio-track-item,
+      .movi-settings-page-body .movi-subtitle-track-item {
+        font-size: 14.5px;
+        padding: 11px 12px;
+        border-radius: 7px;
       }
       /* Borrowed lists arrive with their own menu's padding assumptions. */
       .movi-settings-page-body .movi-quality-list,
@@ -25321,6 +25398,9 @@ export class MoviElement extends HTMLElement {
     }
 
     this.updateHDRUI();
+    // The gear's badge carries HDR, so it has to follow the toggle rather than
+    // wait for the next quality change.
+    this._renderGearBadge();
 
     // Pass to player
     if (this.player) {
@@ -25669,6 +25749,9 @@ export class MoviElement extends HTMLElement {
       ) as HTMLElement;
       if (hdrBtn) hdrBtn.style.display = "none";
     }
+
+    // Availability just changed — the badge reads it, so re-render.
+    this._renderGearBadge();
 
     Logger.debug(
       TAG,
