@@ -7553,13 +7553,20 @@ export class MoviElement extends HTMLElement {
     // A plain single source never goes through the quality menu, so nothing
     // ever set a badge for it - but "HD" on a 1080p file is true regardless of
     // whether there is a ladder to pick from.
-    if (!this._qualityBadge) {
+    //
+    // With no ladder the MEDIA is the authority, not whatever was stored: a
+    // stored value can only have come from a previous file, and that is how a
+    // 4K video's chip ended up over a 1080p one.
+    const noLadder = this._videoQualities.length <= 1;
+    if (noLadder || !this._qualityBadge) {
       const v = this.player
         ?.getMediaInfo?.()
         ?.tracks?.find((t) => t.type === "video");
-      if (v?.height) {
-        this._qualityBadge = this._heightBadge(v.height, v.width || 0);
-      }
+      this._qualityBadge = v?.height
+        ? this._heightBadge(v.height, v.width || 0)
+        : noLadder
+          ? ""
+          : this._qualityBadge;
     }
     // Same gate as the panel row - the badge must not claim HDR before the
     // bar's own logic has said the source has it.
@@ -20716,6 +20723,9 @@ export class MoviElement extends HTMLElement {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+    // …and the gear's quality badge, which belongs to the file that set it.
+    // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
+    this._qualityBadge = "";
 
     // Clear the hardware-decode ceiling on a genuinely new load so the NEXT
     // source (a reused-element host swapping videos; movi-tube rebuilds the whole
