@@ -5992,6 +5992,13 @@ export class MoviElement extends HTMLElement {
         pipWindow.resizeTo(Math.round(pipWidth) + chromeW, Math.round(pipHeight) + chromeH);
       } catch {};
 
+      // Carry the theme across. The PiP window is a SEPARATE document, so the
+      // --movi-* variables living on the host element in this one mean nothing
+      // there - every var() in the CSS below was silently falling through to its
+      // hardcoded fallback, which is why a themed player's PiP bar stayed the
+      // default violet. Resolve them here and set them on that document.
+      this.syncPipTheme(pipWindow);
+
       // Style the PiP window
       const style = pipWindow.document.createElement("style");
       style.textContent = `
@@ -11238,6 +11245,22 @@ export class MoviElement extends HTMLElement {
    * isn't exactly two values is taken whole as the primary — one odd-spaced
    * colour must keep working, and three is a typo, not a theme.
    */
+  /** Copy the theme variables the PiP stylesheet reads into the PiP document. */
+  private syncPipTheme(win: Window | null = this._pipWindow): void {
+    const root = win?.document?.documentElement;
+    if (!root) return;
+    const own = getComputedStyle(this);
+    for (const name of [
+      "--movi-primary",
+      "--movi-secondary",
+      "--movi-chrome-fg",
+      "--movi-controls-color",
+    ]) {
+      const value = own.getPropertyValue(name).trim();
+      if (value) root.style.setProperty(name, value);
+    }
+  }
+
   private applyThemeColor(raw: string | null): void {
     this.style.removeProperty("--movi-primary");
     this.style.removeProperty("--movi-secondary");
@@ -11250,6 +11273,8 @@ export class MoviElement extends HTMLElement {
 
     this.style.setProperty("--movi-primary", primary);
     if (secondary) this.style.setProperty("--movi-secondary", secondary);
+    // A theme change while PiP is open has to reach that document too.
+    this.syncPipTheme();
   }
 
   /** Split on whitespace that sits outside parentheses, so `rgb(255 0 51)` and
