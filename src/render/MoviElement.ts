@@ -11822,7 +11822,7 @@ export class MoviElement extends HTMLElement {
         /* Bottom inset is deliberately small: the bar is anchored to the
            bottom edge, so this padding is the only thing lifting the row off
            it. 12px left the controls floating noticeably above the frame. */
-        padding: 4px 20px 6px;
+        padding: 4px 20px 5px;
         background: var(--movi-bar-bg);
         color: var(--movi-controls-color);
         height: auto;
@@ -11834,7 +11834,10 @@ export class MoviElement extends HTMLElement {
 
       .movi-progress-container {
         width: 100%;
-        padding: 10px 0 15px;
+        /* 15px below the bar left a visible band between the seek bar and the
+           button row; compact players already used 2px. Sit it closer to the
+           row so the whole block reads as one bar. */
+        padding: 10px 0 10px;
         display: flex;
         align-items: center;
         position: relative;
@@ -12111,7 +12114,10 @@ export class MoviElement extends HTMLElement {
 
       .movi-progress-container {
         width: 100%;
-        padding: 10px 0 15px;
+        /* 15px below the bar left a visible band between the seek bar and the
+           button row; compact players already used 2px. Sit it closer to the
+           row so the whole block reads as one bar. */
+        padding: 10px 0 10px;
         display: flex;
         align-items: center;
         position: relative;
@@ -14298,7 +14304,7 @@ export class MoviElement extends HTMLElement {
         .movi-progress-container {
           /* Nudge the seek bar down a little on compact players so it isn't
              hugging the video edge. */
-          padding: 14px 0 2px;
+          padding: 14px 0 4px;
         }
 
         .movi-progress-bar {
@@ -14555,7 +14561,10 @@ export class MoviElement extends HTMLElement {
       /* Tablet-sized players (721px to 1024px) */
       @container movi-host (min-width: 721px) and (max-width: 1024px) {
         .movi-controls-bar {
-          padding: 14px 18px;
+          /* Bottom inset stays small at every size — see the base rule. These
+             per-breakpoint paddings were symmetric, so they quietly restored
+             the 14/16px lift the base rule had just removed. */
+          padding: 14px 18px 5px;
         }
 
         .movi-time {
@@ -14591,7 +14600,7 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: 36px;
         }
         .movi-controls-bar {
-          padding: 2px 8px 4px;
+          padding: 2px 8px 5px;
         }
         .movi-buttons-row {
           gap: 4px;
@@ -14611,7 +14620,7 @@ export class MoviElement extends HTMLElement {
           font-size: 11px;
         }
         .movi-progress-container {
-          padding: 14px 0 6px;
+          padding: 14px 0 7px;
         }
       }
 
@@ -14658,7 +14667,7 @@ export class MoviElement extends HTMLElement {
       /* Large players (1025px and above) */
       @container movi-host (min-width: 1025px) {
         .movi-controls-bar {
-          padding: 16px 24px;
+          padding: 16px 24px 7px;
         }
       }
       
@@ -16085,7 +16094,7 @@ export class MoviElement extends HTMLElement {
           gap: 4px !important;
         }
         .movi-controls-bar {
-          padding: 4px 8px 6px !important;
+          padding: 4px 8px 5px !important;
         }
         .movi-time {
           font-size: 10px !important;
