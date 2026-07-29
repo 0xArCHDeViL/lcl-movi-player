@@ -10403,10 +10403,11 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  /** How long the centre icon stays up after a play/pause. Long enough to
-   *  register as feedback, short enough that it's gone before you look for it
-   *  — the same ~half second YouTube and movi-tube's Shorts overlay use. */
-  private static readonly CENTER_FLASH_MS = 420;
+  /** How long the centre icon stays up after a play/pause: a short pop, then it
+   *  HOLDS for a beat before fading. The pop alone was gone by the time a
+   *  glance arrived — you'd toggle, look at the middle of the picture, and find
+   *  nothing there. The hold is what makes it readable as "paused". */
+  private static readonly CENTER_FLASH_MS = 800;
   private _centerFlashAnim: Animation | null = null;
   private _centerFlashTimer: number | null = null;
 
@@ -10470,22 +10471,40 @@ export class MoviElement extends HTMLElement {
     // Feedback must never swallow a click meant for the video underneath.
     btn.style.pointerEvents = "none";
 
-    // Full opacity on the first frame, then one ease-out to bigger-and-gone.
-    // visibility rides along because the button's resting state is hidden.
+    // Full opacity on the first frame: pop, hold, then fade out. visibility
+    // rides along because the button's resting state is hidden.
     //
-    // Scale is tuned against the button's 96px resting size: it starts a
-    // touch under it and ends a touch over (roughly 79px → 104px). Ending
-    // well past that (the old 1.22) read as a second, oversized button;
-    // staying entirely under it read as a shrunken one. Landing either side
-    // of the resting size keeps it recognisably the same disc, popping.
+    // Scale is tuned against the button's resting size: it starts a touch under
+    // it, settles ON it, and drifts a touch over as it goes. Ending well past
+    // that (the old 1.22) read as a second, oversized button; staying entirely
+    // under it read as a shrunken one.
     const anim = btn.animate(
       [
         {
+          offset: 0,
           visibility: "visible",
           opacity: 1,
           transform: "translate(-50%, -50%) scale(0.82)",
+          easing: "ease-out",
+        },
+        // Pop settles here (~220ms) and then nothing moves…
+        {
+          offset: 0.25,
+          visibility: "visible",
+          opacity: 1,
+          transform: "translate(-50%, -50%) scale(1)",
+        },
+        // …for a third of a second, which is enough to read without the icon
+        // starting to feel like it is sitting there.
+        {
+          offset: 0.68,
+          visibility: "visible",
+          opacity: 1,
+          transform: "translate(-50%, -50%) scale(1)",
+          easing: "ease-out",
         },
         {
+          offset: 1,
           visibility: "visible",
           opacity: 0,
           transform: "translate(-50%, -50%) scale(1.08)",
@@ -10493,7 +10512,6 @@ export class MoviElement extends HTMLElement {
       ],
       {
         duration: MoviElement.CENTER_FLASH_MS,
-        easing: "ease-out",
         // No fill: when it ends the element simply returns to its resting
         // style (hidden), so there is nothing to clean up and no chance of a
         // stuck frame if the finish handler never runs.
