@@ -628,6 +628,19 @@
           ]
         },
         {
+          "name": "chapters",
+          "description": {
+            "kind": "markdown",
+            "value": "Chapters that aren't in the media file. The player already reads chapter atoms out of MKV/MP4 containers; this is for the sources that keep them somewhere else — YouTube in the watch page, a CMS in its own database."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#chapters"
+            }
+          ]
+        },
+        {
           "name": "resume",
           "description": {
             "kind": "markdown",

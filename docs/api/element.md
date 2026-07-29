@@ -363,6 +363,29 @@ The placement token only hides the bar. The title still resolves from metadata, 
 
 ---
 
+#### `chapters`
+
+Chapters that aren't in the media file. The player already reads chapter atoms out of MKV/MP4 containers; this is for the sources that keep them somewhere else — YouTube in the watch page, a CMS in its own database.
+
+```html
+<movi-player chapters='[{"title":"Intro","start":0},{"title":"Setup","start":42}]'></movi-player>
+```
+
+```js
+player.chapters = [
+  { title: 'Intro', start: 0 },
+  { title: 'Setup', start: 42 },
+  { title: 'Wrap up', start: 610 },
+];
+player.chapters = null; // back to whatever the container declares
+```
+
+**Value:** JSON array (attribute) or the array itself (property). `start` is in seconds; `end` is optional — a chapter runs until the next one starts, and the last to the end of the media.
+
+Feeds everything that reads chapters: the segmented progress bar, the chapter name in the seek preview, and the chapter timeline panel.
+
+---
+
 ### Advanced Attributes
 
 #### `renderer`

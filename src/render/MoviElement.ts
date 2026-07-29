@@ -638,6 +638,7 @@ export class MoviElement extends HTMLElement {
       "title",
       "showtitle",
       "titlemode",
+      "chapters",
       "resume",
       "stablevolume",
       "encrypted",
@@ -17305,6 +17306,9 @@ export class MoviElement extends HTMLElement {
       case "titlemode":
         this.applyTitleMode(newValue);
         break;
+      case "chapters":
+        this.applyChapters(newValue);
+        break;
       case "resume":
         this._resume = newValue !== null;
         break;
@@ -18564,6 +18568,9 @@ export class MoviElement extends HTMLElement {
       if (this._subtitleRenderer) {
         this.player.setSubtitleRenderer(this._subtitleRenderer);
       }
+      // Same for host-supplied chapters: the element outlives the player, and a
+      // fresh one only knows about the container's own.
+      if (this._chapters) this.player.setChapters(this._chapters);
 
       // Bind device enumeration + apply any pending `audiooutput` selection
       // now that the audio engine exists.
@@ -22311,6 +22318,8 @@ export class MoviElement extends HTMLElement {
         ...(this._headers && { headers: this._headers }),
       });
 
+      if (this._chapters) this.player.setChapters(this._chapters);
+
       // Bind device enumeration + apply any pending `audiooutput` selection.
       this.setupAudioOutputs();
 
@@ -24074,6 +24083,72 @@ export class MoviElement extends HTMLElement {
    * decided here, since the pseudo and host-driven fullscreen routes aren't
    * visible to a media query.
    */
+  /** Chapters given by the host, kept so a source/player rebuild can re-apply
+   *  them — the player instance is recreated on quality switches and recovery,
+   *  and a fresh one only knows about the container's own chapters. */
+  private _chapters:
+    | Array<{ title: string; start: number; end?: number }>
+    | null = null;
+
+  /**
+   * Chapters from outside the media file.
+   *
+   *   el.chapters = [{ title: "Intro", start: 0 }, { title: "Setup", start: 42 }]
+   *   <movi-player chapters='[{"title":"Intro","start":0}]'>
+   *
+   * Most streaming sources keep chapters nowhere near the bytes (YouTube has
+   * them in the watch page), so the markers, the seek-preview label and the
+   * chapter timeline would otherwise only ever work for local MKV/MP4 files
+   * that carry chapter atoms. `end` is optional — a chapter runs to the next
+   * one, and the last to the end of the media.
+   *
+   * Setting null/[] drops back to whatever the container declares.
+   */
+  get chapters(): Array<{ title: string; start: number; end?: number }> | null {
+    return this._chapters;
+  }
+  set chapters(
+    value:
+      | Array<{ title: string; start: number; end?: number }>
+      | string
+      | null,
+  ) {
+    if (typeof value === "string") {
+      this.applyChapters(value);
+      return;
+    }
+    this._chapters = value && value.length ? value : null;
+    this.player?.setChapters(this._chapters);
+    this.refreshChapterUi();
+  }
+
+  /** Attribute form: a JSON array. Bad JSON clears rather than half-applies. */
+  private applyChapters(raw: string | null): void {
+    const trimmed = raw?.trim();
+    if (!trimmed) {
+      this._chapters = null;
+      this.player?.setChapters(null);
+      this.refreshChapterUi();
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      this.chapters = Array.isArray(parsed) ? parsed : null;
+    } catch {
+      Logger.warn(TAG, `chapters: ignoring unparseable value ${trimmed}`);
+      this.chapters = null;
+    }
+  }
+
+  /** Repaint everything that reads chapters. The timeline panel is torn down
+   *  rather than patched: it fills incrementally from _timelineNextIndex, so a
+   *  changed list would append onto the previous one. It rebuilds from the new
+   *  chapters the next time it's opened. */
+  private refreshChapterUi(): void {
+    this.renderChapterMarkers();
+    this.resetTimeline();
+  }
+
   private applyTitleMode(raw: string | null): void {
     const tokens = (raw ?? "")
       .toLowerCase()

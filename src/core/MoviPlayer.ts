@@ -5968,11 +5968,68 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
 
+  /** Chapters supplied by the host, which win over anything in the container.
+   *  Null = none supplied, so the container's own chapters are used. */
+  private _externalChapters:
+    | Array<{ title: string; start: number; end?: number }>
+    | null = null;
+
   /**
-   * Get chapters from the media (empty array if none)
+   * Get chapters: the host's list if it supplied one, otherwise the media's
+   * own (MKV/MP4 chapter atoms, read by the demuxer).
+   *
+   * Ends are filled in HERE rather than when the list is set, because a host
+   * typically has its chapters before the media is open — at which point the
+   * duration is still 0 and the last chapter would be left ending where it
+   * starts, i.e. zero-length.
    */
   getChapters(): Array<{ title: string; start: number; end: number }> {
-    return this.mediaInfo?.chapters ?? [];
+    const own = this._externalChapters;
+    if (!own) return this.mediaInfo?.chapters ?? [];
+    const duration = this.getDuration();
+    return own.map((c, i) => ({
+      title: c.title,
+      start: c.start,
+      end:
+        Number.isFinite(c.end as number) && (c.end as number) > c.start
+          ? (c.end as number)
+          : i < own.length - 1
+            ? own[i + 1].start
+            : duration > c.start
+              ? duration
+              : c.start,
+    }));
+  }
+
+  /**
+   * Supply chapters from outside the media file. Most streaming sources carry
+   * them nowhere near the bytes — YouTube keeps them in the watch page, a CMS
+   * in its own database — so a player that can only read container chapters
+   * can't show them for the sources that use them most.
+   *
+   * Ends are derived where omitted: a chapter runs until the next one starts,
+   * and the last to the end of the media. Pass null (or an empty list) to drop
+   * back to the container's own chapters.
+   */
+  setChapters(
+    list:
+      | Array<{ title: string; start: number; end?: number }>
+      | null
+      | undefined,
+  ): void {
+    if (!list || list.length === 0) {
+      this._externalChapters = null;
+      return;
+    }
+    const sorted = list
+      .filter((c) => Number.isFinite(c.start) && c.start >= 0)
+      .map((c) => ({
+        title: String(c.title ?? ""),
+        start: Number(c.start),
+        end: c.end,
+      }))
+      .sort((a, b) => a.start - b.start);
+    this._externalChapters = sorted.length ? sorted : null;
   }
 
   resizeCanvas(width: number, height: number): void {

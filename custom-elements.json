@@ -187,6 +187,10 @@
               "description": "Decides where the title bar is allowed to appear, and whether it carries a back arrow. Space- or comma-separated tokens, in any order:"
             },
             {
+              "name": "chapters",
+              "description": "Chapters that aren't in the media file. The player already reads chapter atoms out of MKV/MP4 containers; this is for the sources that keep them somewhere else — YouTube in the watch page, a CMS in its own database."
+            },
+            {
               "name": "resume",
               "description": "Saves playback position to localStorage and shows a resume dialog on reload."
             },

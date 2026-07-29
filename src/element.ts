@@ -181,6 +181,10 @@ export interface MoviPlayerAttributes {
    *  `both` (default) / `fullscreen` / `windowed`, and `back` — scoped with
    *  `back-mobile`, `back-fullscreen` or `back-mobile-fullscreen`. */
   titlemode?: string;
+  /** Chapters from outside the media file, as a JSON array of
+   *  `{ title, start, end? }` (seconds). Use the `chapters` property to pass
+   *  the array directly. */
+  chapters?: string;
   /** Enable ±10s fast-seek controls. */
   fastseek?: boolean | "";
   /** Enable the double-tap-to-seek gesture. */
