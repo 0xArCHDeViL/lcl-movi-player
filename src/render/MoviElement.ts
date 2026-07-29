@@ -17841,6 +17841,19 @@ export class MoviElement extends HTMLElement {
         max-height: min(70vh, 460px) !important;
       }
 
+      /* Strip mode opens the panel BELOW the bar, so it should arrive from
+         above — the default rises from below, which is backwards here. And no
+         scale: with a top-right origin, scaling moves the panel's left edge
+         sideways, so closing read as the whole thing sliding right. A straight
+         fade + a few pixels of travel is what a menu hanging off a 56px strip
+         can afford. */
+      :host(.movi-audio-strip) .movi-settings-menu {
+        transform: translateY(-6px) !important;
+      }
+      :host(.movi-audio-strip) .movi-settings-menu.is-open {
+        transform: translateY(0) !important;
+      }
+
       /* The ::after gradient stripe rides on top of the progress fill,
          buffer, and chapter markers — chapter-marker has z-index:3, so
          bump this above it. Also brighter colour stops since the gentle
