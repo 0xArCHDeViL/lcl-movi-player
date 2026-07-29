@@ -1448,12 +1448,43 @@ export class MoviElement extends HTMLElement {
                 </svg>
               </button>
 
-              <button class="movi-btn movi-pip-btn" aria-label="Picture in Picture" style="display:none">
-                <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity="0.3"/>
-                </svg>
-              </button>
             </div>
+
+            <!-- Settings: the gear owns every playback setting now. The
+                 per-setting buttons below still exist and still do all the
+                 work — their menus are borrowed into this panel a page at a
+                 time — but only this one is on the bar. -->
+            <div class="movi-settings-container">
+              <button class="movi-btn movi-settings-btn" aria-label="Settings" title="Settings">
+                <svg class="movi-icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span class="movi-settings-btn-badge" style="display: none;"></span>
+              </button>
+              <div class="movi-settings-menu" style="display: none;">
+                <div class="movi-settings-root"></div>
+                <div class="movi-settings-page" style="display: none;">
+                  <button class="movi-settings-back" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                    <span class="movi-settings-page-title"></span>
+                  </button>
+                  <div class="movi-settings-page-body"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- PiP sits beside the gear, outside the mobile "more" tray: the
+                 two are the controls a viewer reaches for while watching, not
+                 settings to go hunting for. -->
+            <button class="movi-btn movi-pip-btn" aria-label="Picture in Picture" style="display:none">
+              <!-- Drawn to fill the 24x24 box like its neighbours. The old
+                   20x14 frame sat inside the box with room to spare, so at the
+                   same nominal size it read as a smaller button. -->
+              <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
+              </svg>
+            </button>
 
             <button class="movi-btn movi-more-btn" aria-label="More Settings">
               <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1768,6 +1799,7 @@ export class MoviElement extends HTMLElement {
 
     // Setup control handlers
     this.setupControlHandlers(shadowRoot);
+    this.setupSettingsPanel(shadowRoot);
   }
 
   private setupControlHandlers(shadowRoot: ShadowRoot): void {
@@ -7477,17 +7509,23 @@ export class MoviElement extends HTMLElement {
    * as YouTube's player.
    */
   private _updateQualityBtnBadge(badge: string): void {
-    const el = this.shadowRoot?.querySelector(
-      ".movi-quality-btn-badge",
-    ) as HTMLElement | null;
-    if (!el) return;
-    if (badge) {
-      el.textContent = badge;
-      el.className = `movi-quality-btn-badge movi-quality-badge-${badge.toLowerCase()}`;
-      el.style.display = "inline-flex";
-    } else {
-      el.textContent = "";
-      el.style.display = "none";
+    // Two badges: the old quality button's (kept in the DOM but no longer on
+    // the bar) and the settings gear's, which is the one anybody sees now.
+    const targets = [
+      [".movi-quality-btn-badge", "movi-quality-btn-badge"],
+      [".movi-settings-btn-badge", "movi-settings-btn-badge"],
+    ] as const;
+    for (const [sel, base] of targets) {
+      const el = this.shadowRoot?.querySelector(sel) as HTMLElement | null;
+      if (!el) continue;
+      if (badge) {
+        el.textContent = badge;
+        el.className = `${base} movi-quality-badge-${badge.toLowerCase()}`;
+        el.style.display = "inline-flex";
+      } else {
+        el.textContent = "";
+        el.style.display = "none";
+      }
     }
   }
 
@@ -9739,6 +9777,7 @@ export class MoviElement extends HTMLElement {
       ".movi-audio-track-menu",
       ".movi-subtitle-track-menu",
       ".movi-quality-menu",
+      ".movi-settings-menu",
     ];
     for (const sel of animatedSelectors) {
       if (sel === keep) continue;
@@ -10312,6 +10351,418 @@ export class MoviElement extends HTMLElement {
     this.setupSubmenuHover(item, submenu);
   }
 
+  /**
+   * The settings panel behind the gear.
+   *
+   * Every setting used to have its own button on the bar, which meant the row
+   * grew with each feature and a viewer had to know which icon hid what. One
+   * gear holding a list is what almost every player does, so it is what people
+   * reach for.
+   *
+   * The per-setting menus are NOT rebuilt here. Their markup, their population
+   * and their click handling all still live where they were; opening a page
+   * BORROWS the list node into the panel and closing puts it back. So the
+   * quality list the panel shows is the same element quality logic has always
+   * written to — nothing had to be duplicated or kept in sync.
+   */
+  private static readonly SETTINGS_PAGES: Record<
+    string,
+    { title: string; list: string; owner: string }
+  > = {
+    quality: {
+      title: "Quality",
+      list: ".movi-quality-list",
+      owner: ".movi-quality-menu",
+    },
+    speed: {
+      title: "Playback speed",
+      list: ".movi-speed-list",
+      owner: ".movi-speed-menu",
+    },
+    audio: {
+      title: "Audio track",
+      list: ".movi-audio-track-list",
+      owner: ".movi-audio-track-menu",
+    },
+    subtitles: {
+      title: "Subtitles",
+      list: ".movi-subtitle-track-list",
+      owner: ".movi-subtitle-track-menu",
+    },
+    // No list to borrow — the aspect choices only ever existed as a button
+    // that cycled through them, so this page renders its own.
+    aspect: { title: "Aspect", list: "", owner: "" },
+  };
+
+  private static readonly ASPECT_CHOICES: ReadonlyArray<
+    readonly [fit: string, label: string]
+  > = [
+    ["contain", "Fit"],
+    ["cover", "Fill"],
+    ["fill", "Stretch"],
+    ["zoom", "Zoom"],
+  ];
+
+  private _settingsPage: string | null = null;
+
+  /**
+   * Whether a row has anything to offer. Two independent signals, because
+   * either one alone lies: the owning container hides itself when a setting
+   * doesn't apply (no adaptive ladder), but a container that was never
+   * evaluated is simply visible-by-default — and a menu can be "visible" while
+   * holding nothing but its own "Off" entry. A row that opens onto one choice,
+   * or none, is worse than no row: it reads as a broken feature.
+   */
+  private settingsRowAvailable(container: string, item: string): boolean {
+    const sr = this.shadowRoot;
+    if (!sr) return false;
+    const el = sr.querySelector(container) as HTMLElement | null;
+    if (!el || el.style.display === "none") return false;
+    return sr.querySelectorAll(item).length > 1;
+  }
+
+  /**
+   * Prefix a track label with its language code, unless the label already says
+   * which language it is.
+   *
+   * The "already says it" test goes through Intl: a substring check reads "HI"
+   * inside "Hindi (auto)" and suppresses a code that the label never actually
+   * carried — while an ISO code and its English name ("hin" vs "Hindi") share
+   * no useful prefix at all. Intl knows the mapping; when it can't resolve one,
+   * a word-boundary match on the raw code is the honest fallback.
+   */
+  private withLangCode(label: string, rawLang: string | undefined): string {
+    const lang = (rawLang || "").trim();
+    if (!lang) return label;
+    const code = lang.toUpperCase();
+    if (!label) return code;
+    const upper = label.toUpperCase();
+    let name = "";
+    try {
+      name =
+        new Intl.DisplayNames(["en"], { type: "language" }).of(lang) || "";
+    } catch {
+      name = "";
+    }
+    const names = [name, lang].filter(Boolean).map((n) => n.toUpperCase());
+    for (const n of names) {
+      if (n && new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(upper)) {
+        return label;
+      }
+    }
+    return `${code} · ${label}`;
+  }
+
+  /** Current value shown on the right of a root row. */
+  private settingsRowValue(key: string): string {
+    const sr = this.shadowRoot;
+    if (!sr) return "";
+    const activeText = (sel: string) =>
+      (sr.querySelector(sel) as HTMLElement | null)?.textContent?.trim() || "";
+    switch (key) {
+      case "quality":
+        return (
+          activeText(".movi-quality-item.movi-quality-active .movi-quality-label") ||
+          "Auto"
+        );
+      case "speed": {
+        const rate = this.playbackRate || 1;
+        return rate === 1 ? "Normal" : `${rate}x`;
+      }
+      case "audio": {
+        // Label alone is often just "Surround" or "Stereo" — which channel
+        // layout, not which language, and a multi-language file is exactly
+        // where this row matters. Lead with the language when the track
+        // declares one.
+        const label = activeText(
+          ".movi-audio-track-item.movi-audio-track-active .movi-audio-track-label",
+        );
+        const track = this.player?.trackManager?.getActiveAudioTrack?.();
+        const lang = this.player?.isNativeAudioActive?.()
+          ? this.player?.getAudioLangs?.().find((l) => l.active)?.lang
+          : track?.language;
+        return this.withLangCode(label, lang);
+      }
+      case "subtitles": {
+        const label = activeText(
+          ".movi-subtitle-track-item.movi-subtitle-track-active .movi-subtitle-track-label",
+        );
+        if (!label) return "Off";
+        // Same reasoning as the audio row: a track called "Subtitle 2" or
+        // "SDH" says nothing about which language it is in.
+        //
+        // Sidecar <track> subtitles aren't in the demuxer's track manager, so
+        // its active track is empty for them. The rendered row carries the
+        // language either way — as a data attribute for sidecars, and as the
+        // muxed track's own field otherwise.
+        const activeRow = sr.querySelector(
+          ".movi-subtitle-track-item.movi-subtitle-track-active",
+        ) as HTMLElement | null;
+        const lang =
+          activeRow?.dataset.subtitleLang ||
+          this.player?.trackManager?.getActiveSubtitleTrack?.()?.language ||
+          activeText(
+            ".movi-subtitle-track-item.movi-subtitle-track-active .movi-subtitle-track-info",
+          );
+        return this.withLangCode(label, lang);
+      }
+      case "aspect": {
+        const fit =
+          this._objectFit === "control" ? this._currentFit : this._objectFit;
+        const labels: Record<string, string> = {
+          contain: "Fit",
+          cover: "Fill",
+          fill: "Stretch",
+          zoom: "Zoom",
+        };
+        return labels[fit as string] || "Fit";
+      }
+      default:
+        return "";
+    }
+  }
+
+  private buildSettingsRoot(): void {
+    const root = this.shadowRoot?.querySelector(
+      ".movi-settings-root",
+    ) as HTMLElement | null;
+    if (!root) return;
+    const chevron = `<svg class="movi-settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
+    const rows: string[] = [];
+    const page = (
+      key: string,
+      label: string,
+      container: string,
+      item: string,
+    ) => {
+      if (!this.settingsRowAvailable(container, item)) return;
+      rows.push(
+        `<button type="button" class="movi-settings-row" data-page="${key}"><span class="movi-settings-row-label">${label}</span><span class="movi-settings-row-value">${this.settingsRowValue(key)}</span>${chevron}</button>`,
+      );
+    };
+    // Refresh first: these menus only rebuild when their own (now hidden)
+    // button is used, so without this the panel would decide from whatever
+    // state they were left in — including before any track was discovered.
+    if (this.player) {
+      this.updateQualityMenu();
+      this.updateAudioTrackMenu();
+      this.updateSubtitleTrackMenu();
+    }
+    page("quality", "Quality", ".movi-quality-container", ".movi-quality-item");
+    rows.push(
+      `<button type="button" class="movi-settings-row" data-page="speed"><span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${this.settingsRowValue("speed")}</span>${chevron}</button>`,
+    );
+    page(
+      "audio",
+      "Audio track",
+      ".movi-audio-track-container",
+      ".movi-audio-track-item",
+    );
+    page(
+      "subtitles",
+      "Subtitles",
+      ".movi-subtitle-track-container",
+      ".movi-subtitle-track-item",
+    );
+
+    const toggle = (key: string, label: string, on: boolean) =>
+      `<button type="button" class="movi-settings-row" data-toggle="${key}" aria-pressed="${on}"><span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
+    rows.push(`<div class="movi-settings-divider"></div>`);
+    // HDR only exists for HDR sources — updateHdrVisibility hides its (now
+    // off-bar) container otherwise, so that inline display is the signal.
+    const hdrEl = this.shadowRoot?.querySelector(
+      ".movi-hdr-container",
+    ) as HTMLElement | null;
+    if (hdrEl && hdrEl.style.display !== "none") {
+      rows.push(toggle("hdr", "HDR", this._hdr));
+    }
+    rows.push(toggle("stable", "Stable volume", this._stableVolume));
+    rows.push(toggle("loop", "Loop", this._loop));
+    rows.push(
+      `<button type="button" class="movi-settings-row" data-page="aspect"><span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${this.settingsRowValue("aspect")}</span>${chevron}</button>`,
+    );
+    root.innerHTML = rows.join("");
+  }
+
+  private openSettingsPage(key: string): void {
+    const def = MoviElement.SETTINGS_PAGES[key];
+    const sr = this.shadowRoot;
+    if (!def || !sr) return;
+    // Refresh the borrowed list first — the owning menu only rebuilds itself
+    // when its own button is used, which no longer happens.
+    if (key === "quality") this.updateQualityMenu();
+    if (key === "audio") this.updateAudioTrackMenu();
+    if (key === "subtitles") this.updateSubtitleTrackMenu();
+    const body = sr.querySelector(
+      ".movi-settings-page-body",
+    ) as HTMLElement | null;
+    const page = sr.querySelector(".movi-settings-page") as HTMLElement | null;
+    const root = sr.querySelector(".movi-settings-root") as HTMLElement | null;
+    const title = sr.querySelector(
+      ".movi-settings-page-title",
+    ) as HTMLElement | null;
+    if (!body || !page || !root) return;
+    if (def.list) {
+      const list = sr.querySelector(def.list) as HTMLElement | null;
+      if (!list) return;
+      body.appendChild(list);
+    } else {
+      body.innerHTML = this.renderSettingsChoices(key);
+    }
+    if (title) title.textContent = def.title;
+    root.style.display = "none";
+    page.style.display = "block";
+    this._settingsPage = key;
+  }
+
+  /** Put a borrowed list back where its own menu expects it. */
+  private closeSettingsPage(): void {
+    const sr = this.shadowRoot;
+    if (!sr || !this._settingsPage) return;
+    const def = MoviElement.SETTINGS_PAGES[this._settingsPage];
+    const body = sr.querySelector(
+      ".movi-settings-page-body",
+    ) as HTMLElement | null;
+    if (!def.list) {
+      if (body) body.innerHTML = "";
+    }
+    const list = def.list
+      ? (sr.querySelector(def.list) as HTMLElement | null)
+      : null;
+    const owner = def.owner
+      ? (sr.querySelector(def.owner) as HTMLElement | null)
+      : null;
+    if (list && owner && list.parentElement !== owner) {
+      // Back into the owning menu, ahead of its footer so the original order
+      // (header, list, footer) survives the round trip.
+      const footer = owner.querySelector(".movi-track-menu-footer");
+      if (footer) owner.insertBefore(list, footer);
+      else owner.appendChild(list);
+    }
+    const page = sr.querySelector(".movi-settings-page") as HTMLElement | null;
+    const root = sr.querySelector(".movi-settings-root") as HTMLElement | null;
+    if (page) page.style.display = "none";
+    if (root) root.style.display = "block";
+    this._settingsPage = null;
+  }
+
+  /** Rows for a page that has no borrowable list of its own. */
+  private renderSettingsChoices(key: string): string {
+    if (key !== "aspect") return "";
+    const current =
+      this._objectFit === "control" ? this._currentFit : this._objectFit;
+    const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    return MoviElement.ASPECT_CHOICES.map(
+      ([fit, label]) =>
+        `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span>${label}</span>${fit === current ? check : ""}</button>`,
+    ).join("");
+  }
+
+  private applyAspectChoice(fit: string): void {
+    if (this._objectFit === "control") {
+      this._currentFit = fit as typeof this._currentFit;
+    } else {
+      this._objectFit = fit as typeof this._objectFit;
+    }
+    this.updateFitMode();
+  }
+
+  private setupSettingsPanel(shadowRoot: ShadowRoot): void {
+    const btn = shadowRoot.querySelector(
+      ".movi-settings-btn",
+    ) as HTMLElement | null;
+    const menu = shadowRoot.querySelector(
+      ".movi-settings-menu",
+    ) as HTMLElement | null;
+    if (!btn || !menu) return;
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = this.isBottomMenuOpen(menu);
+      if (open) {
+        this.setBottomMenuOpen(menu, false);
+        this.closeSettingsPage();
+        return;
+      }
+      this.closeAllBottomMenus(".movi-settings-menu");
+      this.closeSettingsPage();
+      this.buildSettingsRoot();
+      this.setBottomMenuOpen(menu, true);
+    });
+
+    menu.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest(".movi-settings-back")) {
+        e.stopPropagation();
+        this.closeSettingsPage();
+        return;
+      }
+      const row = target.closest(".movi-settings-row") as HTMLElement | null;
+      if (row) {
+        e.stopPropagation();
+        const page = row.dataset.page;
+        if (page) {
+          this.openSettingsPage(page);
+          return;
+        }
+        if (row.dataset.toggle === "hdr") {
+          this.hdr = !this.hdr;
+        } else if (row.dataset.toggle === "stable") {
+          this.stableVolume = !this._stableVolume;
+        } else if (row.dataset.toggle === "loop") {
+          this.loop = !this._loop;
+        }
+        // Toggles stay on the panel — the point of a settings list is flipping
+        // a couple of things without it closing under you.
+        this.buildSettingsRoot();
+        return;
+      }
+      const choice = target.closest(
+        ".movi-settings-choice",
+      ) as HTMLElement | null;
+      if (choice?.dataset.fit) {
+        e.stopPropagation();
+        try {
+          this.applyAspectChoice(choice.dataset.fit);
+        } catch (err) {
+          // Applying the fit must never strand the panel open — the viewer
+          // made a choice and the menu has to get out of the way regardless.
+          Logger.warn(TAG, "aspect choice failed", err);
+        }
+        this.setBottomMenuOpen(menu, false);
+        this.closeSettingsPage();
+        this.showControls();
+        return;
+      }
+    });
+
+    // A pick inside a borrowed list (a quality, a speed, a track) is a decision
+    // — take it and get out of the way. On CAPTURE: every one of those lists
+    // stops propagation in its own handler, so a bubbling listener here would
+    // never hear the click that just changed the setting.
+    menu.addEventListener(
+      "click",
+      (e) => {
+        const target = e.target as HTMLElement;
+        if (
+          !this._settingsPage ||
+          !target.closest(
+            ".movi-quality-item, .movi-speed-item, .movi-audio-track-item, .movi-subtitle-track-item",
+          )
+        ) {
+          return;
+        }
+        // After the list's own handler has run, not before it.
+        setTimeout(() => {
+          this.setBottomMenuOpen(menu, false);
+          this.closeSettingsPage();
+          this.showControls();
+        }, 0);
+      },
+      true,
+    );
+  }
+
   private isAnyMenuOpen(): boolean {
     if (!this.shadowRoot) return false;
 
@@ -10319,12 +10770,14 @@ export class MoviElement extends HTMLElement {
     const audioMenu = this.shadowRoot.querySelector(".movi-audio-track-menu") as HTMLElement;
     const subtitleMenu = this.shadowRoot.querySelector(".movi-subtitle-track-menu") as HTMLElement;
     const qualityMenu = this.shadowRoot.querySelector(".movi-quality-menu") as HTMLElement;
+    const settingsMenu = this.shadowRoot.querySelector(".movi-settings-menu") as HTMLElement;
     // contextMenuRoot(): the desktop context menu moves to the body portal while
     // open, so this.shadowRoot wouldn't find it and auto-hide would think no menu
     // is open (hiding the controls out from under an open menu).
     const contextMenu = this.contextMenuRoot().querySelector(".movi-context-menu") as HTMLElement;
 
     return (
+      this.isBottomMenuOpen(settingsMenu) ||
       this.isBottomMenuOpen(speedMenu) ||
       this.isBottomMenuOpen(audioMenu) ||
       this.isBottomMenuOpen(subtitleMenu) ||
@@ -15471,6 +15924,207 @@ export class MoviElement extends HTMLElement {
       .movi-quality-badge-8k {
         background: rgba(255, 255, 255, 0.18);
         color: rgba(255, 255, 255, 0.95);
+      }
+
+      /* Settings panel — the gear's list. Everything that used to be its own
+         button on the bar lives here now; the old buttons stay in the DOM
+         (their menus are what this panel borrows) but are no longer shown. */
+      .movi-controls-right .movi-hdr-container,
+      .movi-controls-right .movi-quality-container,
+      .movi-controls-right .movi-speed-container,
+      .movi-controls-right .movi-stable-audio-container,
+      .movi-controls-right .movi-audio-track-container,
+      .movi-controls-right .movi-aspect-ratio-btn,
+      .movi-controls-right .movi-loop-btn {
+        /* The whole CONTAINER, not just the button inside it: an empty flex
+           item still takes its share of the row's gap, which is where the hole
+           between the captions button and the gear came from. The elements stay
+           in the DOM because their menus are what the panel borrows — and the
+           inline display the quality logic writes still reads correctly, since
+           this rule never touches the style attribute. */
+        display: none !important;
+      }
+
+      .movi-settings-container {
+        position: relative;
+        display: flex;
+        align-items: center;
+      }
+      .movi-settings-btn-badge {
+        position: absolute;
+        top: 2px;
+        right: 0;
+        padding: 0 3px;
+        border-radius: 2px;
+        background: #ff0000;
+        color: #fff;
+        font-size: 8px;
+        font-weight: 700;
+        line-height: 11px;
+        letter-spacing: 0.02em;
+      }
+      /* The gear turns with the panel, the way a control that opens something
+         should acknowledge it. */
+      .movi-settings-container:has(.movi-settings-menu.is-open) .movi-settings-btn svg {
+        transform: rotate(30deg);
+      }
+      .movi-settings-btn svg {
+        transition: transform 0.2s ease;
+      }
+
+      .movi-settings-menu {
+        position: absolute;
+        bottom: calc(100% + 12px);
+        right: 0;
+        min-width: 240px;
+        max-width: 320px;
+        padding: 6px;
+        border-radius: 10px;
+        background: var(--movi-glass-bg);
+        border: 1px solid var(--movi-glass-border);
+        box-shadow: var(--movi-shadow-md);
+        color: var(--movi-chrome-fg, #fff);
+        z-index: 40;
+        overflow-y: auto;
+        opacity: 0;
+        transform: translateY(6px) scale(0.98);
+        transform-origin: bottom right;
+        transition: opacity 0.16s ease, transform 0.16s ease;
+      }
+      .movi-settings-menu.is-open {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+
+      .movi-settings-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        padding: 9px 10px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .movi-settings-row:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .movi-settings-row-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .movi-settings-row-value {
+        flex: 0 0 auto;
+        color: var(--movi-text-mute, rgba(255, 255, 255, 0.6));
+        font-size: 12px;
+        max-width: 45%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .movi-settings-chevron {
+        flex: 0 0 auto;
+        width: 14px;
+        height: 14px;
+        opacity: 0.5;
+      }
+      .movi-settings-divider {
+        height: 1px;
+        margin: 5px 8px;
+        background: var(--movi-glass-border);
+      }
+
+      /* Switch: reads as on/off at a glance, unlike a tick that only says
+         "on" and leaves "off" as the absence of anything. */
+      .movi-settings-switch {
+        flex: 0 0 auto;
+        width: 30px;
+        height: 17px;
+        padding: 2px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.22);
+        transition: background 0.16s ease;
+      }
+      .movi-settings-switch.is-on {
+        background: var(--movi-primary);
+      }
+      .movi-settings-knob {
+        display: block;
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform 0.16s ease;
+      }
+      .movi-settings-switch.is-on .movi-settings-knob {
+        transform: translateX(13px);
+      }
+
+      .movi-settings-choice {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        padding: 9px 10px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .movi-settings-choice:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .movi-settings-choice.is-active {
+        font-weight: 600;
+      }
+      .movi-settings-check {
+        width: 14px;
+        height: 14px;
+        color: var(--movi-primary);
+      }
+
+      .movi-settings-back {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 8px 10px;
+        margin-bottom: 4px;
+        border: none;
+        border-bottom: 1px solid var(--movi-glass-border);
+        border-radius: 6px 6px 0 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .movi-settings-back:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .movi-settings-back svg {
+        width: 16px;
+        height: 16px;
+      }
+      /* Borrowed lists arrive with their own menu's padding assumptions. */
+      .movi-settings-page-body .movi-quality-list,
+      .movi-settings-page-body .movi-speed-list,
+      .movi-settings-page-body .movi-audio-track-list,
+      .movi-settings-page-body .movi-subtitle-track-list {
+        min-width: 0;
       }
 
       .movi-quality-btn {
