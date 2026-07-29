@@ -7592,8 +7592,14 @@ export class MoviElement extends HTMLElement {
     // With no ladder the MEDIA is the authority, not whatever was stored: a
     // stored value can only have come from a previous file, and that is how a
     // 4K video's chip ended up over a 1080p one.
+    // Audio has no resolution to badge — and its cover art is carried as a
+    // video track, so deriving from the media would put "360p"-worth of
+    // artwork on the gear.
+    if (this.classList.contains("movi-audio-mode")) {
+      this._qualityBadge = "";
+    }
     const noLadder = this._videoQualities.length <= 1;
-    if (noLadder || !this._qualityBadge) {
+    if (!this.classList.contains("movi-audio-mode") && (noLadder || !this._qualityBadge)) {
       const v = this.player
         ?.getMediaInfo?.()
         ?.tracks?.find((t) => t.type === "video");
@@ -10714,9 +10720,17 @@ export class MoviElement extends HTMLElement {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
     }
-    if (this.settingsRowAvailable(".movi-quality-container", ".movi-quality-item")) {
+    // Audio: there is no picture, so neither the resolution nor how it is
+    // cropped means anything. Cover art makes this worse rather than better —
+    // the attached picture IS a video track, so the ladder happily reported
+    // "360p" for the artwork's own dimensions.
+    const audioOnly = this.classList.contains("movi-audio-mode");
+    if (
+      !audioOnly &&
+      this.settingsRowAvailable(".movi-quality-container", ".movi-quality-item")
+    ) {
       page("quality", "Quality", ".movi-quality-container", ".movi-quality-item");
-    } else {
+    } else if (!audioOnly) {
       // One rung only (a plain file, a single <source>). The row still belongs:
       // "what am I watching" is the question people open this panel with, and
       // an absent row reads as "the player doesn't know". It just doesn't
@@ -10761,9 +10775,11 @@ export class MoviElement extends HTMLElement {
     }
     rows.push(toggle("stable", "Stable volume", this._stableVolume));
     rows.push(toggle("loop", "Loop", this._loop));
-    rows.push(
+    if (!audioOnly) {
+      rows.push(
       `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
-    );
+      );
+    }
     root.innerHTML = rows.join("");
   }
 
@@ -10880,6 +10896,17 @@ export class MoviElement extends HTMLElement {
    * on open and nudge it back, capping the width to the player first.
    */
   private clampSettingsPanel(menu: HTMLElement): void {
+    // Strip mode positions its menus itself, viewport-relative and already
+    // clamped (applyStripFixedMenuPosition) — the strip is 56px tall, so a menu
+    // anchored inside it has to escape the box entirely. Setting `right` on top
+    // of that left/top would give the element both edges and stretch it across
+    // the screen, which is what "the panel doesn't show properly" was.
+    if (
+      this.classList.contains("movi-audio-strip") ||
+      getComputedStyle(menu).position === "fixed"
+    ) {
+      return;
+    }
     const host = this.getBoundingClientRect();
     if (!host.width) return;
     menu.style.maxWidth = `${Math.max(200, Math.round(host.width - 16))}px`;
@@ -17800,8 +17827,18 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip) .movi-subtitle-track-menu,
       :host(.movi-audio-strip) .movi-quality-menu,
       :host(.movi-audio-strip) .movi-speed-menu,
+      :host(.movi-audio-strip) .movi-settings-menu,
       :host(.movi-audio-strip) .movi-stable-audio-menu {
         transform-origin: top right !important;
+      }
+
+      /* Strip mode caps against the VIEWPORT, not the player. The panel's
+         normal cap is "player height minus a bar reserve", which on a 56px
+         strip is a negative number — the panel collapsed to an 18px sliver.
+         Its menus are viewport-fixed here anyway (see
+         applyStripFixedMenuPosition), so the viewport is the right bound. */
+      :host(.movi-audio-strip) .movi-settings-menu {
+        max-height: min(70vh, 460px) !important;
       }
 
       /* The ::after gradient stripe rides on top of the progress fill,
