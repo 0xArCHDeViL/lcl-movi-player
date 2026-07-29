@@ -6488,10 +6488,19 @@ export class MoviElement extends HTMLElement {
     // Every place the crop is drawn shows the CURRENT one: the bar button, and
     // the context menu's row. A generic frame there while the setting says
     // "Zoom" is the menu contradicting itself.
-    for (const sel of [".movi-icon-aspect-ratio", ".movi-icon-aspect-ratio-ctx"]) {
-      const icon = this.shadowRoot?.querySelector(sel) as SVGElement | null;
-      if (icon) icon.innerHTML = svg;
-    }
+    //
+    // The context menu's copy is looked up through contextMenuRoot(), not
+    // this.shadowRoot: on desktop the menu is portalled to a body-level shadow
+    // root while open, so the row simply isn't in our tree at the moment that
+    // matters — which is why that icon never moved.
+    const bar = this.shadowRoot?.querySelector(
+      ".movi-icon-aspect-ratio",
+    ) as SVGElement | null;
+    if (bar) bar.innerHTML = svg;
+    const ctx = this.contextMenuRoot().querySelector(
+      ".movi-icon-aspect-ratio-ctx",
+    ) as SVGElement | null;
+    if (ctx) ctx.innerHTML = svg;
       // Keep an open panel / context menu in step - see the method's note.
     this.refreshOpenSettingsSurfaces();
   }
@@ -11289,10 +11298,22 @@ export class MoviElement extends HTMLElement {
       }
     }
     if (this._contextMenuVisible) {
-      const ctx = this.contextMenuRoot().querySelector(
-        ".movi-context-menu",
-      ) as HTMLElement | null;
+      const root = this.contextMenuRoot();
+      const ctx = root.querySelector(".movi-context-menu") as HTMLElement | null;
       if (ctx) this.updateContextMenuContent(ctx);
+      // The fit submenu is moved OUT of the menu to escape its overflow, so
+      // updateContextMenuContent's own sweep can't reach it — and it is
+      // deliberately synced only when shown. If it happens to be open when a
+      // shortcut fires, sync it here as well.
+      const fitSubmenu = root.querySelector(
+        '.movi-context-menu-submenu[data-submenu="fit"]',
+      ) as HTMLElement | null;
+      if (
+        fitSubmenu &&
+        fitSubmenu.classList.contains("movi-context-menu-submenu-visible")
+      ) {
+        this.syncFitSubmenuActive(fitSubmenu);
+      }
     }
   }
 
