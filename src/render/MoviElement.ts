@@ -10953,8 +10953,10 @@ export class MoviElement extends HTMLElement {
       if (open) {
         this.setBottomMenuOpen(menu, false);
         this.closeSettingsPage();
-        menu.style.right = "";
-        menu.style.maxWidth = "";
+        // The clamp's inline right/max-width are deliberately NOT cleared here.
+        // Clearing them starts the close by snapping the panel back to right:0
+        // — a visible jump to the right while it is still fading out. The next
+        // open re-measures and overwrites them anyway.
         return;
       }
       this.closeAllBottomMenus(".movi-settings-menu");
@@ -16444,13 +16446,18 @@ export class MoviElement extends HTMLElement {
         z-index: 40;
         overflow-y: auto;
         opacity: 0;
-        transform: translateY(6px) scale(0.98);
+        /* Fade + a few pixels of rise, and NO scale. Scaling from a corner
+           origin moves the opposite edge sideways — on a 268px panel that 2%
+           was ~5px of drift, which read as the panel sliding right as it
+           closed. Vertical travel alone says "menu" without moving anything
+           the eye is anchored to. */
+        transform: translateY(6px);
         transform-origin: bottom right;
         transition: opacity 0.16s ease, transform 0.16s ease;
       }
       .movi-settings-menu.is-open {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateY(0);
       }
 
       .movi-settings-row {
