@@ -1004,7 +1004,7 @@ export class MoviElement extends HTMLElement {
         <div class="movi-context-menu-item" data-speed="2">2x</div>
       </div>
       <div class="movi-context-menu-item" data-action="fit">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon movi-icon-aspect-ratio-ctx" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>
         </svg>
         <span class="movi-context-menu-label">Aspect Ratio</span>
@@ -1603,7 +1603,9 @@ export class MoviElement extends HTMLElement {
     // it takes the "more" glyph that already means exactly that.
     gearBtn.setAttribute("aria-label", "More options");
     gearBtn.setAttribute("title", "More options");
-    gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
+    // Dots at r=2 in a 24 box read as a lighter mark than the stroked icons
+    // around it; 2.3 with a slightly tighter run evens out the weight.
+    gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5.5" r="2.3"/><circle cx="12" cy="12" r="2.3"/><circle cx="12" cy="18.5" r="2.3"/></svg>`;
     gearBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       // Open the context menu via a synthetic contextmenu event; the flag lets
@@ -1891,6 +1893,23 @@ export class MoviElement extends HTMLElement {
         this.loop ? "Loop On" : "Loop Off",
       );
     });
+
+    // Time display: click toggles elapsed / remaining. A player's own clock is
+    // the obvious place for that, and it costs no room on the bar.
+    const timeEls = [
+      shadowRoot.querySelector(".movi-current-time"),
+      shadowRoot.querySelector(".movi-time-separator"),
+      shadowRoot.querySelector(".movi-duration"),
+    ].filter(Boolean) as HTMLElement[];
+    for (const el of timeEls) {
+      el.style.cursor = "pointer";
+      el.title = "Switch between elapsed and remaining time";
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._timeShowsRemaining = !this._timeShowsRemaining;
+        this.updateTimeDisplay();
+      });
+    }
 
     // LIVE badge → jump to the live edge and resume.
     const liveBadge = shadowRoot.querySelector(".movi-live-badge") as HTMLElement;
@@ -6457,12 +6476,15 @@ export class MoviElement extends HTMLElement {
   };
 
   private updateAspectRatioIcon(): void {
-    const icon = this.shadowRoot?.querySelector(".movi-icon-aspect-ratio") as SVGElement;
-    if (!icon) return;
-
     const fit = this._objectFit === "control" ? this._currentFit : (this._objectFit as any);
     const svg = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
-    icon.innerHTML = svg;
+    // Every place the crop is drawn shows the CURRENT one: the bar button, and
+    // the context menu's row. A generic frame there while the setting says
+    // "Zoom" is the menu contradicting itself.
+    for (const sel of [".movi-icon-aspect-ratio", ".movi-icon-aspect-ratio-ctx"]) {
+      const icon = this.shadowRoot?.querySelector(sel) as SVGElement | null;
+      if (icon) icon.innerHTML = svg;
+    }
   }
 
   private static readonly TRACK_ICON_AUDIO = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
@@ -10441,6 +10463,20 @@ export class MoviElement extends HTMLElement {
     aspect: { title: "Aspect", list: "", owner: "" },
   };
 
+  /** Row icons, drawn to match the context menu's (16px, 1.8-2 stroke). A list
+   *  of bare words is slower to scan than a list with marks against it — and
+   *  these are the same marks the context menu already trained people on. */
+  private static readonly SETTINGS_ICONS: Record<string, string> = {
+    quality: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>`,
+    speed: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
+    audio: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+    subtitles: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
+    hdr: `<span class="movi-settings-icon movi-settings-icon-text">HDR</span>`,
+    stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
+    loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+    aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
+  };
+
   private static readonly ASPECT_CHOICES: ReadonlyArray<
     readonly [fit: string, label: string]
   > = [
@@ -10498,6 +10534,18 @@ export class MoviElement extends HTMLElement {
       }
     }
     return `${code} · ${label}`;
+  }
+
+  /** HTML-escape a value before it goes into a row template. Row values come
+   *  from the media and from host markup — a track label or a <source> label —
+   *  which on an app like movi-tube is whatever an upstream API returned. */
+  private static escapeSettingsText(value: string): string {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   /** Current value shown on the right of a root row. */
@@ -10578,6 +10626,16 @@ export class MoviElement extends HTMLElement {
     return v?.height ? `${v.height}p` : "";
   }
 
+  /** The aspect row's icon is the CURRENT crop, not a generic frame — the value
+   *  text says "Fill" and the mark shows what that looks like, so the row
+   *  answers "what is it set to" without opening anything. */
+  private aspectRowIcon(): string {
+    const fit = this._objectFit === "control" ? this._currentFit : this._objectFit;
+    const icon =
+      MoviElement.ASPECT_ICONS[fit as string] || MoviElement.ASPECT_ICONS.contain;
+    return `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+  }
+
   private buildSettingsRoot(): void {
     const root = this.shadowRoot?.querySelector(
       ".movi-settings-root",
@@ -10593,7 +10651,7 @@ export class MoviElement extends HTMLElement {
     ) => {
       if (!this.settingsRowAvailable(container, item)) return;
       rows.push(
-        `<button type="button" class="movi-settings-row" data-page="${key}"><span class="movi-settings-row-label">${label}</span><span class="movi-settings-row-value">${this.settingsRowValue(key)}</span>${chevron}</button>`,
+        `<button type="button" class="movi-settings-row" data-page="${key}">${MoviElement.SETTINGS_ICONS[key] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue(key))}</span>${chevron}</button>`,
       );
     };
     // Refresh first: these menus only rebuild when their own (now hidden)
@@ -10614,12 +10672,12 @@ export class MoviElement extends HTMLElement {
       const label = this.singleQualityLabel();
       if (label) {
         rows.push(
-          `<div class="movi-settings-row is-static" aria-disabled="true"><span class="movi-settings-row-label">Quality</span><span class="movi-settings-row-value">${label}</span></div>`,
+          `<div class="movi-settings-row is-static" aria-disabled="true">${MoviElement.SETTINGS_ICONS.quality}<span class="movi-settings-row-label">Quality</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(label)}</span></div>`,
         );
       }
     }
     rows.push(
-      `<button type="button" class="movi-settings-row" data-page="speed"><span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${this.settingsRowValue("speed")}</span>${chevron}</button>`,
+      `<button type="button" class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
     );
     page(
       "audio",
@@ -10635,7 +10693,7 @@ export class MoviElement extends HTMLElement {
     );
 
     const toggle = (key: string, label: string, on: boolean) =>
-      `<button type="button" class="movi-settings-row" data-toggle="${key}" aria-pressed="${on}"><span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
+      `<button type="button" class="movi-settings-row" data-toggle="${key}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[key] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
     rows.push(`<div class="movi-settings-divider"></div>`);
     // HDR: defer to the decision the bar's own logic already made.
     // updateHdrVisibility writes "flex" on the container only when HDR is
@@ -10652,7 +10710,7 @@ export class MoviElement extends HTMLElement {
     rows.push(toggle("stable", "Stable volume", this._stableVolume));
     rows.push(toggle("loop", "Loop", this._loop));
     rows.push(
-      `<button type="button" class="movi-settings-row" data-page="aspect"><span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${this.settingsRowValue("aspect")}</span>${chevron}</button>`,
+      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
     );
     root.innerHTML = rows.join("");
   }
@@ -10725,10 +10783,13 @@ export class MoviElement extends HTMLElement {
     const current =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
     const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-    return MoviElement.ASPECT_CHOICES.map(
-      ([fit, label]) =>
-        `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span>${label}</span>${fit === current ? check : ""}</button>`,
-    ).join("");
+    return MoviElement.ASPECT_CHOICES.map(([fit, label]) => {
+      // Each fit already HAS a drawing — the bar button cycled through exactly
+      // these to show which was active. Reuse them here: for a spatial setting,
+      // the picture of the crop says more than the word for it.
+      const icon = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
+      return `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span class="movi-settings-choice-main"><svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span></span>${fit === current ? check : ""}</button>`;
+    }).join("");
   }
 
   private static readonly ASPECT_OSD_LABELS: Record<string, string> = {
@@ -11658,6 +11719,10 @@ export class MoviElement extends HTMLElement {
            only way it can sit on the title's line is to be centred with the
            same numbers the title uses. Hardcoding them twice drifts: the gear
            rode 8px high as soon as the title font grew. */
+        /* How far chrome sits from the frame's right edge. The top-right button
+           and the bar's last control both use it, so they line up in a single
+           vertical run instead of each keeping its own inset. */
+        --movi-chrome-inset: 20px;
         --movi-title-font: clamp(16px, 4vw, 20px);
         --movi-title-line: calc(var(--movi-title-font) * 1.4);
         --movi-title-pad-top: 16px;
@@ -12009,6 +12074,42 @@ export class MoviElement extends HTMLElement {
         background: rgba(0, 0, 0, 0.05) !important;
       }
 
+      /* Settings panel in light theme. It was built on the dark glass surface
+         (white text, white hover tints, a white-on-grey switch), so on a light
+         surface every one of those went white-on-white. */
+      :host([theme="light"]) .movi-settings-menu {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+        color: #11142d !important;
+      }
+      :host([theme="light"]) .movi-settings-row:hover,
+      :host([theme="light"]) .movi-settings-choice:hover,
+      :host([theme="light"]) .movi-settings-back:hover {
+        background: rgba(0, 0, 0, 0.05) !important;
+      }
+      :host([theme="light"]) .movi-settings-row.is-static,
+      :host([theme="light"]) .movi-settings-row.is-static:hover {
+        background: transparent !important;
+      }
+      :host([theme="light"]) .movi-settings-row-value {
+        color: rgba(17, 20, 45, 0.6) !important;
+      }
+      :host([theme="light"]) .movi-settings-divider,
+      :host([theme="light"]) .movi-settings-back {
+        border-color: rgba(0, 0, 0, 0.12) !important;
+      }
+      :host([theme="light"]) .movi-settings-divider {
+        background: rgba(0, 0, 0, 0.12) !important;
+      }
+      /* Off-state track needs to read as a track, not as the surface. */
+      :host([theme="light"]) .movi-settings-switch {
+        background: rgba(0, 0, 0, 0.22) !important;
+      }
+      :host([theme="light"]) .movi-settings-switch.is-on {
+        background: var(--movi-primary) !important;
+      }
+
       :host([theme="light"]) .movi-quality-item.movi-quality-active {
         background: color-mix(in srgb, var(--movi-primary) 0.12) !important;
       }
@@ -12334,7 +12435,9 @@ export class MoviElement extends HTMLElement {
            layout rules, so any height arithmetic here goes stale the moment
            those change. The slide-in offset rides on the same transform. */
         top: calc(var(--movi-title-pad-top) + var(--movi-title-line) / 2);
-        right: 14px;
+        /* Same inset as the bar's last control - the two are the only things on
+           the frame's right edge, and 14 vs 10 read as one being off. */
+        right: var(--movi-chrome-inset);
         z-index: 30;
         width: var(--movi-btn-size);
         height: var(--movi-btn-size);
@@ -12431,7 +12534,7 @@ export class MoviElement extends HTMLElement {
         /* Bottom inset is deliberately small: the bar is anchored to the
            bottom edge, so this padding is the only thing lifting the row off
            it. 12px left the controls floating noticeably above the frame. */
-        padding: 4px 20px 5px;
+        padding: 4px var(--movi-chrome-inset) 5px;
         background: var(--movi-bar-bg);
         color: var(--movi-controls-color);
         height: auto;
@@ -14768,6 +14871,7 @@ export class MoviElement extends HTMLElement {
         :host {
           --movi-controls-height: var(--movi-controls-height-mobile);
           --movi-btn-size: var(--movi-btn-size-mobile);
+          --movi-chrome-inset: 10px;
         }
         
         .movi-loader-container {
@@ -14851,7 +14955,7 @@ export class MoviElement extends HTMLElement {
         }
 
         .movi-controls-bar {
-          padding: 4px 10px 6px;
+          padding: 4px var(--movi-chrome-inset) 6px;
           gap: 2px;
           min-height: var(--movi-controls-height-mobile);
         }
@@ -15169,11 +15273,14 @@ export class MoviElement extends HTMLElement {
 
       /* Tablet-sized players (721px to 1024px) */
       @container movi-host (min-width: 721px) and (max-width: 1024px) {
+        :host {
+          --movi-chrome-inset: 18px;
+        }
         .movi-controls-bar {
           /* Bottom inset stays small at every size — see the base rule. These
              per-breakpoint paddings were symmetric, so they quietly restored
              the 14/16px lift the base rule had just removed. */
-          padding: 14px 18px 5px;
+          padding: 14px var(--movi-chrome-inset) 5px;
         }
 
         .movi-time {
@@ -15209,7 +15316,7 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: 36px;
         }
         .movi-controls-bar {
-          padding: 2px 8px 5px;
+          padding: 2px var(--movi-chrome-inset) 5px;
         }
         .movi-buttons-row {
           gap: 4px;
@@ -15275,8 +15382,11 @@ export class MoviElement extends HTMLElement {
 
       /* Large players (1025px and above) */
       @container movi-host (min-width: 1025px) {
+        :host {
+          --movi-chrome-inset: 24px;
+        }
         .movi-controls-bar {
-          padding: 16px 24px 7px;
+          padding: 16px var(--movi-chrome-inset) 7px;
         }
         /* A 22px glyph that reads fine in a 640px pane looks undersized across
            a fullscreen TV — the box stays 44px, only the mark inside grows. */
@@ -16198,6 +16308,26 @@ export class MoviElement extends HTMLElement {
         cursor: default;
         opacity: 0.62;
       }
+      .movi-settings-icon {
+        flex: 0 0 auto;
+        width: 17px;
+        height: 17px;
+        opacity: 0.72;
+      }
+      /* The HDR mark is a word, not a glyph — same trick the context menu uses
+         so it lines up with the icons above and below it. */
+      .movi-settings-icon-text {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 17px;
+        height: 17px;
+        font-size: 8.5px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        white-space: nowrap;
+        overflow: visible;
+      }
       .movi-settings-row-label {
         flex: 1 1 auto;
         min-width: 0;
@@ -16270,6 +16400,12 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-choice:hover {
         background: rgba(255, 255, 255, 0.1);
+      }
+      .movi-settings-choice-main {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
       }
       .movi-settings-choice.is-active {
         font-weight: 600;
@@ -21382,6 +21518,9 @@ export class MoviElement extends HTMLElement {
     if (this._uiSeekSeq === seq) this._uiSeekTarget = -1;
   }
 
+  /** Time display shows the remainder ("-1:23") instead of elapsed. */
+  private _timeShowsRemaining = false;
+
   private updateTimeDisplay(): void {
     const currentTimeEl = this.shadowRoot?.querySelector(
       ".movi-current-time",
@@ -21396,7 +21535,16 @@ export class MoviElement extends HTMLElement {
     const ct = this._posterSeekActive ? 0 : this._uiCurrentTime();
 
     if (currentTimeEl) {
-      currentTimeEl.textContent = this.formatTime(ct);
+      // Clicking the time flips it to what's LEFT — the number you actually
+      // want when deciding whether to start another episode. Live has no
+      // meaningful remainder, so it stays on elapsed there.
+      const remaining =
+        this._timeShowsRemaining &&
+        this.duration > 0 &&
+        Number.isFinite(this.duration);
+      currentTimeEl.textContent = remaining
+        ? `-${this.formatTime(Math.max(0, this.duration - ct))}`
+        : this.formatTime(ct);
     }
     if (durationEl) {
       durationEl.textContent = this.formatTime(this.duration);
