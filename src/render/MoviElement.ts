@@ -2534,12 +2534,7 @@ export class MoviElement extends HTMLElement {
         this._objectFit = next;
       }
       this.updateFitMode();
-      const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
-      const osdSvg = MoviElement.ASPECT_ICONS[next] || MoviElement.ASPECT_ICONS.contain;
-      this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
-        labels[next],
-      );
+      this.showAspectOsd(next);
     });
 
     // Playback Speed
@@ -7521,14 +7516,15 @@ export class MoviElement extends HTMLElement {
    * other players, so it needs no explaining.
    */
   private _renderGearBadge(): void {
+    // Same gate as the panel row - the badge must not claim HDR before the
+    // bar's own logic has said the source has it.
     const hdrContainer = this.shadowRoot?.querySelector(
       ".movi-hdr-container",
     ) as HTMLElement | null;
-    const hdrAvailable =
-      !!hdrContainer &&
-      hdrContainer.style.display !== "none" &&
-      this.isControlAvailable("hdr");
-    const hdrOn = hdrAvailable && this._hdr;
+    const hdrOn =
+      hdrContainer?.style.display === "flex" &&
+      this.isControlAvailable("hdr") &&
+      this._hdr;
     const quality = this._qualityBadge;
     let text = quality;
     if (hdrOn) {
@@ -7683,6 +7679,10 @@ export class MoviElement extends HTMLElement {
         // A specific pick leaves Auto.
         player?.setAutoQuality?.(false);
         this._writeQualityAutoPref(false);
+        // Confirm it like every other setting does - from inside the panel the
+        // list closes immediately, so the toast is the only feedback.
+        const picked = this._videoQualities.find((q) => q.src === newSrc);
+        if (picked) this.showOSD(OSD.speed, picked.label || "Quality");
         if (newSrc && newSrc !== activeSrc) this.switchPremuxedQuality(newSrc);
         else this.updateQualityMenu();
         closeMenu();
@@ -10599,12 +10599,16 @@ export class MoviElement extends HTMLElement {
     const toggle = (key: string, label: string, on: boolean) =>
       `<button type="button" class="movi-settings-row" data-toggle="${key}" aria-pressed="${on}"><span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
     rows.push(`<div class="movi-settings-divider"></div>`);
-    // HDR only exists for HDR sources — updateHdrVisibility hides its (now
-    // off-bar) container otherwise, so that inline display is the signal.
+    // HDR: defer to the decision the bar's own logic already made.
+    // updateHdrVisibility writes "flex" on the container only when HDR is
+    // genuinely on offer (Chromium + canvas + an HDR source), so requiring that
+    // exact value means the row cannot appear before that logic has run - an
+    // unset display means "not decided yet", not "available", which is what put
+    // an HDR row on non-HDR sources and in Safari.
     const hdrEl = this.shadowRoot?.querySelector(
       ".movi-hdr-container",
     ) as HTMLElement | null;
-    if (hdrEl && hdrEl.style.display !== "none") {
+    if (hdrEl?.style.display === "flex" && this.isControlAvailable("hdr")) {
       rows.push(toggle("hdr", "HDR", this._hdr));
     }
     rows.push(toggle("stable", "Stable volume", this._stableVolume));
@@ -10689,6 +10693,22 @@ export class MoviElement extends HTMLElement {
     ).join("");
   }
 
+  private static readonly ASPECT_OSD_LABELS: Record<string, string> = {
+    contain: "Fit",
+    cover: "Fill",
+    fill: "Stretch",
+    zoom: "Zoom",
+  };
+
+  /** The toast a fit change puts up — same one the old aspect button showed. */
+  private showAspectOsd(fit: string): void {
+    const svg = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
+    this.showOSD(
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${svg}</svg>`,
+      MoviElement.ASPECT_OSD_LABELS[fit] || "Fit",
+    );
+  }
+
   private applyAspectChoice(fit: string): void {
     if (this._objectFit === "control") {
       this._currentFit = fit as typeof this._currentFit;
@@ -10696,6 +10716,7 @@ export class MoviElement extends HTMLElement {
       this._objectFit = fit as typeof this._objectFit;
     }
     this.updateFitMode();
+    this.showAspectOsd(fit);
   }
 
   private setupSettingsPanel(shadowRoot: ShadowRoot): void {
@@ -10753,12 +10774,21 @@ export class MoviElement extends HTMLElement {
           this.openSettingsPage(page);
           return;
         }
+        // Each toggle puts up the same toast its old bar button did. A
+        // setting changed from a list still deserves the confirmation — the
+        // panel covers the picture, so the switch alone is easy to miss.
         if (row.dataset.toggle === "hdr") {
           this.hdr = !this.hdr;
+          this.showOSD(OSD.hdr, this.hdr ? "HDR On" : "HDR Off");
         } else if (row.dataset.toggle === "stable") {
           this.stableVolume = !this._stableVolume;
+          this.showOSD(
+            OSD.stableAudio,
+            this._stableVolume ? "Stable Volume On" : "Stable Volume Off",
+          );
         } else if (row.dataset.toggle === "loop") {
           this.loop = !this._loop;
+          this.showOSD(OSD.loop, this._loop ? "Loop On" : "Loop Off");
         }
         // Toggles stay on the panel — the point of a settings list is flipping
         // a couple of things without it closing under you.
@@ -15989,13 +16019,6 @@ export class MoviElement extends HTMLElement {
         color: rgba(255, 255, 255, 0.95);
       }
 
-      /* HDR is a claim about the picture, not a resolution tier - give it its
-         own colour so "4K HDR" does not read as just another size label. */
-      .movi-quality-badge-hdr {
-        background: linear-gradient(90deg, #f5a623, #e94b8c);
-        color: #fff;
-      }
-
       /* Settings panel — the gear's list. Everything that used to be its own
          button on the bar lives here now; the old buttons stay in the DOM
          (their menus are what this panel borrows) but are no longer shown. */
@@ -16020,19 +16043,16 @@ export class MoviElement extends HTMLElement {
         display: flex;
         align-items: center;
       }
-      /* HDR gets the gradient; anything else keeps the red chip. Two classes
-         so it beats the plain badge rule regardless of sheet order. */
-      .movi-settings-btn-badge.movi-quality-badge-hdr {
-        background: linear-gradient(90deg, #f5a623, #e94b8c);
-        color: #fff;
-      }
       .movi-settings-btn-badge {
         position: absolute;
         top: 2px;
         right: 0;
         padding: 0 3px;
         border-radius: 2px;
-        background: #ff0000;
+        /* Theme colour, not a hardcoded red — the badge is chrome like
+           everything else, and a player themed green shouldn't sprout a red
+           chip in the corner. */
+        background: var(--movi-primary);
         color: #fff;
         font-size: 8px;
         font-weight: 700;
