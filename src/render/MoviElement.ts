@@ -5613,6 +5613,25 @@ export class MoviElement extends HTMLElement {
    * (touch, via the action==="fit" branch). Kept OUT of updateContextMenuContent
    * (which runs on the main menu's open) to avoid touch-open side effects.
    */
+  /**
+   * Mark the current rate in the speed submenu. Its active row was only ever
+   * set by clicking a row there, so a rate changed any other way — the keyboard,
+   * the settings panel, a host call — left the old row ticked. Same shape as
+   * the fit sync below, and for the same reason: the submenu is a moved-out
+   * sibling of the menu, so nothing that sweeps the menu reaches it.
+   */
+  private syncSpeedSubmenuActive(submenu: HTMLElement): void {
+    submenu
+      .querySelectorAll(".movi-context-menu-item[data-speed]")
+      .forEach((el) =>
+        el.classList.toggle(
+          "movi-context-menu-active",
+          parseFloat((el as HTMLElement).dataset.speed || "0") ===
+            this._playbackRate,
+        ),
+      );
+  }
+
   private syncFitSubmenuActive(submenu: HTMLElement): void {
     const currentFit =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
@@ -5724,8 +5743,10 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      // Desktop hover-open of the aspect submenu: reflect the current fit.
+      // Hover-open: reflect live state. Both of these submenus are static
+      // markup whose active row is otherwise only set by clicking in them.
       if (submenu.dataset.submenu === "fit") this.syncFitSubmenuActive(submenu);
+      if (submenu.dataset.submenu === "speed") this.syncSpeedSubmenuActive(submenu);
 
       submenu.classList.add("movi-context-menu-submenu-visible");
     };
@@ -11301,19 +11322,26 @@ export class MoviElement extends HTMLElement {
       const root = this.contextMenuRoot();
       const ctx = root.querySelector(".movi-context-menu") as HTMLElement | null;
       if (ctx) this.updateContextMenuContent(ctx);
-      // The fit submenu is moved OUT of the menu to escape its overflow, so
-      // updateContextMenuContent's own sweep can't reach it — and it is
-      // deliberately synced only when shown. If it happens to be open when a
-      // shortcut fires, sync it here as well.
-      const fitSubmenu = root.querySelector(
-        '.movi-context-menu-submenu[data-submenu="fit"]',
-      ) as HTMLElement | null;
-      if (
-        fitSubmenu &&
-        fitSubmenu.classList.contains("movi-context-menu-submenu-visible")
-      ) {
-        this.syncFitSubmenuActive(fitSubmenu);
-      }
+      // The static submenus (fit, speed) are moved OUT of the menu to escape
+      // its overflow, so updateContextMenuContent's own sweep can't reach them
+      // — and they're deliberately synced only when shown. Whichever is open
+      // when a shortcut fires has to be brought up to date here.
+      //
+      // The populated ones (audio track, subtitles, audio output) need nothing:
+      // updateContextMenuContent rebuilds their HTML, active row included, and
+      // it already looks them up through contextMenuRoot().
+      const openSubmenu = (name: string) => {
+        const el = root.querySelector(
+          `.movi-context-menu-submenu[data-submenu="${name}"]`,
+        ) as HTMLElement | null;
+        return el?.classList.contains("movi-context-menu-submenu-visible")
+          ? el
+          : null;
+      };
+      const fitSubmenu = openSubmenu("fit");
+      if (fitSubmenu) this.syncFitSubmenuActive(fitSubmenu);
+      const speedSubmenu = openSubmenu("speed");
+      if (speedSubmenu) this.syncSpeedSubmenuActive(speedSubmenu);
     }
   }
 
