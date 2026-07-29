@@ -11090,7 +11090,10 @@ export class MoviElement extends HTMLElement {
         /* Same three-stop fade-to-transparent gradient the light
            theme uses now — feathered top edge reads like proper
            chrome over the video instead of a hard band. */
-        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+        /* Short gradient: solid under the row, gone by the top of the bar.
+           The old 60% mid-stop carried a visible wash well above the controls,
+           which ate picture on a large player for no readability gain. */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 45%, transparent 100%);
         /* Overlay's dark wash sits behind the controls bar gradient.
            Fading out at 12% instead of 30% keeps the glow confined
            to the chrome band — it used to bleed a third of the way
@@ -11101,8 +11104,11 @@ export class MoviElement extends HTMLElement {
         /* Sizing */
         --movi-controls-height: 72px;
         --movi-controls-height-mobile: 64px;
-        --movi-progress-height: 4px;
-        --movi-progress-height-hover: 6px;
+        /* Idle bar is a hairline the picture shows through; it thickens under
+           the pointer, which is what marks it as grabbable. YouTube runs the
+           same 3 → 5 pair. */
+        --movi-progress-height: 3px;
+        --movi-progress-height-hover: 5px;
         --movi-btn-size: 44px;
         --movi-btn-size-mobile: 40px;
         
@@ -11225,7 +11231,10 @@ export class MoviElement extends HTMLElement {
            do; per-element colour overrides below force the icons
            and text white inside the bar so the dark theme's icon
            rules still apply over the dark gradient. */
-        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+        /* Short gradient: solid under the row, gone by the top of the bar.
+           The old 60% mid-stop carried a visible wash well above the controls,
+           which ate picture on a large player for no readability gain. */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 45%, transparent 100%);
         /* Light theme overlay used to bleed bright white halfway up
            the frame too; match the dark theme's tighter 12% fade. */
         --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%);
@@ -12127,7 +12136,7 @@ export class MoviElement extends HTMLElement {
         position: relative;
         width: 100%;
         height: var(--movi-progress-height);
-        min-height: 4px;
+        min-height: var(--movi-progress-height);
         background: var(--movi-progress-bg);
         border-radius: 100px;
         cursor: pointer;
@@ -14668,6 +14677,16 @@ export class MoviElement extends HTMLElement {
       @container movi-host (min-width: 1025px) {
         .movi-controls-bar {
           padding: 16px 24px 7px;
+        }
+        /* A 22px glyph that reads fine in a 640px pane looks undersized across
+           a fullscreen TV — the box stays 44px, only the mark inside grows. */
+        .movi-btn svg {
+          width: 26px;
+          height: 26px;
+        }
+        .movi-controls-left,
+        .movi-controls-right {
+          gap: 16px;
         }
       }
       
