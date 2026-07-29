@@ -6492,6 +6492,8 @@ export class MoviElement extends HTMLElement {
       const icon = this.shadowRoot?.querySelector(sel) as SVGElement | null;
       if (icon) icon.innerHTML = svg;
     }
+      // Keep an open panel / context menu in step - see the method's note.
+    this.refreshOpenSettingsSurfaces();
   }
 
   private static readonly TRACK_ICON_AUDIO = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
@@ -11252,6 +11254,48 @@ export class MoviElement extends HTMLElement {
    * isn't exactly two values is taken whole as the primary — one odd-spaced
    * colour must keep working, and three is a typo, not a theme.
    */
+  /**
+   * Re-read state into whatever settings surface is currently open.
+   *
+   * The panel and the context menu are both SNAPSHOTS — built once when opened.
+   * A keyboard shortcut (or the OS media keys, or a host calling the API)
+   * changes the same settings behind them, and the open menu then shows the
+   * previous state until it is closed and reopened, which looks like the
+   * shortcut didn't work.
+   *
+   * Called from the per-setting UI updaters, so every path that changes a
+   * setting goes through it without each one having to remember.
+   */
+  private refreshOpenSettingsSurfaces(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const menu = sr.querySelector(".movi-settings-menu") as HTMLElement | null;
+    if (menu && this.isBottomMenuOpen(menu)) {
+      if (this._settingsPage) {
+        // A page is showing a borrowed list: rebuild that list in place so its
+        // active row moves, and leave the navigation where the viewer put it.
+        const key = this._settingsPage;
+        if (key === "quality") this.updateQualityMenu();
+        else if (key === "audio") this.updateAudioTrackMenu();
+        else if (key === "subtitles") this.updateSubtitleTrackMenu();
+        else if (key === "aspect") {
+          const body = sr.querySelector(
+            ".movi-settings-page-body",
+          ) as HTMLElement | null;
+          if (body) body.innerHTML = this.renderSettingsChoices("aspect");
+        }
+      } else {
+        this.buildSettingsRoot();
+      }
+    }
+    if (this._contextMenuVisible) {
+      const ctx = this.contextMenuRoot().querySelector(
+        ".movi-context-menu",
+      ) as HTMLElement | null;
+      if (ctx) this.updateContextMenuContent(ctx);
+    }
+  }
+
   /** Copy the theme variables the PiP stylesheet reads into the PiP document. */
   private syncPipTheme(win: Window | null = this._pipWindow): void {
     const root = win?.document?.documentElement;
@@ -23606,6 +23650,8 @@ export class MoviElement extends HTMLElement {
       if (ctxOutline) ctxOutline.style.display = "block";
       if (ctxFilled) ctxFilled.style.display = "none";
     }
+      // Keep an open panel / context menu in step - see the method's note.
+    this.refreshOpenSettingsSurfaces();
   }
 
   private updateAmbientUI(): void {
@@ -23728,6 +23774,8 @@ export class MoviElement extends HTMLElement {
       if (ctxOutline) ctxOutline.style.display = "block";
       if (ctxFilled) ctxFilled.style.display = "none";
     }
+      // Keep an open panel / context menu in step - see the method's note.
+    this.refreshOpenSettingsSurfaces();
   }
 
   /**
@@ -24543,6 +24591,9 @@ export class MoviElement extends HTMLElement {
     this.updateMediaSessionPosition();
     // Each new speed gets a fresh stutter warning if it can't keep up.
     this.resetStutterHint();
+    // Speed is the setting most often changed from the keyboard while the panel
+    // is open — the row's value and the speed list's tick both have to move.
+    this.refreshOpenSettingsSurfaces();
   }
 
   get subtitleDelay(): number {
@@ -25722,6 +25773,8 @@ export class MoviElement extends HTMLElement {
       hdrMenuItem?.classList.remove("movi-context-menu-active");
       if (hdrStatus) hdrStatus.textContent = "Off";
     }
+      // Keep an open panel / context menu in step - see the method's note.
+    this.refreshOpenSettingsSurfaces();
   }
 
   /*
