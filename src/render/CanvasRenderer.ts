@@ -4068,8 +4068,17 @@ export class CanvasRenderer {
       if (this.texture) this.gl.deleteTexture(this.texture);
       if (this.program) this.gl.deleteProgram(this.program);
       if (this.vrProgram) this.gl.deleteProgram(this.vrProgram);
-      // Extensions etc
-      // WebGL2 contexts are garbage collected but good to delete resources
+    // Hand the GPU context back explicitly. Dropping the reference only queues
+    // it for garbage collection, and Chrome caps a page at ~16 live WebGL
+    // contexts — a host that rebuilds the player per video (or a run of quality
+    // recreates) walks straight into "Too many active WebGL contexts. Oldest
+    // context will be lost", and the context it kills may well belong to the
+    // player currently on screen.
+      try {
+        this.gl.getExtension("WEBGL_lose_context")?.loseContext();
+      } catch {
+        /* extension unavailable — the context still goes with the canvas */
+      }
     }
     this.gl = null;
     Logger.debug(TAG, "Destroyed");
