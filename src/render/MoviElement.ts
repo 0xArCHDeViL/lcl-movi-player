@@ -7226,10 +7226,25 @@ export class MoviElement extends HTMLElement {
     this._fullRecreates++;
     this._qualityRecoveryAttempts = 0; // fresh player earns a fresh recovery budget
     Logger.warn(TAG, `Source error — full fresh recreate (attempt ${this._fullRecreates})`);
-    // null target → LOWEST rendition: its tiny file is the likeliest to load
-    // cleanly on a link that just failed; the ABR upshifts from there once
-    // playback is healthy again (the full ladder stays available for it).
-    this._recreateAt(null);
+    // FIRST attempt keeps the rung that was playing. Most of what gets here is
+    // not a bandwidth failure at all — a WASM abort after a short read, a
+    // demuxer that fell over mid-switch — and a fresh instance on the same rung
+    // clears it. Diving to the bottom of the ladder for those turned a video
+    // that was playing 720p perfectly well into 144p, which is far more visible
+    // than the hiccup it was recovering from.
+    //
+    // A REPEAT failure is different: whatever is wrong survived a clean
+    // restart, so take the lowest rung, whose small file is the likeliest to
+    // load on a link that keeps failing.
+    const active =
+      ((this.player as { getActiveDashRendition?: () => string } | null)
+        ?.getActiveDashRendition?.() as string) ||
+      (typeof this._src === "string" ? this._src : "");
+    const keepRung =
+      this._fullRecreates === 1 &&
+      !!active &&
+      this._videoQualities.some((q) => q.src === active);
+    this._recreateAt(keepRung ? active : null);
     return true;
   }
 

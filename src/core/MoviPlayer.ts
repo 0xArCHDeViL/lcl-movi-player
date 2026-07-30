@@ -1948,11 +1948,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         break;
       }
     }
-    const upIdx = rungs.indexOf(up);
+    let upIdx = rungs.indexOf(up);
     if (activeIdx < 0) {
       // Current rung unknown (unseeded) — establish the affordable one at once.
       await this.abrCommit(up.url, now);
       return;
+    }
+    // Climb ONE rung at a time. The estimate that sizes the jump is measured
+    // against the rung currently playing, and on a small, fully-cached one it
+    // reads like a much faster link than it is: a 144p file that finished
+    // downloading reported 3.9Mbps and justified a leap to 1080p60, which the
+    // link then couldn't hold — down again twelve seconds later. Stepping makes
+    // each climb a cheap experiment the next tick can confirm or undo, and the
+    // ladder walks up to the highest rung that actually holds instead of
+    // swinging between the top and the bottom.
+    if (upIdx < activeIdx - 1) {
+      upIdx = activeIdx - 1;
+      up = rungs[upIdx];
     }
     if (upIdx < activeIdx) {
       if (this._abrUpCandidate === up.url) {
@@ -2160,6 +2172,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   async abrEmergencyDownshift(reason: string): Promise<string | null> {
     if (this._abrSwitchInProgress) return null;
+    // A rung that was only just switched to has nothing buffered yet BY
+    // DEFINITION — every switch starts a new file from zero. Rescuing that
+    // state drops another rung, which starts another empty buffer, which looks
+    // like starvation again: the log showed 480p → 360p → 240p in twelve
+    // seconds, each step "rescuing" the refill of the step before. Give a fresh
+    // rung the same settle the ordinary downshift gets.
+    if (performance.now() - this._lastAbrSwitchAt < 10000) return null;
     const rungs = this._dashRenditions
       .filter((r) => (r.bandwidth || 0) > 0)
       .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
