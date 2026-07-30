@@ -6867,13 +6867,15 @@ export class MoviElement extends HTMLElement {
     // currently-playing rendition's dimensions instead so the gear badge stays
     // informative. Shaka backs both HLS and DASH via the unified streamWrapper.
     let activeHeight = activeTrack?.height || 0;
+    let activeWidth = (activeTrack as any)?.width || 0;
     if (!activeHeight && activeTrack?.id === -1) {
       try {
         const res = (this.player as any).streamWrapper?.getActiveResolution?.();
         activeHeight = res?.height || 0;
+        activeWidth = res?.width || 0;
       } catch {}
     }
-    this._updateQualityBtnBadge(this._heightBadge(activeHeight));
+    this._updateQualityBtnBadge(this._heightBadge(activeHeight, activeWidth));
 
     qualityList.innerHTML = uniqueTracks
       .map((track) => {
@@ -6885,8 +6887,11 @@ export class MoviElement extends HTMLElement {
         if (track.id === -1 && activeTrack?.id === -1 && activeHeight > 0) {
           label = `Auto (${activeHeight}p)`;
         }
-        // Height alone, same as the gear's own badge — see _heightBadge.
-        const badge = this._heightBadge(track.height || 0);
+        // Same tiering as the gear's own badge — see _heightBadge.
+        const badge = this._heightBadge(
+          track.height || 0,
+          (track as any).width || 0,
+        );
         const badgeHtml = badge
           ? `<span class="movi-quality-badge movi-quality-badge-${badge.toLowerCase()}">${badge}</span>`
           : "";
@@ -7564,16 +7569,17 @@ export class MoviElement extends HTMLElement {
     return tiers[tiers.length - 1][1];
   }
 
-  private _heightBadge(height: number): string {
-    // The encoded height decides the tier, and nothing else. Normalising a
-    // known width to 16:9 first (so an ultrawide 3840x2080 would still read
-    // 4K) promoted every wide-but-short source a whole tier above what the
-    // player itself was calling it: a 1360p file wore a 4K chip, a 4050p one
-    // wore 8K. Whatever the badge says has to agree with the label right next
-    // to it.
-    if (height >= 4320) return "8K";
-    if (height >= 2160) return "4K";
-    if (height >= 1080) return "HD";
+  private _heightBadge(height: number, width: number = 0): string {
+    // Use the 16:9-normalised height when a width is known so ultrawide /
+    // letterboxed tracks (e.g. 3840x2080) still tier as 4K rather than HD —
+    // the same rule stats-for-nerds prints, so the chip and the Quality line
+    // can't contradict each other. Height alone was tried and it disagreed
+    // in the other direction: a 7680x4050 master read 8K in the stats and 4K
+    // on the gear.
+    const eff = width > 0 ? Math.max(height, Math.round(width * 9 / 16)) : height;
+    if (eff >= 4320) return "8K";
+    if (eff >= 2160) return "4K";
+    if (eff >= 1080) return "HD";
     return "";
   }
 
@@ -7614,7 +7620,7 @@ export class MoviElement extends HTMLElement {
         ?.getMediaInfo?.()
         ?.tracks?.find((t) => t.type === "video");
       this._qualityBadge = v?.height
-        ? this._heightBadge(v.height)
+        ? this._heightBadge(v.height, v.width || 0)
         : noLadder
           ? ""
           : this._qualityBadge;
