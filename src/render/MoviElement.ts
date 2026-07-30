@@ -12205,11 +12205,13 @@ export class MoviElement extends HTMLElement {
          the more-general dark-theme rules without re-tinting to
          black-on-light. */
       :host([theme="light"]) .movi-progress-bar {
-        background: rgba(255, 255, 255, 0.15) !important;
+        --movi-progress-bg: rgba(255, 255, 255, 0.15);
+        background-color: var(--movi-progress-bg) !important;
       }
 
       :host([theme="light"]) .movi-progress-bar:hover {
-        background: rgba(255, 255, 255, 0.25) !important;
+        --movi-progress-bg: rgba(255, 255, 255, 0.25);
+        background-color: var(--movi-progress-bg) !important;
       }
 
       :host([theme="light"]) .movi-progress-buffer {
@@ -13080,7 +13082,12 @@ export class MoviElement extends HTMLElement {
 
       .movi-progress-bar:hover {
         height: var(--movi-progress-height-hover);
-        background: rgba(255, 255, 255, 0.25);
+        /* Brighten the groove by moving the VARIABLE, not by setting a
+           background. With chapters the groove is a gradient built from this
+           variable and written to background-image; a background shorthand here
+           would blow that gradient away and take the gaps with it. */
+        --movi-progress-bg: rgba(255, 255, 255, 0.25);
+        background-color: var(--movi-progress-bg);
       }
 
       .movi-progress-bar:focus,
@@ -21976,6 +21983,7 @@ export class MoviElement extends HTMLElement {
     if (chapters.length < 2 || duration <= 0) {
       if (bar) {
         bar.style.removeProperty("background-image");
+        bar.style.removeProperty("background-color");
         bar.style.removeProperty("-webkit-mask-image");
         bar.style.removeProperty("mask-image");
       }
@@ -22017,6 +22025,10 @@ export class MoviElement extends HTMLElement {
       }
       stops.push("var(--movi-progress-bg) 100%");
       bar.style.backgroundImage = `linear-gradient(to right, ${stops.join(", ")})`;
+      // …and the background COLOUR underneath it has to go, or it keeps
+      // painting the groove straight through every hole the gradient opens —
+      // the gaps came out looking half-transparent rather than cut.
+      bar.style.backgroundColor = "transparent";
       bar.style.removeProperty("-webkit-mask-image");
       bar.style.removeProperty("mask-image");
     }
