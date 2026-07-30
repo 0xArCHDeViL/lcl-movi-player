@@ -58,6 +58,8 @@ const OSD = {
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
   ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  // The same monitor with the arrow reversed: the picture, stepped back up.
+  qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
   // A monitor with a downward arrow: the picture, stepped down.
   qualityDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 7v6"/><path d="m9.5 10.5 2.5 2.5 2.5-2.5"/></svg>`,
   seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
@@ -7013,6 +7015,17 @@ export class MoviElement extends HTMLElement {
   // Window during which a quality change is reported to hosts as automatic even
   // with Auto off — see the qualitychange emit.
   private _involuntaryQualityUntil = 0;
+  // The rung a rescue dropped away from, to be restored once playback proves
+  // itself. Only ever set with Auto off — under Auto the ladder climbs back by
+  // itself. Cleared on a genuinely new source, or once restored.
+  private _restoreRungSrc: string | null = null;
+  private _restoreHealthySince = 0;
+  // Steady means: playing, on the rung we were dropped to, with this much
+  // buffered ahead, held for this long. Both generous — a restore that turns
+  // out to be premature costs another rebuild, so it should only fire when the
+  // link is clearly fine again.
+  private static readonly RESTORE_MIN_BUFFER_S = 20;
+  private static readonly RESTORE_STEADY_MS = 30000;
   private static readonly STARVED_RESCUE_MS = 6000;
   // A rescue switch has to open a new source and re-prime; firing another one
   // inside that window would tear down the rescue in progress.
@@ -7259,6 +7272,12 @@ export class MoviElement extends HTMLElement {
     // would win and hide them), so clear it, then rebuild the ladder + split
     // audio from the children.
     if (this.hasAttribute("src")) this.removeAttribute("src");
+    // Which rung is on screen right now — remembered before _parseChildSources
+    // resets the ladder, so the restore below knows what to climb back to.
+    const rungBefore =
+      ((this.player as { getActiveDashRendition?: () => string } | null)
+        ?.getActiveDashRendition?.() as string) ||
+      (typeof this._src === "string" ? this._src : "");
     this._src = null;
     this._suppressSwReload = true;
     this._parseChildSources();
@@ -7266,6 +7285,29 @@ export class MoviElement extends HTMLElement {
       this._src = targetSrc;
     } else if (this._videoQualities.length > 0) {
       this._src = this._videoQualities[this._videoQualities.length - 1].src;
+    }
+    // Dropping a rung to get playing again is a rescue, not a new preference.
+    // Under Auto the ladder climbs back on its own; with Auto OFF nothing ever
+    // does, and a single WASM abort left a perfectly good link watching 144p
+    // for the rest of the video. Remember where we were and go back once
+    // playback has proved itself steady.
+    // Only for the source-error path (targetSrc null → lowest rung). The decode
+    // downshift also lands here, and there the drop is the whole point: the GPU
+    // could not decode the rung above, so climbing back would just re-crash.
+    const dropped =
+      targetSrc === null &&
+      rungBefore &&
+      this._src !== rungBefore &&
+      this._videoQualities.some((q) => q.src === rungBefore);
+    const auto = !!(this.player as { isAutoQuality?: () => boolean } | null)
+      ?.isAutoQuality?.();
+    if (dropped && !auto) {
+      const from = this._videoQualities.find((q) => q.src === rungBefore);
+      const to = this._videoQualities.find((q) => q.src === this._src);
+      if ((from?.height || 0) > (to?.height || 0)) {
+        this._restoreRungSrc = rungBefore;
+        this._restoreHealthySince = 0;
+      }
     }
     const h = this._videoQualities.find((q) => q.src === this._src)?.height;
     Logger.warn(
@@ -11730,6 +11772,7 @@ export class MoviElement extends HTMLElement {
         }
         this._checkFrozenVideo(timestamp);
         this._checkStuckPlayback(timestamp);
+        this._checkRungRestore(timestamp);
       }
 
       requestAnimationFrame(updateUI);
@@ -21205,6 +21248,9 @@ export class MoviElement extends HTMLElement {
     // new one shows the old one's length until its own metadata arrives.
     if (!this._qualitySwitchInProgress && !this._fullRecreateInFlight) {
       this._switchResumeDuration = 0;
+      // A pending restore belongs to the material that was interrupted.
+      this._restoreRungSrc = null;
+      this._restoreHealthySince = 0;
     }
     // …and the gear's quality badge, which belongs to the file that set it.
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
@@ -23348,6 +23394,61 @@ export class MoviElement extends HTMLElement {
     // later still), so re-deciding on every state change beats trying to
     // catch the last of them.
     this.syncMobileExtras();
+  }
+
+  /**
+   * Climb back to the rung a rescue took us off, once playback has been steady
+   * for a while.
+   *
+   * Only runs with Auto off, because that is the case nothing else covers: a
+   * crash or a stall drops the quality to get playing again, and with no ABR
+   * running the viewer simply stays there — a single WASM abort was enough to
+   * pin a fast connection to 144p for the rest of the video. One attempt; if
+   * the higher rung fails again the recovery path drops us back and we do not
+   * fight it.
+   */
+  private _checkRungRestore(now: number): void {
+    const target = this._restoreRungSrc;
+    if (!target) return;
+    const p = this.player as unknown as {
+      getState?: () => string;
+      getBufferedTime?: () => number;
+      getCurrentTime?: () => number;
+      isAutoQuality?: () => boolean;
+      switchVideoRenditionInPlace?: (url: string) => Promise<boolean>;
+    } | null;
+    if (!p?.switchVideoRenditionInPlace) return;
+    // Auto came on in the meantime (or the viewer picked a rung themselves) —
+    // either way the decision is no longer ours to make.
+    if (p.isAutoQuality?.()) {
+      this._restoreRungSrc = null;
+      return;
+    }
+    const healthy =
+      p.getState?.() === "playing" &&
+      (p.getBufferedTime?.() ?? 0) - (p.getCurrentTime?.() ?? 0) >=
+        MoviElement.RESTORE_MIN_BUFFER_S;
+    if (!healthy) {
+      this._restoreHealthySince = 0;
+      return;
+    }
+    if (this._restoreHealthySince === 0) {
+      this._restoreHealthySince = now;
+      return;
+    }
+    if (now - this._restoreHealthySince < MoviElement.RESTORE_STEADY_MS) return;
+    this._restoreRungSrc = null;
+    this._restoreHealthySince = 0;
+    const label = this._videoQualities.find((q) => q.src === target)?.label;
+    Logger.info(TAG, `Restoring the rung a recovery dropped: ${label || target}`);
+    // Same as the rescue: the player moved this, not the viewer, so a host that
+    // persists the picked quality must not record it.
+    this._involuntaryQualityUntil = now + 30000;
+    void p.switchVideoRenditionInPlace(target).then((ok) => {
+      if (ok && label) {
+        this.showOSD(OSD.qualityUp, `Quality restored to ${label}`);
+      }
+    });
   }
 
   /**
