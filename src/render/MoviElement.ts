@@ -7744,11 +7744,11 @@ export class MoviElement extends HTMLElement {
     rows.push(
       ...this._videoQualities.map((q) => {
         const isActive = !isAuto && q.src === activeSrc;
-        // Label may already include the fps suffix (e.g. "1080p60"). Only
+        // Label may already include the fps suffix (e.g. "1080p@60"). Only
         // append fps if it isn't already present in the label.
         const fpsSuffix =
           q.fps && q.fps > 30 && !new RegExp(`${q.fps}$`).test(q.label)
-            ? q.fps
+            ? `@${q.fps}`
             : "";
         const label = `${q.label}${fpsSuffix}`;
         const badgeHtml = q.badge
@@ -10701,17 +10701,17 @@ export class MoviElement extends HTMLElement {
     if (only?.label) {
       const fps = Math.round(only.fps || 0);
       return fps > 30 && !new RegExp(`${fps}$`).test(only.label)
-        ? `${only.label}${fps}`
+        ? `${only.label}@${fps}`
         : only.label;
     }
     const v = this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video");
     if (!v?.height) return "";
-    // Same suffix the ladder uses: "2160p60". A high frame rate is as much a
+    // Same suffix the ladder uses: "2160p@60". A high frame rate is as much a
     // part of "what am I watching" as the resolution is, and this row was
     // reading 2160p for a 60fps file while a two-rung ladder of the same
-    // material said 2160p60.
+    // material said 2160p@60.
     const fps = Math.round(v.frameRate || 0);
-    return fps > 30 ? `${v.height}p${fps}` : `${v.height}p`;
+    return fps > 30 ? `${v.height}p@${fps}` : `${v.height}p`;
   }
 
   /** The aspect row's icon is the CURRENT crop, not a generic frame — the value
