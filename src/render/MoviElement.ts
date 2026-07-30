@@ -7001,6 +7001,17 @@ export class MoviElement extends HTMLElement {
   private _frozenSince = 0;
   private _frozenRecoveries = 0;
   private static readonly MAX_FROZEN_RECOVERIES = 3;
+  // Starvation: the clock (carried by a separate audio source) keeps moving with
+  // nothing buffered ahead of it, so the picture is stopped for as long as the
+  // link stays under the current rung. Held for a few seconds before acting —
+  // the ABR downshift gets first refusal, and a short dip refills on its own.
+  private _starvedSince = 0;
+  private _starvedLastTime = -1;
+  private _lastRungRescueAt = 0;
+  private static readonly STARVED_RESCUE_MS = 6000;
+  // A rescue switch has to open a new source and re-prime; firing another one
+  // inside that window would tear down the rescue in progress.
+  private static readonly RUNG_RESCUE_COOLDOWN_MS = 8000;
   // Companion watchdog for the NON-playing stuck case (a seek/rebuffer that
   // never completes) — the frozen-video watchdog only covers "playing".
   private _stuckRecoverySince = 0;
@@ -7263,6 +7274,11 @@ export class MoviElement extends HTMLElement {
     // rebuild-in-flight note in updateControlsState. Cleared once the new
     // player reports a playable state (or fails and surfaces an error).
     this._fullRecreateInFlight = true;
+    // Carry the duration across the rebuild. The replacement reports 0 until
+    // its own mediaInfo lands, and the bar reading "2:29 / 00:00" with an empty
+    // progress track — for the same video, still at the same position — reads
+    // as the player having lost the file. Same stash the quality switch uses.
+    this._stashDurationForRebuild();
     this.updateControlsState();
     // load() tears the old player down and re-inits on a fresh WASM instance,
     // clearing any stuck error state and resuming at _startAt/_pendingSeek.
@@ -7972,12 +7988,7 @@ export class MoviElement extends HTMLElement {
       this._startAt = resumeTime;
       this._pendingSeek = resumeTime;
     }
-    try {
-      this._switchResumeDuration =
-        (this.player as any).getDuration?.() || 0;
-    } catch {
-      this._switchResumeDuration = 0;
-    }
+    this._stashDurationForRebuild();
     // Freeze the current frame as a poster so the swap isn't a black flash.
     try {
       const snapshot = this.canvas?.toDataURL?.("image/jpeg", 0.85);
@@ -8032,10 +8043,25 @@ export class MoviElement extends HTMLElement {
   // the resume position so the new player starts there deterministically, then
   // restores this once the switch settles so a later reload doesn't re-seek.
   private _startAtBeforeSwitch: number = 0;
-  // Pre-switch total duration. Cached for the same reason — duration is
-  // identical across quality variants, but the new player's mediaInfo
-  // isn't populated until the demuxer opens.
+  // Pre-rebuild total duration. Cached for the same reason — the length is the
+  // same before and after any rebuild (quality switch, error recovery, software
+  // fallback), but the new player's mediaInfo isn't populated until its demuxer
+  // opens, and until then it reports 0.
   private _switchResumeDuration: number = 0;
+
+  /** Hold the current duration across a player rebuild. Only ever raises a real
+   *  number — a crashed player that throws leaves the last good value in place,
+   *  which is exactly what the UI should keep showing. */
+  private _stashDurationForRebuild(): void {
+    try {
+      const d =
+        (this.player as { getDuration?: () => number } | null)?.getDuration?.() ||
+        0;
+      if (d > 0) this._switchResumeDuration = d;
+    } catch {
+      /* keep whatever we had */
+    }
+  }
   // The current switch's 8s poster-safety timeout. Stored so a rapid next
   // switch (or the switch completing) can cancel it — otherwise a stale timer
   // from an earlier switch fires mid-way through a later one, tearing down its
@@ -8111,11 +8137,7 @@ export class MoviElement extends HTMLElement {
       // ready/paused/playing, so the resume lands deterministically.
       this._pendingSeek = resumeTime;
     }
-    try {
-      this._switchResumeDuration = this.player ? (this.player as any).getDuration?.() || 0 : 0;
-    } catch {
-      this._switchResumeDuration = 0;
-    }
+    this._stashDurationForRebuild();
 
     // Snapshot the current canvas frame and pin it as the poster overlay so
     // the user sees a frozen last-frame instead of black during the swap.
@@ -11713,16 +11735,37 @@ export class MoviElement extends HTMLElement {
     }
     const t = p.getCurrentTime?.() ?? 0;
     // Only a DECODE stall earns a corrective seek. With no buffered data ahead
-    // the video isn't "frozen" — it's STARVED (link too slow to sustain even the
-    // lowest rung), and seeking there just resets the pipeline: the seek
+    // the video isn't "frozen" — it's STARVED (link too slow to sustain the
+    // current rung), and seeking there just resets the pipeline: the seek
     // force-completes with no frame, black-frame recovery burns its nudges, the
     // buffer refills, playback resumes, and it freezes again — a loop that never
-    // settles. Let it buffer instead.
+    // settles.
+    //
+    // But it must not simply be left to buffer either. Audio has its own source
+    // and keeps playing, so nothing here ever ends: the picture just stops while
+    // the sound runs on, which is exactly the stall people fix by seeking by
+    // hand. If it persists, bail out to the lowest rung — the ABR's own
+    // downshift is the first line of defence, and this catches the times it
+    // doesn't land (its open flakes on the same bad link, or it holds off
+    // reading the rung as still affordable).
     const bufferedAhead = (p.getBufferedTime?.() ?? 0) - t;
     if (bufferedAhead < 0.5) {
       this._frozenSince = 0;
+      const starving = t > this._starvedLastTime + 0.05;
+      this._starvedLastTime = t;
+      if (!starving) {
+        this._starvedSince = 0;
+        return;
+      }
+      if (this._starvedSince === 0) this._starvedSince = now;
+      if (now - this._starvedSince > MoviElement.STARVED_RESCUE_MS) {
+        this._starvedSince = 0;
+        this._rescueRung(`starved ${(bufferedAhead).toFixed(1)}s at ${t.toFixed(1)}s`);
+      }
       return;
     }
+    this._starvedSince = 0;
+    this._starvedLastTime = t;
     // Nor does a decoder that simply can't keep up. The renderer has its own
     // detector for that (near-zero frames presented while audio flows) and by
     // the time it latches, "clock moving, no new frames" is permanently true —
@@ -11758,9 +11801,15 @@ export class MoviElement extends HTMLElement {
       return;
     }
     if (now - this._frozenSince < 2500) return;
+    this._frozenSince = 0;
+    // A frozen picture right after a quality switch is usually the switch
+    // itself: the new rendition arrived behind the playhead, or costs more than
+    // the link can carry, and the corrective seek below re-primes decode on a
+    // rung that will just starve again. Drop off the rung first; the seek is
+    // the fallback for when there is no rung to drop to.
+    if (this._rescueRung(`frozen at ${t.toFixed(1)}s`)) return;
     if (this._frozenRecoveries >= MoviElement.MAX_FROZEN_RECOVERIES) return;
     this._frozenRecoveries++;
-    this._frozenSince = 0;
     Logger.warn(
       TAG,
       `Video frozen while audio plays (${t.toFixed(1)}s) — corrective seek to re-prime decode`,
@@ -11770,6 +11819,31 @@ export class MoviElement extends HTMLElement {
     } catch {
       /* seek rejected — the next tick re-evaluates */
     }
+  }
+
+  /**
+   * Ask the player to bail out to its lowest rung because playback has actually
+   * stopped moving. Rate-limited: the switch needs a few seconds to prep and
+   * re-prime, and firing again inside that window would tear down the very
+   * rescue that is running. Returns true when a rescue was started (or one is
+   * still settling), so callers can hold off their own recovery.
+   */
+  private _rescueRung(reason: string): boolean {
+    const p = this.player as unknown as {
+      abrEmergencyDownshift?: (reason: string) => Promise<boolean>;
+      isAutoQuality?: () => boolean;
+    } | null;
+    if (!p?.abrEmergencyDownshift || !p.isAutoQuality?.()) return false;
+    const now = performance.now();
+    if (now - this._lastRungRescueAt < MoviElement.RUNG_RESCUE_COOLDOWN_MS) {
+      return true; // one is already in flight / settling
+    }
+    this._lastRungRescueAt = now;
+    void p.abrEmergencyDownshift(reason).then((started) => {
+      // Nothing to drop to — let the next tick fall through to the seek.
+      if (!started) this._lastRungRescueAt = 0;
+    });
+    return true;
   }
 
   /** Companion to _checkFrozenVideo for the NON-playing case: a seek or rebuffer
@@ -21076,6 +21150,12 @@ export class MoviElement extends HTMLElement {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+    // The carried-over duration belongs to the material being rebuilt. A load
+    // that ISN'T a rebuild is a different video, so let it go — otherwise the
+    // new one shows the old one's length until its own metadata arrives.
+    if (!this._qualitySwitchInProgress && !this._fullRecreateInFlight) {
+      this._switchResumeDuration = 0;
+    }
     // …and the gear's quality badge, which belongs to the file that set it.
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
     this._qualityBadge = "";
@@ -26109,11 +26189,18 @@ export class MoviElement extends HTMLElement {
 
   get duration(): number {
     const live = this.player?.getDuration() || 0;
-    // While a quality switch is in flight the new player's mediaInfo isn't
-    // populated yet so getDuration() returns 0 — fall back to the cached
-    // pre-switch duration. (Quality variants share the same length, so this
-    // is always correct.)
-    if (this._qualitySwitchInProgress && this._switchResumeDuration > 0 && live <= 0) {
+    // Any rebuild of the player — a quality switch, a source-error recovery
+    // onto another rendition, a software-decode fallback — starts with an empty
+    // mediaInfo, so getDuration() reads 0 for a second or two. Painting that
+    // zero blanks the duration and throws the progress bar back to the start
+    // while the time display, which carries its own resume value, still reads
+    // the real position: 2:29 / 00:00 with an empty bar.
+    //
+    // Every one of those paths stashes the pre-rebuild duration first, and the
+    // rebuild is playing the same material, so use it until the new instance
+    // reports its own. Not gated on the quality-switch flag any more — the
+    // recovery paths set no such flag, which is where this showed up.
+    if (live <= 0 && this._switchResumeDuration > 0) {
       return this._switchResumeDuration;
     }
     return live;

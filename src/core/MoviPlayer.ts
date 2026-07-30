@@ -237,6 +237,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly ABR_DECODE_PENALTY_MS = 120000; // 2 min
   private static readonly ABR_PENALTY_MAX_MS = 300000; // escalation ceiling (5 min)
   private static readonly ABR_STRIKE_DECAY_MS = 180000; // forget strikes after 3 min clean
+  // How far AHEAD of the playhead an in-place rendition swap aims. Covers the
+  // decoder flush + reconfigure the swap itself performs, so the new rendition's
+  // first frames land at or just after the clock instead of under it.
+  private static readonly RENDITION_SWAP_LEAD_S = 0.4;
   // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
   // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
   // so a rung the link keeps failing to hold is backed off harder and harder
@@ -1356,7 +1360,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       cfgSrc && "url" in cfgSrc && cfgSrc.url ? cfgSrc.url : "";
     const isHls = srcUrl.toLowerCase().includes(".m3u8");
     const headers = this.config.headers;
-    const resumeTime = this.getCurrentTime();
 
     // --- PREP (old keeps playing): build + open the new demuxer on an isolated
     // WASM module and seek it to the current position. Any failure here bails
@@ -1403,8 +1406,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return false;
     }
     const newStartTime = newInfo.startTime || 0;
+    // Read the clock HERE, after the open — not before it.
+    // Building and opening the new source is a network round trip — on the link
+    // that most needs a quality switch it takes seconds, and audio (a separate
+    // source, still playing) carries the clock right on through it. Seeking to
+    // the stale time starts the new rendition BEHIND the playhead, and the
+    // keyframe alignment drags it back further still; the swap then has to
+    // fetch and decode that whole deficit ON TOP of realtime, precisely when
+    // bandwidth is already the problem. Measured on a 5Mbps link: a 720p50
+    // upshift came up 7.2s behind, which ate a 55s buffer in 12 seconds and
+    // left the video frozen under running audio.
+    //
+    // The small lead covers the swap itself (decoder flush + reconfigure below),
+    // so the first frames land at or just after the clock rather than under it.
+    // Frames slightly ahead simply wait for their presentation time; frames
+    // behind have to be decoded and thrown away.
+    const swapTime = Math.min(
+      this.getCurrentTime() + MoviPlayer.RENDITION_SWAP_LEAD_S,
+      this.getDuration() || Number.POSITIVE_INFINITY,
+    );
     try {
-      await newDemuxer.seek(resumeTime + newStartTime);
+      await newDemuxer.seek(swapTime + newStartTime);
     } catch (e) {
       Logger.warn(TAG, "in-place switch: new demuxer seek failed", e);
       try { newDemuxer.close(); } catch {}
@@ -1445,7 +1467,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // clamp holds the old rendition's higher, differently-scaled value and the
     // buffer bar freezes after a quality switch.
     this.lastBufferedTime = 0;
-    this.bufferedRangeStart = resumeTime;
+    this.bufferedRangeStart = swapTime;
 
     // The video decoder's software path reads through the demuxer's WASM module.
     const bindings = newDemuxer.getBindings();
@@ -2062,6 +2084,71 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       `ABR: device decode-bound at ${failing.label || failingBw + "bps"}${failH ? " (" + failH + "p)" : ""} — dropping to ${target.label || target.bandwidth + "bps"}${capped ? ` and capping ${failH}p+ for this session` : " to relieve stutter"}`,
     );
     void this.abrCommit(target.url, now);
+  }
+
+  /**
+   * Last resort: the video has stopped moving under running audio and the
+   * normal ABR hasn't rescued it. Bail out to the LOWEST rung immediately.
+   *
+   * Everything the ordinary downshift weighs — the 5s settle, the 12s cooldown,
+   * "is the source coasting", the throughput estimate — exists to keep quality
+   * from flapping on a healthy link. None of it applies once playback has
+   * actually stopped: the rung has been disproven by the outcome, so this
+   * skips the lot and goes straight to the bottom of the ladder, whose small
+   * file also preps fastest.
+   *
+   * Retried once, because the failure that gets here is usually a flaky link
+   * and the rescue's own open has to cross the same one — a single fumbled
+   * size probe was enough to leave a real session frozen until the viewer
+   * seeked by hand.
+   *
+   * Returns true if a switch was started. False means there was nothing to
+   * switch to (Auto off, no ladder, already lowest), so the caller should fall
+   * back to its own recovery.
+   */
+  async abrEmergencyDownshift(reason: string): Promise<boolean> {
+    if (!this._autoQuality || this._abrSwitchInProgress) return false;
+    const rungs = this._dashRenditions
+      .filter((r) => (r.bandwidth || 0) > 0)
+      .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+    if (rungs.length < 2) return false;
+    const activeIdx = rungs.findIndex(
+      (r) => r.url === this._activeDashRendition,
+    );
+    if (activeIdx < 0 || activeIdx >= rungs.length - 1) return false; // already lowest
+    const target = rungs[rungs.length - 1];
+    const now = performance.now();
+    // Bar the rung that stalled (and everything above it) from being climbed
+    // back into on the next spike — it just proved it can't be sustained.
+    const failingBw = rungs[activeIdx].bandwidth || 0;
+    this._abrPenalizedBandwidth = failingBw;
+    this._abrPenaltyUntil = Math.max(
+      this._abrPenaltyUntil,
+      now + MoviPlayer.ABR_PENALTY_MS * 2,
+    );
+    Logger.warn(
+      TAG,
+      `ABR emergency downshift (${reason}): ${rungs[activeIdx].label || failingBw} → ${target.label || target.bandwidth}`,
+    );
+    this._lastAbrSwitchAt = now;
+    this._abrUpCandidate = "";
+    this._abrUpConfirms = 0;
+    this._lastBufferAhead = 0;
+    this._abrSwitchInProgress = true;
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          if (await this.switchVideoRenditionInPlace(target.url)) return true;
+        } catch {
+          /* fall through to the retry */
+        }
+        if (this._destroyed) return false;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    } finally {
+      this._abrSwitchInProgress = false;
+    }
+    return false;
   }
 
   private async configureDecoders(): Promise<void> {
