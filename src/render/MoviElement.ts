@@ -12679,6 +12679,10 @@ export class MoviElement extends HTMLElement {
       /* Hide the gear while a bottom dropdown OR the storyboard timeline is
          open — it lives in a higher stacking context than either and would
          otherwise paint over them. */
+      /* Stats-for-nerds has its own close button in the same corner, and on a
+         small phone the two overlap — the tap lands on this one and the panel
+         won't close. The panel is the thing being read, so it wins. */
+      :host:has(.movi-nerd-stats[style*="flex"]) .movi-gear-btn,
       :host(.movi-bottom-menu-open) .movi-gear-btn,
       :host:has(.movi-timeline-panel[style*="flex"]) .movi-gear-btn {
         opacity: 0 !important;
@@ -22785,6 +22789,12 @@ export class MoviElement extends HTMLElement {
       try {
         (this.player as any).play?.();
       } catch {}
+      // Re-arm the auto-hide. The error overlay deliberately pins the bar open
+      // (hiding it there would take the fullscreen exit with it), and that gate
+      // is _isUnsupported — cleared just above, but the timer is only ever set
+      // by showControls, so without this the bar stayed up for the rest of the
+      // video.
+      this.showControls();
       return;
     }
 
@@ -22814,6 +22824,10 @@ export class MoviElement extends HTMLElement {
       this.player.destroy();
       this.player = null;
     }
+
+    // Same re-arm as the fast path above: the overlay's pin is gone, so the
+    // bar has to be told it may fade again.
+    this.showControls();
 
     // Reset loading state so initializePlayer can run
     this.isLoading = false;
