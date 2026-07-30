@@ -1364,6 +1364,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const cfgSrc = this.config.source;
     const srcUrl =
       cfgSrc && "url" in cfgSrc && cfgSrc.url ? cfgSrc.url : "";
+    // Tell the UI a swap is under way. It has to be paired with an end event on
+    // EVERY exit below, including the early bails, or the indicator it drives
+    // would be left running over a player that is doing nothing.
+    const switchLabel = this._dashRenditions.find(
+      (r) => r.url === newRenditionUrl,
+    )?.label;
+    this.emit("renditionSwitch", { active: true, label: switchLabel });
+    const endSwitch = <T,>(result: T): T => {
+      this.emit("renditionSwitch", { active: false, label: switchLabel });
+      return result;
+    };
     const isHls = srcUrl.toLowerCase().includes(".m3u8");
     const headers = this.config.headers;
 
@@ -1374,7 +1385,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     try {
       if (isHls) {
         const variant = await loadHlsVariant(newRenditionUrl, headers);
-        if (!variant) return false;
+        if (!variant) return endSwitch(false);
         newSource = new SegmentStreamSource(
           variant.segments,
           variant.initSegment,
@@ -1390,7 +1401,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     } catch (e) {
       Logger.warn(TAG, "in-place switch: new source build failed", e);
-      return false;
+      return endSwitch(false);
     }
 
     const newDemuxer = new Demuxer(newSource, this.config.wasmBinary, true);
@@ -1401,7 +1412,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Logger.warn(TAG, "in-place switch: new demuxer open failed", e);
       try { newDemuxer.close(); } catch {}
       try { newSource.close(); } catch {}
-      return false;
+      return endSwitch(false);
     }
     const newVideoTrack = newInfo.tracks.find(
       (t) => t.type === "video",
@@ -1409,7 +1420,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!newVideoTrack) {
       try { newDemuxer.close(); } catch {}
       try { newSource.close(); } catch {}
-      return false;
+      return endSwitch(false);
     }
     const newStartTime = newInfo.startTime || 0;
     // Read the clock HERE, after the open — not before it.
@@ -1437,7 +1448,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Logger.warn(TAG, "in-place switch: new demuxer seek failed", e);
       try { newDemuxer.close(); } catch {}
       try { newSource.close(); } catch {}
-      return false;
+      return endSwitch(false);
     }
 
     // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
@@ -1529,7 +1540,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       TAG,
       `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}`,
     );
-    return true;
+    return endSwitch(true);
   }
 
   /**

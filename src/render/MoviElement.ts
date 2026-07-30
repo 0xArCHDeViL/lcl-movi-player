@@ -58,6 +58,8 @@ const OSD = {
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
   ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  // Plain monitor: quality changed, without claiming a direction.
+  quality: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>`,
   // The same monitor with the arrow reversed: the picture, stepped back up.
   qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
   // A monitor with a downward arrow: the picture, stepped down.
@@ -821,6 +823,16 @@ export class MoviElement extends HTMLElement {
       e.stopPropagation();
       void this.openCuesPanel();
     });
+
+    // A hairline along the top edge, shown only while a quality switch is
+    // opening the new rendition. Audio keeps playing through the swap and the
+    // picture holds for a second or two — with nothing on screen that reads as
+    // the player having glitched, which is exactly what it isn't.
+    const switchBar = document.createElement("div");
+    switchBar.className = "movi-switch-bar";
+    switchBar.setAttribute("aria-hidden", "true");
+    switchBar.innerHTML = `<div class="movi-switch-bar-fill"></div>`;
+    shadowRoot.appendChild(switchBar);
 
     // Create loading indicator (positioned over video area)
     const loadingIndicator = document.createElement("div");
@@ -16073,6 +16085,60 @@ export class MoviElement extends HTMLElement {
          button's default (centre of the visible band above the
          controls bar); the two override blocks below match the
          button's bar-hidden and both-bars-visible rules exactly. */
+      /* Quality-switch hairline. Deliberately small: an Auto ladder can move
+         several times in a minute, so this has to be noticeable enough to
+         explain a held frame and quiet enough to ignore. */
+      .movi-switch-bar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        overflow: hidden;
+        z-index: 1001;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 160ms ease;
+        background: rgba(255, 255, 255, 0.12);
+      }
+      :host(.movi-switching) .movi-switch-bar {
+        opacity: 1;
+      }
+      .movi-switch-bar-fill {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 35%;
+        border-radius: 2px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          var(--movi-primary, #7c3aed),
+          transparent
+        );
+        transform: translateX(-40%);
+      }
+      :host(.movi-switching) .movi-switch-bar-fill {
+        animation: movi-switch-slide 1.1s linear infinite;
+      }
+      @keyframes movi-switch-slide {
+        from { transform: translateX(-40%); }
+        to { transform: translateX(300%); }
+      }
+      /* No travelling element for anyone who asked motion to stop — the bar
+         still appears, it just breathes instead of sliding. */
+      @media (prefers-reduced-motion: reduce) {
+        :host(.movi-switching) .movi-switch-bar-fill {
+          animation: movi-switch-pulse 1.4s ease-in-out infinite;
+          width: 100%;
+          transform: none;
+        }
+        @keyframes movi-switch-pulse {
+          0%, 100% { opacity: 0.35; }
+          50% { opacity: 1; }
+        }
+      }
+
       .movi-loading-indicator {
         position: absolute;
         top: 50%;
@@ -20979,6 +21045,22 @@ export class MoviElement extends HTMLElement {
     this.player.on("loadEnd", loadEndHandler);
     this.eventHandlers.set("loadEnd", () =>
       this.player?.off("loadEnd", loadEndHandler),
+    );
+
+    // Quality switches are the one thing that stops the picture while
+    // everything else keeps running, so they get their own sign of life — a
+    // hairline at the top edge, and the quality OSD once the new rung lands.
+    // Auto moves on its own, and a held frame with no explanation is the single
+    // easiest thing to mistake for the player breaking.
+    const renditionSwitchHandler = (e: { active: boolean; label?: string }) => {
+      this.classList.toggle("movi-switching", e.active);
+      if (!e.active && e.label) {
+        this.showOSD(OSD.quality, e.label);
+      }
+    };
+    this.player.on("renditionSwitch", renditionSwitchHandler);
+    this.eventHandlers.set("renditionSwitch", () =>
+      this.player?.off("renditionSwitch", renditionSwitchHandler),
     );
 
     // Release the mobile 4K+ preload gate when FileSource finishes its

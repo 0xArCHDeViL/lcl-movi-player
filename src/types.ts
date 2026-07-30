@@ -368,6 +368,14 @@ export interface PlayerEventMap {
   filerevoked: { offset: number; length: number; reason: string };
   loadStart: void;
   loadEnd: void;
+  /**
+   * An in-place rendition switch started (`active: true`) or finished. Playback
+   * continues throughout — audio never stops — but the picture is held for a
+   * second or two while the new rendition opens, and without a sign of life
+   * that pause reads as the player glitching. `label` names the rung being
+   * moved to, for a UI that wants to say so.
+   */
+  renditionSwitch: { active: boolean; label?: string };
   seeking: number;
   seeked: number;
   bufferUpdate: { start: number; end: number }[];
