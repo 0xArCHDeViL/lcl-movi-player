@@ -18310,6 +18310,9 @@ export class MoviElement extends HTMLElement {
         publishPlayerWidth();
         this.syncTinyLayout();
         this.updateCanvasSize();
+        // The chapter mask is sized in pixels against the track, so it has to
+        // be rebuilt whenever the track's width changes.
+        this.renderChapterMarkers();
       });
       resizeObserver.observe(this);
     } else {
@@ -21972,8 +21975,18 @@ export class MoviElement extends HTMLElement {
       }
       for (const el of layers) {
         if (!el) continue;
-        el.style.removeProperty("-webkit-mask-image");
-        el.style.removeProperty("mask-image");
+        for (const prop of [
+          "-webkit-mask-image",
+          "mask-image",
+          "-webkit-mask-size",
+          "mask-size",
+          "-webkit-mask-repeat",
+          "mask-repeat",
+          "-webkit-mask-position",
+          "mask-position",
+        ]) {
+          el.style.removeProperty(prop);
+        }
       }
       return;
     }
@@ -21984,35 +21997,54 @@ export class MoviElement extends HTMLElement {
       const pct = (chapters[i].start / duration) * 100;
       if (pct > 0 && pct < 100) cuts.push(pct);
     }
-    const gradient = (paint: string, gap: string) => {
-      const stops = [`${paint} 0`];
+
+    // The groove IS the bar, so percentages land where they should.
+    if (bar) {
+      const stops = ["var(--movi-progress-bg) 0"];
       for (const pct of cuts) {
         stops.push(
-          `${paint} calc(${pct}% - ${half}px)`,
-          `${gap} calc(${pct}% - ${half}px)`,
-          `${gap} calc(${pct}% + ${half}px)`,
-          `${paint} calc(${pct}% + ${half}px)`,
+          `var(--movi-progress-bg) calc(${pct}% - ${half}px)`,
+          `transparent calc(${pct}% - ${half}px)`,
+          `transparent calc(${pct}% + ${half}px)`,
+          `var(--movi-progress-bg) calc(${pct}% + ${half}px)`,
         );
       }
-      stops.push(`${paint} 100%`);
-      return `linear-gradient(to right, ${stops.join(", ")})`;
-    };
-
-    if (bar) {
-      // The groove is the bar's own background, so it takes the gaps as a
-      // gradient in that background rather than as a mask.
-      bar.style.backgroundImage = gradient(
-        "var(--movi-progress-bg)",
-        "transparent",
-      );
+      stops.push("var(--movi-progress-bg) 100%");
+      bar.style.backgroundImage = `linear-gradient(to right, ${stops.join(", ")})`;
       bar.style.removeProperty("-webkit-mask-image");
       bar.style.removeProperty("mask-image");
     }
-    const mask = gradient("#000", "transparent");
+
+    // The buffer and fill are NARROWER boxes, and a mask is measured in the
+    // element's own box — so percentage stops there land at a fraction of the
+    // played width instead of the track's, cutting the fill into stripes that
+    // moved as it grew. Size the mask to the TRACK in pixels and pin it to the
+    // left edge (both layers start there), so a cut sits at the same place on
+    // every layer whatever their widths are.
+    const trackWidth = bar?.getBoundingClientRect().width || 0;
+    if (trackWidth <= 0) return;
+    const stops = ["#000 0"];
+    for (const pct of cuts) {
+      const x = (pct / 100) * trackWidth;
+      stops.push(
+        `#000 ${x - half}px`,
+        `transparent ${x - half}px`,
+        `transparent ${x + half}px`,
+        `#000 ${x + half}px`,
+      );
+    }
+    stops.push(`#000 ${trackWidth}px`);
+    const mask = `linear-gradient(to right, ${stops.join(", ")})`;
     for (const el of layers) {
       if (!el) continue;
       el.style.setProperty("-webkit-mask-image", mask);
       el.style.maskImage = mask;
+      el.style.setProperty("-webkit-mask-size", `${trackWidth}px 100%`);
+      el.style.maskSize = `${trackWidth}px 100%`;
+      el.style.setProperty("-webkit-mask-repeat", "no-repeat");
+      el.style.maskRepeat = "no-repeat";
+      el.style.setProperty("-webkit-mask-position", "left top");
+      el.style.maskPosition = "left top";
     }
   }
 
