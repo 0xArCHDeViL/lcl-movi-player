@@ -21948,6 +21948,74 @@ export class MoviElement extends HTMLElement {
   /**
    * Render chapter markers on the progress bar (YouTube-style)
    */
+  /** Paint (or clear) the chapter gaps across the track's three painted
+   *  layers. See the note at the call site for why the bar itself is spared. */
+  private applyChapterGaps(
+    root: ShadowRoot,
+    chapters: Array<{ start: number }>,
+    duration: number,
+  ): void {
+    const bar = root.querySelector(".movi-progress-bar") as HTMLElement | null;
+    const buffer = root.querySelector(
+      ".movi-progress-buffer",
+    ) as HTMLElement | null;
+    const fill = root.querySelector(
+      ".movi-progress-filled",
+    ) as HTMLElement | null;
+    const layers = [buffer, fill];
+
+    if (chapters.length < 2 || duration <= 0) {
+      if (bar) {
+        bar.style.removeProperty("background-image");
+        bar.style.removeProperty("-webkit-mask-image");
+        bar.style.removeProperty("mask-image");
+      }
+      for (const el of layers) {
+        if (!el) continue;
+        el.style.removeProperty("-webkit-mask-image");
+        el.style.removeProperty("mask-image");
+      }
+      return;
+    }
+
+    const half = 1.5; // px either side of the boundary
+    const cuts: number[] = [];
+    for (let i = 1; i < chapters.length; i++) {
+      const pct = (chapters[i].start / duration) * 100;
+      if (pct > 0 && pct < 100) cuts.push(pct);
+    }
+    const gradient = (paint: string, gap: string) => {
+      const stops = [`${paint} 0`];
+      for (const pct of cuts) {
+        stops.push(
+          `${paint} calc(${pct}% - ${half}px)`,
+          `${gap} calc(${pct}% - ${half}px)`,
+          `${gap} calc(${pct}% + ${half}px)`,
+          `${paint} calc(${pct}% + ${half}px)`,
+        );
+      }
+      stops.push(`${paint} 100%`);
+      return `linear-gradient(to right, ${stops.join(", ")})`;
+    };
+
+    if (bar) {
+      // The groove is the bar's own background, so it takes the gaps as a
+      // gradient in that background rather than as a mask.
+      bar.style.backgroundImage = gradient(
+        "var(--movi-progress-bg)",
+        "transparent",
+      );
+      bar.style.removeProperty("-webkit-mask-image");
+      bar.style.removeProperty("mask-image");
+    }
+    const mask = gradient("#000", "transparent");
+    for (const el of layers) {
+      if (!el) continue;
+      el.style.setProperty("-webkit-mask-image", mask);
+      el.style.maskImage = mask;
+    }
+  }
+
   private renderChapterMarkers(): void {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot || !this.player) return;
@@ -21960,42 +22028,23 @@ export class MoviElement extends HTMLElement {
     const chapters = this.player.getChapters();
     const duration = this.player.getDuration();
     if (chapters.length === 0 || duration <= 0) {
-      // No chapters (or a new source that has none): drop any mask a previous
-      // one left behind, or the bar keeps its old cuts.
-      const bar = shadowRoot.querySelector(
-        ".movi-progress-bar",
-      ) as HTMLElement | null;
-      if (bar) {
-        bar.style.removeProperty("-webkit-mask-image");
-        bar.style.removeProperty("mask-image");
-      }
+      // No chapters (or a new source that has none): clear the cuts, or the
+      // track keeps gaps that belong to a video that is no longer playing.
+      this.applyChapterGaps(shadowRoot, [], 0);
       return;
     }
 
-    // Cut the bar at every chapter start. Stops are in percent with a pixel
+    // Cut the track at every chapter start. Stops are in percent with a pixel
     // gap either side, so the gap keeps its width at any player size while the
     // positions stay proportional.
-    const bar = shadowRoot.querySelector(
-      ".movi-progress-bar",
-    ) as HTMLElement | null;
-    if (bar) {
-      const half = 1.5; // px each side of the boundary
-      const stops: string[] = ["#000 0"];
-      for (let i = 1; i < chapters.length; i++) {
-        const pct = (chapters[i].start / duration) * 100;
-        if (pct <= 0 || pct >= 100) continue;
-        stops.push(
-          `#000 calc(${pct}% - ${half}px)`,
-          `transparent calc(${pct}% - ${half}px)`,
-          `transparent calc(${pct}% + ${half}px)`,
-          `#000 calc(${pct}% + ${half}px)`,
-        );
-      }
-      stops.push("#000 100%");
-      const mask = `linear-gradient(to right, ${stops.join(", ")})`;
-      bar.style.setProperty("-webkit-mask-image", mask);
-      bar.style.maskImage = mask;
-    }
+    //
+    // The cut is applied per LAYER, never to the bar itself: a mask clips
+    // everything inside the element's box, and the handle is inside it — one
+    // mask on the bar sliced the round knob down to the 4px track. The groove
+    // takes the gaps as a background gradient; the buffer and fill take them as
+    // a mask, which leaves their own pill ends alone because the mask is fully
+    // opaque at both extremes.
+    this.applyChapterGaps(shadowRoot, chapters, duration);
 
     // Add chapter dividers (gaps between chapters)
     for (let i = 1; i < chapters.length; i++) {
@@ -22725,11 +22774,17 @@ export class MoviElement extends HTMLElement {
       // reaches this overlay code at all. We only get here when there's no
       // native fallback OR native was already tried and ALSO failed — and in
       // that case Retry is exactly the recovery the user wants.
+      //
+      // Always offered, not just for network errors. Whatever the cause, a
+      // dead end with no button reads as "this player is broken" — and a retry
+      // genuinely fixes more than it looks like it should, because a reload
+      // re-runs source selection, decoder setup and the engine cascade from
+      // scratch. When it can't help, the viewer has still lost only a tap.
       const retryBtn = this.brokenIndicator.querySelector(
         ".movi-retry-btn",
       ) as HTMLElement;
       if (retryBtn) {
-        retryBtn.style.display = isNetworkError ? "flex" : "none";
+        retryBtn.style.display = "flex";
       }
     }
 
