@@ -7614,6 +7614,10 @@ export class MoviElement extends HTMLElement {
   /** Last quality badge ("HD", "4K", ...) so the gear can be re-rendered when
    *  HDR flips without waiting for the next quality change. */
   private _qualityBadge = "";
+  // Whether the quality menu has reported a badge for the CURRENT source. Until
+  // it has, the gear falls back to reading the media; after that an empty badge
+  // means "this rung earns no chip" and is left alone.
+  private _qualityBadgeReported = false;
 
   /**
    * The gear's badge, composed.
@@ -7638,10 +7642,24 @@ export class MoviElement extends HTMLElement {
       this._qualityBadge = "";
     }
     const noLadder = this._videoQualities.length <= 1;
-    if (!this.classList.contains("movi-audio-mode") && (noLadder || !this._qualityBadge)) {
-      const v = this.player
-        ?.getMediaInfo?.()
-        ?.tracks?.find((t) => t.type === "video");
+    // With a ladder the menu is the authority and an EMPTY badge is a real
+    // answer, not a gap to fill: 720p and below wear no chip. Deriving whenever
+    // the badge was empty meant every drop below 1080p went looking for a
+    // resolution to badge instead — and found a stale one, so an HD chip sat
+    // over a 720p picture. Only fall back before the menu has ever reported.
+    if (
+      !this.classList.contains("movi-audio-mode") &&
+      (noLadder || !this._qualityBadgeReported)
+    ) {
+      // The ACTIVE track first. An in-place rendition swap replaces the track
+      // but leaves the demuxer's mediaInfo describing whichever rung opened the
+      // file, so reading mediaInfo alone reports the quality we started on.
+      const active = this.player?.trackManager?.getActiveVideoTrack?.() as
+        | { width?: number; height?: number }
+        | undefined;
+      const v = active?.height
+        ? active
+        : this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video");
       this._qualityBadge = v?.height
         ? this._heightBadge(v.height, v.width || 0)
         : noLadder
@@ -7685,6 +7703,7 @@ export class MoviElement extends HTMLElement {
 
   private _updateQualityBtnBadge(badge: string): void {
     this._qualityBadge = badge || "";
+    this._qualityBadgeReported = true;
     this._renderGearBadge();
   }
 
@@ -20568,6 +20587,10 @@ export class MoviElement extends HTMLElement {
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
       this.renderChapterMarkers();
+      // An Auto switch changes the quality with no interaction at all, so an
+      // open panel (or its Quality page, or the context menu) has no other way
+      // to learn the rung moved under it.
+      this.refreshOpenSettingsSurfaces();
       // A quality change swaps the active video track, and rungs of the same
       // ladder do not have to share a transfer function — a 4K rung can be
       // PQ/HLG BT.2020 while the 1080p rung below it is plain SDR. HDR support
@@ -21186,6 +21209,7 @@ export class MoviElement extends HTMLElement {
     // …and the gear's quality badge, which belongs to the file that set it.
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
     this._qualityBadge = "";
+    this._qualityBadgeReported = false;
 
     // Clear the hardware-decode ceiling on a genuinely new load so the NEXT
     // source (a reused-element host swapping videos; movi-tube rebuilds the whole

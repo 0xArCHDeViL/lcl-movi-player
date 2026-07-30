@@ -8767,9 +8767,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const bufferedEndBytes = this.source.getBufferedEnd();
       if (bufferedEndBytes > 0) {
         const currentBytes = this.source.getPosition();
+        // Downloaded to the last byte of the file: there is nothing left to
+        // fetch, so the bar is full. The same VBR skew described above stops
+        // the byte-delta maths from ever saying so — it leaves the bar a
+        // sliver short of the end on a file that finished downloading minutes
+        // ago, which reads as "still buffering" forever.
+        if (bufferedEndBytes >= this.fileSize) {
+          this.lastBufferedTime = duration;
+          return duration;
+        }
         const forwardBytes = Math.max(0, bufferedEndBytes - currentBytes);
         const forwardTime = (forwardBytes / this.fileSize) * duration;
-        const computed = this.getCurrentTime() + forwardTime;
+        // Never past the end: the same skew can overshoot in the other
+        // direction, and a bar wider than the track is its own small lie.
+        const computed = Math.min(duration, this.getCurrentTime() + forwardTime);
         this.lastBufferedTime = Math.max(this.lastBufferedTime, computed);
         return this.lastBufferedTime;
       }
