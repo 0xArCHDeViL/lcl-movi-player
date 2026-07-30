@@ -58,6 +58,8 @@ const OSD = {
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
   ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  // A monitor with a downward arrow: the picture, stepped down.
+  qualityDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 7v6"/><path d="m9.5 10.5 2.5 2.5 2.5-2.5"/></svg>`,
   seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
 } as const;
 
@@ -7008,6 +7010,9 @@ export class MoviElement extends HTMLElement {
   private _starvedSince = 0;
   private _starvedLastTime = -1;
   private _lastRungRescueAt = 0;
+  // Window during which a quality change is reported to hosts as automatic even
+  // with Auto off — see the qualitychange emit.
+  private _involuntaryQualityUntil = 0;
   private static readonly STARVED_RESCUE_MS = 6000;
   // A rescue switch has to open a new source and re-prime; firing another one
   // inside that window would tear down the rescue in progress.
@@ -11830,18 +11835,34 @@ export class MoviElement extends HTMLElement {
    */
   private _rescueRung(reason: string): boolean {
     const p = this.player as unknown as {
-      abrEmergencyDownshift?: (reason: string) => Promise<boolean>;
+      abrEmergencyDownshift?: (reason: string) => Promise<string | null>;
       isAutoQuality?: () => boolean;
     } | null;
-    if (!p?.abrEmergencyDownshift || !p.isAutoQuality?.()) return false;
+    if (!p?.abrEmergencyDownshift) return false;
     const now = performance.now();
     if (now - this._lastRungRescueAt < MoviElement.RUNG_RESCUE_COOLDOWN_MS) {
       return true; // one is already in flight / settling
     }
     this._lastRungRescueAt = now;
-    void p.abrEmergencyDownshift(reason).then((started) => {
+    // Anything the rescue changes is the player's doing, not a pick to remember.
+    this._involuntaryQualityUntil = now + 30000;
+    // Under Auto, quality moving is the feature working — say nothing. Against a
+    // hand-picked rung it is the player overriding a choice the viewer made, so
+    // it has to be visible, or the video quietly comes back worse and the reason
+    // is invisible.
+    const announce = !p.isAutoQuality?.();
+    void p.abrEmergencyDownshift(reason).then((rung) => {
       // Nothing to drop to — let the next tick fall through to the seek.
-      if (!started) this._lastRungRescueAt = 0;
+      if (!rung) {
+        this._lastRungRescueAt = 0;
+        return;
+      }
+      if (announce) {
+        this.showOSD(
+          OSD.qualityDown,
+          `Quality lowered to ${rung} — slow connection`,
+        );
+      }
     });
     return true;
   }
@@ -20576,7 +20597,13 @@ export class MoviElement extends HTMLElement {
       // the ABR has to climb back up. Guarded so it only fires on real change.
       const vh =
         this.player?.trackManager?.getActiveVideoTrack?.()?.height || 0;
-      const isAuto = !!this.player?.isAutoQuality?.();
+      // A rescue counts as automatic even with Auto off: the player moved the
+      // rung, not the viewer. Reporting it as a manual pick would teach a host
+      // that persists the choice (movi-tube stores the height) to open every
+      // future video at the rung one bad minute forced us down to.
+      const isAuto =
+        !!this.player?.isAutoQuality?.() ||
+        performance.now() < this._involuntaryQualityUntil;
       if (vh > 0 && vh !== this._lastNotifiedQualityHeight) {
         // In Auto, only report a HIGHER quality (a high-water mark). A transient
         // network downshift (or an error-recovery drop to the lowest rung) must

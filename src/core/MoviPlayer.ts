@@ -237,6 +237,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly ABR_DECODE_PENALTY_MS = 120000; // 2 min
   private static readonly ABR_PENALTY_MAX_MS = 300000; // escalation ceiling (5 min)
   private static readonly ABR_STRIKE_DECAY_MS = 180000; // forget strikes after 3 min clean
+  // How deep the buffer must be — and steady — before Auto will climb a rung.
+  // The switch throws the current cushion away (new file, new buffer), so this
+  // is not a safety margin for the swap: it is the evidence that the link
+  // carries the CURRENT rung with room to spare. Set just above the 6s/4s marks
+  // the downshift path treats as trouble.
+  private static readonly ABR_UPSHIFT_MIN_BUFFER_S = 8;
   // How far AHEAD of the playhead an in-place rendition swap aims. Covers the
   // decoder flush + reconfigure the swap itself performs, so the new rendition's
   // first frames land at or just after the clock instead of under it.
@@ -1803,6 +1809,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // noisy right after a swap (it reflects the new file's fresh download).
     if (sinceSwitch < 12000) return;
 
+    // And it holds until the CURRENT rung is comfortably carried. A switch is
+    // not free: it opens a new file, and the cushion that made the old rung feel
+    // safe does not come with it — the new rendition starts from nothing. So a
+    // climb made while the buffer is thin or shrinking bets the whole playback
+    // on an estimate, and on a marginal link that bet is what turns a video that
+    // was playing into one that is buffering.
+    //
+    // A deep, steady buffer is the evidence that the link has room to spare;
+    // without it, hold the rung and let it fill. Throughput alone is not enough
+    // — it is a lagging average, and on a paced CDN stream it measures the
+    // rung's own bitrate rather than the link's capacity.
+    if (draining || bufferAhead < MoviPlayer.ABR_UPSHIFT_MIN_BUFFER_S) {
+      // Make the candidate earn its confirmations again from a healthy buffer,
+      // so a climb can't be assembled out of one good tick and one bad one.
+      this._abrUpCandidate = "";
+      this._abrUpConfirms = 0;
+      return;
+    }
+
     // Hold voluntary UPSHIFT while the tab is hidden. The video isn't rendered in
     // a background tab (its decode is skipped), so climbing to a higher rung just
     // burns bandwidth on a stream nobody can see — and the throughput estimate is
@@ -2102,21 +2127,46 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * size probe was enough to leave a real session frozen until the viewer
    * seeked by hand.
    *
-   * Returns true if a switch was started. False means there was nothing to
-   * switch to (Auto off, no ladder, already lowest), so the caller should fall
-   * back to its own recovery.
+   * Works with Auto OFF too, and that is deliberate. A rung the viewer picked
+   * by hand is a preference, not an instruction to sit on a frozen picture: a
+   * 4320p pick made on a good connection is unplayable on a phone tether, and
+   * with Auto off nothing else in the player will ever move off it. The pick is
+   * overridden only once playback has actually stopped, and the element says so
+   * on screen rather than silently changing quality under the viewer.
+   *
+   * Returns the label of the rung it moved to, or null when there was nothing
+   * to switch to (no ladder, already lowest) — then the caller falls back to
+   * its own recovery.
    */
-  async abrEmergencyDownshift(reason: string): Promise<boolean> {
-    if (!this._autoQuality || this._abrSwitchInProgress) return false;
+  async abrEmergencyDownshift(reason: string): Promise<string | null> {
+    if (this._abrSwitchInProgress) return null;
     const rungs = this._dashRenditions
       .filter((r) => (r.bandwidth || 0) > 0)
       .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-    if (rungs.length < 2) return false;
+    if (rungs.length < 2) return null;
     const activeIdx = rungs.findIndex(
       (r) => r.url === this._activeDashRendition,
     );
-    if (activeIdx < 0 || activeIdx >= rungs.length - 1) return false; // already lowest
-    const target = rungs[rungs.length - 1];
+    if (activeIdx < 0 || activeIdx >= rungs.length - 1) return null; // already lowest
+    // Aim at what the link is actually delivering rather than diving straight to
+    // the bottom: dropping a 4320p pick to 144p over one bad minute is its own
+    // kind of broken. With no usable reading, the lowest rung is the safe
+    // answer — its small file also preps fastest, so playback resumes soonest.
+    const ns = (
+      this.source as {
+        getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
+      }
+    ).getNetworkStats?.();
+    const measuredBits = ((ns?.lastSpeed ?? ns?.currentSpeed ?? 0) || 0) * 8;
+    let target = rungs[rungs.length - 1];
+    if (measuredBits > 0) {
+      for (let i = activeIdx + 1; i < rungs.length; i++) {
+        if ((rungs[i].bandwidth || 0) <= measuredBits * 0.8) {
+          target = rungs[i];
+          break;
+        }
+      }
+    }
     const now = performance.now();
     // Bar the rung that stalled (and everything above it) from being climbed
     // back into on the next spike — it just proved it can't be sustained.
@@ -2138,17 +2188,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          if (await this.switchVideoRenditionInPlace(target.url)) return true;
+          if (await this.switchVideoRenditionInPlace(target.url)) {
+            return target.label || `${Math.round((target.bandwidth || 0) / 1000)}kbps`;
+          }
         } catch {
           /* fall through to the retry */
         }
-        if (this._destroyed) return false;
+        if (this._destroyed) return null;
         await new Promise((r) => setTimeout(r, 400));
       }
     } finally {
       this._abrSwitchInProgress = false;
     }
-    return false;
+    return null;
   }
 
   private async configureDecoders(): Promise<void> {
