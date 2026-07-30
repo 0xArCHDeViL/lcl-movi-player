@@ -1606,6 +1606,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * is starving. No-op while a switch is already running or bitrates are unknown.
    */
   private async abrTick(): Promise<void> {
+    // One decision at a time. The upshift path AWAITS a probe of the target
+    // rung before it commits, and a tick that arrived during that await sailed
+    // past every guard below — including _abrSwitchInProgress, which is only
+    // set once the commit actually starts. Two ticks then committed the same
+    // climb 285ms apart, and the second swap tore down the source the first was
+    // still priming: the picture froze and the rescue dropped the quality
+    // straight back down. That whole cycle reads as "Auto can't sit still".
+    if (this._abrTickInFlight) return;
+    this._abrTickInFlight = true;
+    try {
+      await this.abrDecide();
+    } finally {
+      this._abrTickInFlight = false;
+    }
+  }
+
+  private _abrTickInFlight = false;
+
+  /** One ABR decision. Always through abrTick(), never called directly. */
+  private async abrDecide(): Promise<void> {
     if (
       !this._autoQuality ||
       this._abrSwitchInProgress ||
@@ -2157,7 +2177,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
       }
     ).getNetworkStats?.();
-    const measuredBits = ((ns?.lastSpeed ?? ns?.currentSpeed ?? 0) || 0) * 8;
+    // A frozen source often reports no live speed at all, and reading that as
+    // "the link is dead" sent a 480p stall straight to 144p. The remembered
+    // estimate is the better answer when there is no fresh one.
+    const measuredBits =
+      (((ns?.lastSpeed ?? ns?.currentSpeed ?? 0) || 0) ||
+        this._lastThroughputBps) * 8;
     let target = rungs[rungs.length - 1];
     if (measuredBits > 0) {
       for (let i = activeIdx + 1; i < rungs.length; i++) {

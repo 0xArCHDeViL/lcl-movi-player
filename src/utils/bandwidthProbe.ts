@@ -37,6 +37,8 @@ const DEFAULT_TIMEOUT_MS = 6000;
  * samples rather than on a number the network never earned.
  */
 const INSTANT_HIT_CAP_BPS = 25_000_000;
+/** How much recent download history to keep for the timed-out reading. */
+const TRAIL_WINDOW_MS = 2500;
 
 /**
  * Whether the browser served this URL from cache rather than the network.
@@ -78,7 +80,14 @@ export async function probeLinkBandwidth(
   const ac = new AbortController();
   const onAbort = () => ac.abort();
   opts.signal?.addEventListener("abort", onAbort);
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  // Our own cap, told apart from a caller abort: hitting it is not a failure,
+  // it just means the link is slow — and a slow link is precisely the reading
+  // worth having. See the timed-out branch below.
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, timeoutMs);
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   const requestedAt = performance.now();
@@ -95,30 +104,42 @@ export async function probeLinkBandwidth(
     // Stopwatch state for the post-burst (sustained) window.
     let measureStart = 0;
     let measureStartBytes = 0;
+    // A short trail of (time, bytes) marks, so a probe that runs out of clock
+    // before clearing the burst can still time its most RECENT seconds — the
+    // part of the download that is already past the proxy's read-ahead.
+    const trail: Array<{ t: number; b: number }> = [];
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      const now = performance.now();
-      if (done) break;
-      if (!value) continue;
-      if (firstByteAt === 0) firstByteAt = now;
-      received += value.length;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        const now = performance.now();
+        if (done) break;
+        if (!value) continue;
+        if (firstByteAt === 0) firstByteAt = now;
+        received += value.length;
+        trail.push({ t: now, b: received });
+        while (trail.length > 1 && now - trail[0].t > TRAIL_WINDOW_MS) trail.shift();
 
-      // Arm the post-burst stopwatch the first time we cross the burst
-      // boundary. Note the chunk that crosses it may carry bytes past the
-      // boundary too — measuring from `received` here just means the window is
-      // slightly conservative, which is fine.
-      if (measureStart === 0 && received >= skipBytes) {
-        measureStart = now;
-        measureStartBytes = received;
-        continue;
+        // Arm the post-burst stopwatch the first time we cross the burst
+        // boundary. Note the chunk that crosses it may carry bytes past the
+        // boundary too — measuring from `received` here just means the window is
+        // slightly conservative, which is fine.
+        if (measureStart === 0 && received >= skipBytes) {
+          measureStart = now;
+          measureStartBytes = received;
+          continue;
+        }
+        // Enough sustained data timed — return that rate.
+        if (measureStart !== 0 && received - measureStartBytes >= measureBytes) {
+          const seconds = (now - measureStart) / 1000;
+          const bytes = received - measureStartBytes;
+          if (seconds > 0) return (bytes / seconds) * 8;
+        }
       }
-      // Enough sustained data timed — return that rate.
-      if (measureStart !== 0 && received - measureStartBytes >= measureBytes) {
-        const seconds = (now - measureStart) / 1000;
-        const bytes = received - measureStartBytes;
-        if (seconds > 0) return (bytes / seconds) * 8;
-      }
+
+    } catch (err) {
+      // A caller cancelling is a real abort; our own clock running out is not.
+      if (!timedOut) throw err;
     }
 
     // Stream ended (or timed out). Prefer the post-burst window if it gathered
@@ -128,6 +149,18 @@ export async function probeLinkBandwidth(
       const seconds = (end - measureStart) / 1000;
       const bytes = received - measureStartBytes;
       if (bytes >= 262144 && seconds >= 0.15) return (bytes / seconds) * 8;
+    }
+    // ...otherwise time the trail: the last few seconds of whatever did arrive.
+    // On a slow link the 6s cap expires before the burst is even cleared, and
+    // the whole-download rate below would then be mostly burst — a fantasy
+    // number. The tail of the trail is real throttled stream, and having ANY
+    // honest reading is what stops the player opening at 144p and climbing the
+    // whole ladder in front of the viewer.
+    if (trail.length >= 2) {
+      const first = trail[0];
+      const seconds = (end - first.t) / 1000;
+      const bytes = received - first.b;
+      if (bytes >= 131072 && seconds >= 0.5) return (bytes / seconds) * 8;
     }
     // ...otherwise fall back to the WHOLE-download rate. This is the fast-link
     // case: the requested range arrived in one/few big chunks, so there was no
