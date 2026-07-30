@@ -1435,6 +1435,11 @@ export class MoviElement extends HTMLElement {
                 </button>
               </div>
 
+              <!-- Stays inside the tray: on a phone this is one of the things
+                   the "more" button folds away. On a wide bar it is pulled out
+                   to the right of the gear with an order rule — see the desktop
+                   block, where the tray is display:contents and its children
+                   are flex items of the row. -->
               <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
                 <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -15371,6 +15376,9 @@ export class MoviElement extends HTMLElement {
           width: auto;
           height: auto;
           flex: 0 0 auto;
+          position: static;
+          visibility: visible;
+          pointer-events: auto;
         }
 
         /* Hide individual buttons by default on mobile */
@@ -15383,6 +15391,15 @@ export class MoviElement extends HTMLElement {
           margin: 0;
           gap: 0;
           overflow: visible;
+          /* Zero width still leaves the button's own padding behind — a 16px
+             hole in the shut bar where the folded control used to be. Taking it
+             out of flow removes that for good, and the icon with it. Not
+             display:none: the tray counts its children by computed display to
+             decide whether a one-button tray is worth a "more" button at all,
+             and a hidden child would drop out of that count. */
+          position: absolute;
+          visibility: hidden;
+          pointer-events: none;
         }
 
         .movi-more-container {
@@ -15403,6 +15420,18 @@ export class MoviElement extends HTMLElement {
            goes away. */
         :host(.movi-single-extra) .movi-more-btn {
           display: none !important;
+        }
+        /* The foldable buttons are collapsed to 0x0 while the tray is shut
+           (above), and the tray only un-collapses them once it is expanded.
+           With no tray left there is nothing to expand, so give them their size
+           back here — otherwise the control that was promoted to the bar is on
+           it at zero width, which reads as the bar simply losing a button. */
+        :host(.movi-single-extra) .movi-mobile-expandable > * {
+          width: auto;
+          height: auto;
+          position: static;
+          visibility: visible;
+          pointer-events: auto;
         }
         :host(.movi-single-extra) .movi-mobile-expandable {
           display: contents;
@@ -15547,6 +15576,21 @@ export class MoviElement extends HTMLElement {
         }
         .movi-mobile-expandable {
           display: contents; /* Effectively removes the wrapper on desktop */
+        }
+        /* Which is what lets the aspect button cross the gear: with the wrapper
+           gone its children are flex items of the row, so an order rule can place it
+           on the far side of a control that comes later in the DOM. It belongs
+           next to PiP — both change how the picture is presented right now,
+           rather than being a setting the gear collects. Everything else keeps
+           the default order: 0, so DOM order still decides the rest. */
+        .movi-aspect-ratio-btn {
+          order: 1;
+        }
+        .movi-pip-btn {
+          order: 2;
+        }
+        .movi-fullscreen-btn {
+          order: 3;
         }
       }
 
@@ -16500,22 +16544,12 @@ export class MoviElement extends HTMLElement {
       }
 
       /* ...with two exceptions. Audio track and aspect ratio are things people
-         switch mid-playback rather than set once, so on a bar with room to
-         spare they keep the button they always had, in the place they always
-         had it — the panel still lists them, the bar is just a shortcut. Below
-         the desktop breakpoint the row is tight, so they fold back into the
-         gear and this rule takes over.
-
-         Scoped to narrow widths INSTEAD of being overridden at wide ones on
-         purpose: their own logic writes an inline display (audio hides itself
-         with a single track, aspect follows the fit mode), and an !important
-         override at wide widths would out-rank that and force them visible. */
-      @container movi-host (max-width: 720px) {
-        .movi-controls-right .movi-audio-track-container,
-        .movi-controls-right .movi-aspect-ratio-btn {
-          display: none !important;
-        }
-      }
+         switch mid-playback rather than set once, so they keep the button they
+         always had, in the place they always had it — the panel still lists
+         them, the bar is just the shortcut. Nothing to hide here: both are left
+         to the behaviour they had before the panel existed, which on a narrow
+         player means the "more" tray folds the aspect button away and the
+         audio button stays on the bar. */
 
       .movi-settings-container {
         position: relative;
