@@ -1459,6 +1459,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const oldDemuxer = this.demuxer;
     const oldSource = this.source;
 
+    // Everything read against the outgoing pipeline is now history — see the
+    // generation check in processLoop's catch.
+    this._demuxerGeneration++;
     this.demuxer = newDemuxer;
     this.source = newSource;
     this.startTime = newStartTime;
@@ -1623,6 +1626,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   private _abrTickInFlight = false;
+  // Bumped whenever the video demuxer is replaced, so a read still in flight
+  // against the old one can be told apart from a genuine failure.
+  private _demuxerGeneration = 0;
 
   /** One ABR decision. Always through abrTick(), never called directly. */
   private async abrDecide(): Promise<void> {
@@ -3485,6 +3491,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Capture session ID at start of loop - if a new seek starts, this loop should abort
     const currentSessionId = this.seekSessionId;
+    // …and which video pipeline this pass belongs to. An in-place rendition
+    // swap replaces the demuxer and closes the old one while a readPacket()
+    // from this pass may still be suspended inside it; that read then fails
+    // BECAUSE we tore its source down, and the catch below has no way to tell
+    // that from a real failure. It was classifying the teardown as a fatal
+    // WASM abort and rebuilding the whole player — twice in a two-minute
+    // session, each time interrupting playback that was otherwise fine.
+    const pipelineGeneration = this._demuxerGeneration;
 
     this.animationFrameId = requestAnimationFrame(this.processLoop);
 
@@ -4484,6 +4498,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
     } catch (e) {
+      // Belongs to a pipeline that has since been swapped out — its source was
+      // closed under it on purpose. Nothing to report and nothing to recover.
+      if (pipelineGeneration !== this._demuxerGeneration) {
+        Logger.debug(TAG, "Demux error from a retired pipeline — ignoring", e);
+        this.demuxInFlight = false;
+        return;
+      }
       Logger.error(TAG, "Demux error", e);
 
       // Check for fatal errors that indicate corrupted state

@@ -1693,6 +1693,9 @@ export class HttpSource implements SourceAdapter {
   }
 
   async read(offset: number, length: number): Promise<ArrayBuffer> {
+    // Torn down mid-read. Say so plainly rather than restarting streams on a
+    // dead source — the caller (a demuxer being replaced) is on its way out.
+    if (this.closed) throw new Error("Source closed");
     // LRU peek first — metadata reads often repeat after the sliding window
     // has moved on. Cheap: single Map scan, bounded size.
     const cached = this.peekMetadata(offset, length);
@@ -2017,12 +2020,21 @@ export class HttpSource implements SourceAdapter {
   }
 
   close(): void {
+    this.closed = true;
     this.stopStream();
     // Kill anything still in flight (ranged reads, a size probe), not just the
     // sequential stream — otherwise they keep downloading after teardown.
     this.lifetimeAbort.abort();
+    // Anything parked waiting for bytes has to be let go, or it sits on a
+    // stream that will never write again until its own deadline expires.
+    this.wakeBufferWaiters(true);
     Logger.debug(TAG, "Source closed");
   }
+
+  /** True once close() has run. Reads stop trying to recover after that: their
+   *  data is not coming, and restarting a stream on a torn-down source only
+   *  produces failures that look like the link breaking. */
+  private closed = false;
 
   getKey(): string {
     return this.url;
