@@ -1435,18 +1435,6 @@ export class MoviElement extends HTMLElement {
                 </button>
               </div>
 
-              <!-- Stays inside the tray: on a phone this is one of the things
-                   the "more" button folds away. On a wide bar it is pulled out
-                   to the right of the gear with an order rule — see the desktop
-                   block, where the tray is display:contents and its children
-                   are flex items of the row. -->
-              <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
-                <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2"/>
-                  <rect class="movi-aspect-inner" x="6" y="8" width="12" height="8" rx="1"/>
-                </svg>
-              </button>
-
               <button class="movi-btn movi-loop-btn" aria-label="Toggle Loop">
                 <svg class="movi-icon-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M17 2l4 4-4 4"></path>
@@ -1484,6 +1472,20 @@ export class MoviElement extends HTMLElement {
                 </div>
               </div>
             </div>
+
+            <!-- Aspect ratio sits on the far side of the gear at every width —
+                 it belongs with PiP, which also changes how the picture is
+                 presented right now rather than being a setting the gear
+                 collects. It is outside the tray so that placement holds on a
+                 phone too (the tray comes BEFORE the gear, so a member of it
+                 can only ever appear on the left); the narrow-width rules fold
+                 it away with the tray instead. -->
+            <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
+              <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <rect class="movi-aspect-inner" x="6" y="8" width="12" height="8" rx="1"/>
+              </svg>
+            </button>
 
             <!-- PiP sits beside the gear, outside the mobile "more" tray: the
                  two are the controls a viewer reaches for while watching, not
@@ -10749,7 +10751,21 @@ export class MoviElement extends HTMLElement {
         : (el.querySelector("button") as HTMLElement | null);
       return !btn || getComputedStyle(btn).display !== "none";
     }).length;
-    this.classList.toggle("movi-single-extra", shown <= 1);
+    // Aspect ratio folds with the tray but is not inside it — it has to come
+    // after the gear to sit on the gear's right. Count it anyway, or a video
+    // whose only other extra is captions would look like a one-button tray and
+    // lose the "more" button that reveals it.
+    //
+    // Read from the states that hide it outright, NOT from its computed
+    // display: this decision is what hides it while the tray is shut, so
+    // reading that back would flip the class on every pass.
+    const aspectFoldable =
+      !this.classList.contains("movi-audio-mode") &&
+      !this.classList.contains("movi-native-video");
+    this.classList.toggle(
+      "movi-single-extra",
+      shown + (aspectFoldable ? 1 : 0) <= 1,
+    );
   }
 
   private buildSettingsRoot(): void {
@@ -15397,7 +15413,6 @@ export class MoviElement extends HTMLElement {
         /* Hide individual buttons by default on mobile */
         .movi-quality-container,
         .movi-speed-container,
-        .movi-aspect-ratio-btn,
         .movi-loop-btn {
           width: 0;
           height: 0;
@@ -15434,6 +15449,16 @@ export class MoviElement extends HTMLElement {
         :host(.movi-single-extra) .movi-more-btn {
           display: none !important;
         }
+        /* Aspect ratio folds with the tray without being in it — it has to sit
+           after the gear in the DOM to stay on the gear's right, and the tray
+           comes before the gear. So it takes the tray's state instead of its
+           box: away while the tray is shut, out with it when it opens. The
+           single-extra case below promotes it to the bar like any other lone
+           foldable, which is why that state is excluded here. */
+        :host(:not(.movi-single-extra)) .movi-controls-right:not(.expanded) .movi-aspect-ratio-btn {
+          display: none !important;
+        }
+
         /* The foldable buttons are collapsed to 0x0 while the tray is shut
            (above), and the tray only un-collapses them once it is expanded.
            With no tray left there is nothing to expand, so give them their size
@@ -15589,21 +15614,6 @@ export class MoviElement extends HTMLElement {
         }
         .movi-mobile-expandable {
           display: contents; /* Effectively removes the wrapper on desktop */
-        }
-        /* Which is what lets the aspect button cross the gear: with the wrapper
-           gone its children are flex items of the row, so an order rule can place it
-           on the far side of a control that comes later in the DOM. It belongs
-           next to PiP — both change how the picture is presented right now,
-           rather than being a setting the gear collects. Everything else keeps
-           the default order: 0, so DOM order still decides the rest. */
-        .movi-aspect-ratio-btn {
-          order: 1;
-        }
-        .movi-pip-btn {
-          order: 2;
-        }
-        .movi-fullscreen-btn {
-          order: 3;
         }
       }
 
