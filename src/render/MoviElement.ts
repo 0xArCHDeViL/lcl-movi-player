@@ -1231,8 +1231,14 @@ export class MoviElement extends HTMLElement {
       <div class="movi-controls-bar" style="position: relative;">
         <div class="movi-progress-container">
           <div class="movi-progress-bar" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuenow="0" aria-valuetext="0:00">
-            <div class="movi-progress-buffer"></div>
-            <div class="movi-progress-filled"></div>
+            <!-- Buffer + fill live in a wrapper that spans the whole track.
+                 Chapter gaps are cut from THAT: it is the full width, so the
+                 cuts can be expressed as percentages of the timeline, and the
+                 handle stays outside it so a cut can never clip the knob. -->
+            <div class="movi-progress-paint">
+              <div class="movi-progress-buffer"></div>
+              <div class="movi-progress-filled"></div>
+            </div>
             <div class="movi-chapter-markers"></div>
             <div class="movi-progress-handle"></div>
           </div>
@@ -13091,6 +13097,13 @@ export class MoviElement extends HTMLElement {
         -webkit-tap-highlight-color: transparent !important;
       }
 
+      .movi-progress-paint {
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+      }
+
       .movi-progress-filled {
         position: absolute;
         top: 0;
@@ -18310,9 +18323,6 @@ export class MoviElement extends HTMLElement {
         publishPlayerWidth();
         this.syncTinyLayout();
         this.updateCanvasSize();
-        // The chapter mask is sized in pixels against the track, so it has to
-        // be rebuilt whenever the track's width changes.
-        this.renderChapterMarkers();
       });
       resizeObserver.observe(this);
     } else {
@@ -21959,13 +21969,9 @@ export class MoviElement extends HTMLElement {
     duration: number,
   ): void {
     const bar = root.querySelector(".movi-progress-bar") as HTMLElement | null;
-    const buffer = root.querySelector(
-      ".movi-progress-buffer",
-    ) as HTMLElement | null;
-    const fill = root.querySelector(
-      ".movi-progress-filled",
-    ) as HTMLElement | null;
-    const layers = [buffer, fill];
+    const layers = [
+      root.querySelector(".movi-progress-paint") as HTMLElement | null,
+    ];
 
     if (chapters.length < 2 || duration <= 0) {
       if (bar) {
@@ -22015,37 +22021,27 @@ export class MoviElement extends HTMLElement {
       bar.style.removeProperty("mask-image");
     }
 
-    // The buffer and fill are NARROWER boxes, and a mask is measured in the
-    // element's own box — so percentage stops there land at a fraction of the
-    // played width instead of the track's, cutting the fill into stripes that
-    // moved as it grew. Size the mask to the TRACK in pixels and pin it to the
-    // left edge (both layers start there), so a cut sits at the same place on
-    // every layer whatever their widths are.
-    const trackWidth = bar?.getBoundingClientRect().width || 0;
-    if (trackWidth <= 0) return;
+    // Buffer and fill are cut through their WRAPPER, which spans the whole
+    // track. A mask is measured in its own element's box: on the fill (a
+    // narrow box that grows as you watch) track percentages landed at a
+    // fraction of the played width instead, which is what striped it. On the
+    // wrapper the percentages mean what they say, and they keep meaning it
+    // when the player resizes.
+    const paint = layers[0];
+    if (!paint) return;
     const stops = ["#000 0"];
     for (const pct of cuts) {
-      const x = (pct / 100) * trackWidth;
       stops.push(
-        `#000 ${x - half}px`,
-        `transparent ${x - half}px`,
-        `transparent ${x + half}px`,
-        `#000 ${x + half}px`,
+        `#000 calc(${pct}% - ${half}px)`,
+        `transparent calc(${pct}% - ${half}px)`,
+        `transparent calc(${pct}% + ${half}px)`,
+        `#000 calc(${pct}% + ${half}px)`,
       );
     }
-    stops.push(`#000 ${trackWidth}px`);
+    stops.push("#000 100%");
     const mask = `linear-gradient(to right, ${stops.join(", ")})`;
-    for (const el of layers) {
-      if (!el) continue;
-      el.style.setProperty("-webkit-mask-image", mask);
-      el.style.maskImage = mask;
-      el.style.setProperty("-webkit-mask-size", `${trackWidth}px 100%`);
-      el.style.maskSize = `${trackWidth}px 100%`;
-      el.style.setProperty("-webkit-mask-repeat", "no-repeat");
-      el.style.maskRepeat = "no-repeat";
-      el.style.setProperty("-webkit-mask-position", "left top");
-      el.style.maskPosition = "left top";
-    }
+    paint.style.setProperty("-webkit-mask-image", mask);
+    paint.style.maskImage = mask;
   }
 
   private renderChapterMarkers(): void {
