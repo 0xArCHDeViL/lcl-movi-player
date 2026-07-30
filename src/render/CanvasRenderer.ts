@@ -4068,16 +4068,33 @@ export class CanvasRenderer {
       if (this.texture) this.gl.deleteTexture(this.texture);
       if (this.program) this.gl.deleteProgram(this.program);
       if (this.vrProgram) this.gl.deleteProgram(this.vrProgram);
-    // Hand the GPU context back explicitly. Dropping the reference only queues
-    // it for garbage collection, and Chrome caps a page at ~16 live WebGL
-    // contexts — a host that rebuilds the player per video (or a run of quality
-    // recreates) walks straight into "Too many active WebGL contexts. Oldest
-    // context will be lost", and the context it kills may well belong to the
-    // player currently on screen.
-      try {
-        this.gl.getExtension("WEBGL_lose_context")?.loseContext();
-      } catch {
-        /* extension unavailable — the context still goes with the canvas */
+      // Hand the GPU context back explicitly — but ONLY when the canvas is on
+      // its way out with us. Dropping the reference alone just queues it for
+      // garbage collection, and Chrome caps a page at ~16 live contexts, so a
+      // host that rebuilds the player per video walks into "Too many active
+      // WebGL contexts. Oldest context will be lost" and the context it kills
+      // may belong to the player on screen.
+      //
+      // A player REBUILD (quality recreate, error recovery) keeps the element's
+      // canvas and hands it to the replacement, and losing a context is
+      // permanent — getContext() on that canvas returns the same lost context
+      // forever. Worse, loseContext() fires webglcontextlost, which the element
+      // treats as the GPU dropping us and answers by tearing the player down:
+      // the brand-new player was destroyed microseconds after being built, and
+      // playback stopped dead at idle with nothing on screen.
+      //
+      // Still connected means the canvas outlives this renderer. Leave it be.
+      // An OffscreenCanvas is never in a document, so it always qualifies.
+      const attached =
+        typeof HTMLCanvasElement !== "undefined" &&
+        this.canvas instanceof HTMLCanvasElement &&
+        this.canvas.isConnected;
+      if (!attached) {
+        try {
+          this.gl.getExtension("WEBGL_lose_context")?.loseContext();
+        } catch {
+          /* extension unavailable — the context still goes with the canvas */
+        }
       }
     }
     this.gl = null;
