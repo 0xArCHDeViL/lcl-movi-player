@@ -705,6 +705,12 @@ export class MoviElement extends HTMLElement {
     this.video.style.height = "100%";
     this.video.style.display = "none"; // Default to canvas mode
     this.video.style.objectFit = "contain";
+    // Adaptive playback changes the picture's intrinsic size when it changes
+    // rung, and on the wrapper paths (Shaka HLS/DASH, native fallback) that can
+    // happen without the track list changing at all — so this is the only
+    // signal that the gear's badge is now describing the wrong resolution.
+    this.video.addEventListener("resize", () => this._renderGearBadge());
+
     // Prevent default context menu on video
     this.video.oncontextmenu = (e) => {
       e.preventDefault();
@@ -7716,9 +7722,27 @@ export class MoviElement extends HTMLElement {
       const active = this.player?.trackManager?.getActiveVideoTrack?.() as
         | { width?: number; height?: number }
         | undefined;
+      // …then the playing RESOLUTION. Under Shaka (HLS/DASH) and the native
+      // fallback the active track is the "Auto" entry, which carries no height
+      // of its own, and there is no demuxer mediaInfo to fall back on — so the
+      // gear wore no badge at all on those paths, however high the rung Auto
+      // had actually settled on. Both wrappers can say what is on screen: Shaka
+      // through its own resolution, and any of them through the video element's
+      // intrinsic size.
+      const wrapperRes = (
+        this.player as unknown as {
+          streamWrapper?: { getActiveResolution?: () => { width: number; height: number } };
+        } | null
+      )?.streamWrapper?.getActiveResolution?.();
+      const nativeRes =
+        this.video?.videoHeight > 0
+          ? { width: this.video.videoWidth, height: this.video.videoHeight }
+          : undefined;
       const v = active?.height
         ? active
-        : this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video");
+        : this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video") ||
+          (wrapperRes?.height ? wrapperRes : undefined) ||
+          nativeRes;
       this._qualityBadge = v?.height
         ? this._heightBadge(v.height, v.width || 0)
         : noLadder
