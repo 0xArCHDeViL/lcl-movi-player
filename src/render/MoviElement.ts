@@ -23197,26 +23197,62 @@ export class MoviElement extends HTMLElement {
       }
     });
 
-    // Context menu actions
-    const contextMenuItems = shadowRoot.querySelectorAll(
+    // Context menu actions. Through contextMenuRoot(), not the passed
+    // shadowRoot: the desktop menu and its submenus move into the body portal
+    // while open, and a state change that arrives then would otherwise leave
+    // every visible item at whatever it was dimmed to.
+    const contextMenuItems = this.contextMenuRoot().querySelectorAll(
       ".movi-context-menu-item",
     );
     contextMenuItems.forEach((item) => {
       const el = item as HTMLElement;
       // Note: context menu doesn't have a volume action yet
-      if (isUnsupported || isInitial) {
-        el.style.opacity = "0.4";
-        el.style.pointerEvents = "none";
-      } else {
-        el.style.opacity = "1";
-        el.style.pointerEvents = "auto";
-      }
+      const enabled =
+        !isUnsupported && (!isInitial || this.worksBeforePlayback(el));
+      el.style.opacity = enabled ? "1" : "0.4";
+      el.style.pointerEvents = enabled ? "auto" : "none";
     });
       // Cheap, and self-correcting: the tray's contents depend on per-control
     // visibility that settles at different times (tracks resolve late, HDR
     // later still), so re-deciding on every state change beats trying to
     // catch the last of them.
     this.syncMobileExtras();
+  }
+
+  /**
+   * Whether a context-menu entry still means something before anything is
+   * playing.
+   *
+   * Greying the whole menu out was indiscriminate: playback speed, aspect
+   * ratio, loop and stable volume are element state that applies the moment
+   * the video does start — the gear panel keeps every one of them live in
+   * exactly this state, so the menu saying otherwise was the two surfaces
+   * disagreeing about the same setting. The rest genuinely needs decoded
+   * media (a snapshot of nothing, PiP with no picture) and stays dark.
+   */
+  private worksBeforePlayback(el: HTMLElement): boolean {
+    // Inside a submenu, the parent action decides: the entries there are the
+    // values of that one setting (and its Back row), not actions of their own.
+    const submenu = el.closest(".movi-context-menu-submenu") as HTMLElement | null;
+    const key = submenu?.dataset.submenu || el.dataset.action || "";
+    switch (key) {
+      case "speed":
+      case "fit":
+      case "loop-toggle":
+      case "stable-audio-toggle":
+      case "ambient-toggle":
+      case "keyboard-shortcuts":
+        return true;
+      // Worth reaching for while a source is still opening — "don't start",
+      // "go fullscreen and wait", "why is this taking so long" — but not with
+      // no source at all, where there is nothing to start or measure.
+      case "play-pause":
+      case "fullscreen":
+      case "nerd-stats":
+        return this.hasMediaSource();
+      default:
+        return false;
+    }
   }
 
   private updateAmbientWrapperElement(): void {
