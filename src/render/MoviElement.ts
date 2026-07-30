@@ -7011,6 +7011,9 @@ export class MoviElement extends HTMLElement {
   private _frozenSince = 0;
   private _frozenRecoveries = 0;
   private static readonly MAX_FROZEN_RECOVERIES = 3;
+  // One automatic rebuild per source once the corrective seeks are spent —
+  // beyond that the recreate budget takes over and the error overlay appears.
+  private _frozenRecreateTried = false;
   // Starvation: the clock (carried by a separate audio source) keeps moving with
   // nothing buffered ahead of it, so the picture is stopped for as long as the
   // link stays under the current rung. Held for a few seconds before acting —
@@ -11916,7 +11919,21 @@ export class MoviElement extends HTMLElement {
     // rung that will just starve again. Drop off the rung first; the seek is
     // the fallback for when there is no rung to drop to.
     if (this._rescueRung(`frozen at ${t.toFixed(1)}s`)) return;
-    if (this._frozenRecoveries >= MoviElement.MAX_FROZEN_RECOVERIES) return;
+    if (this._frozenRecoveries >= MoviElement.MAX_FROZEN_RECOVERIES) {
+      // Out of corrective seeks and still frozen. Sitting here is how a black
+      // picture ends up waiting for the viewer to find the Retry button — the
+      // thing they'd press does exactly this, so do it for them. Bounded by the
+      // recreate budget itself, which surfaces the error overlay when spent.
+      if (!this._frozenRecreateTried) {
+        this._frozenRecreateTried = true;
+        Logger.warn(
+          TAG,
+          `Video still frozen at ${t.toFixed(1)}s after ${this._frozenRecoveries} corrective seeks — rebuilding the player`,
+        );
+        this._recreatePlayerFresh();
+      }
+      return;
+    }
     this._frozenRecoveries++;
     Logger.warn(
       TAG,
@@ -21306,6 +21323,7 @@ export class MoviElement extends HTMLElement {
       // A pending restore belongs to the material that was interrupted.
       this._restoreRungSrc = null;
       this._restoreHealthySince = 0;
+      this._frozenRecreateTried = false;
     }
     // …and the gear's quality badge, which belongs to the file that set it.
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.

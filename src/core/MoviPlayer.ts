@@ -243,10 +243,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // carries the CURRENT rung with room to spare. Set just above the 6s/4s marks
   // the downshift path treats as trouble.
   private static readonly ABR_UPSHIFT_MIN_BUFFER_S = 8;
-  // How far AHEAD of the playhead an in-place rendition swap aims. Covers the
-  // decoder flush + reconfigure the swap itself performs, so the new rendition's
-  // first frames land at or just after the clock instead of under it.
-  private static readonly RENDITION_SWAP_LEAD_S = 0.4;
+  // How far BEHIND the playhead an in-place rendition swap aims its seek.
+  //
+  // The seek lands where it is asked to, which on these streams is usually
+  // mid-GOP — and a decoder that has just been flushed cannot start there. It
+  // discards packets until the next keyframe, which for a 60fps YouTube
+  // rendition is several seconds away: the logs show 193 and 234 frames
+  // skipped, with the first decodable frame landing 4.5s AHEAD of the audio
+  // clock. The picture then holds on its last frame for those 4.5 seconds,
+  // which is the "it went black and never came back" this was chasing — and
+  // the freeze watchdog reads it as a stall and drops another rung, and the
+  // one after that, all the way down the ladder.
+  //
+  // Aiming behind the playhead puts the landing at or before a keyframe, so
+  // the new rendition starts with a frame the clock has already passed. Those
+  // frames are downloaded and decode far faster than real time; the renderer
+  // drops the ones older than the clock and the picture resumes at once.
+  private static readonly RENDITION_SWAP_LOOKBACK_S = 4;
   // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
   // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
   // so a rung the link keeps failing to hold is backed off harder and harder
@@ -1434,13 +1447,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // upshift came up 7.2s behind, which ate a 55s buffer in 12 seconds and
     // left the video frozen under running audio.
     //
-    // The small lead covers the swap itself (decoder flush + reconfigure below),
-    // so the first frames land at or just after the clock rather than under it.
-    // Frames slightly ahead simply wait for their presentation time; frames
-    // behind have to be decoded and thrown away.
-    const swapTime = Math.min(
-      this.getCurrentTime() + MoviPlayer.RENDITION_SWAP_LEAD_S,
-      this.getDuration() || Number.POSITIVE_INFINITY,
+    // And aim BEHIND it — see RENDITION_SWAP_LOOKBACK_S. Landing ahead of the
+    // clock freezes the picture until the clock catches up; landing behind it
+    // costs a little decode of frames that are already in hand.
+    const swapTime = Math.max(
+      0,
+      Math.min(
+        this.getCurrentTime() - MoviPlayer.RENDITION_SWAP_LOOKBACK_S,
+        this.getDuration() || Number.POSITIVE_INFINITY,
+      ),
     );
     try {
       await newDemuxer.seek(swapTime + newStartTime);
