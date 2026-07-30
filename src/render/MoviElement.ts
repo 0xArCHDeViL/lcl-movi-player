@@ -11983,8 +11983,8 @@ export class MoviElement extends HTMLElement {
         /* Idle bar is a hairline the picture shows through; it thickens under
            the pointer, which is what marks it as grabbable. YouTube runs the
            same 3 → 5 pair. */
-        --movi-progress-height: 3px;
-        --movi-progress-height-hover: 5px;
+        --movi-progress-height: 4px;
+        --movi-progress-height-hover: 6px;
         --movi-btn-size: 44px;
         --movi-btn-size-mobile: 40px;
         
@@ -13117,14 +13117,19 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
+      /* Chapter breaks are GAPS, not marks. A dark tick painted over the bar
+         still reads as something drawn ON the timeline; cutting the bar into
+         pieces is what says "these are separate sections" — and it works the
+         same over the groove, the buffer and the fill, because the cut is a
+         mask on the whole bar rather than an element stacked above it.
+         The old divider element is kept for its hover tooltip, but paints
+         nothing. */
       .movi-chapter-marker {
         position: absolute;
         top: 0;
         width: 3px;
         height: 100%;
-        background: rgba(0, 0, 0, 0.7);
         transform: translateX(-1.5px);
-        border-radius: 1px;
         z-index: 3;
       }
 
@@ -14914,12 +14919,27 @@ export class MoviElement extends HTMLElement {
           top: 50%;
           transform: translateY(-50%);
           width: auto;
+          /* The width was already handled; the HEIGHT wasn't. A phone-sized
+             player is a couple of hundred pixels tall and this list is long, so
+             it ran past the frame and the last rows — and on a short player the
+             close button with them — were simply unreachable. Cap it to the
+             player and let the list scroll under a header that stays put. */
+          max-height: calc(100% - 16px);
+          overflow: hidden;
+        }
+
+        .movi-shortcuts-header {
+          flex: 0 0 auto;
         }
 
         .movi-shortcuts-body {
           flex-direction: column;
           gap: 8px;
           padding: 10px 14px 14px;
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
         }
 
         .movi-shortcut-row kbd {
@@ -21939,7 +21959,43 @@ export class MoviElement extends HTMLElement {
 
     const chapters = this.player.getChapters();
     const duration = this.player.getDuration();
-    if (chapters.length === 0 || duration <= 0) return;
+    if (chapters.length === 0 || duration <= 0) {
+      // No chapters (or a new source that has none): drop any mask a previous
+      // one left behind, or the bar keeps its old cuts.
+      const bar = shadowRoot.querySelector(
+        ".movi-progress-bar",
+      ) as HTMLElement | null;
+      if (bar) {
+        bar.style.removeProperty("-webkit-mask-image");
+        bar.style.removeProperty("mask-image");
+      }
+      return;
+    }
+
+    // Cut the bar at every chapter start. Stops are in percent with a pixel
+    // gap either side, so the gap keeps its width at any player size while the
+    // positions stay proportional.
+    const bar = shadowRoot.querySelector(
+      ".movi-progress-bar",
+    ) as HTMLElement | null;
+    if (bar) {
+      const half = 1.5; // px each side of the boundary
+      const stops: string[] = ["#000 0"];
+      for (let i = 1; i < chapters.length; i++) {
+        const pct = (chapters[i].start / duration) * 100;
+        if (pct <= 0 || pct >= 100) continue;
+        stops.push(
+          `#000 calc(${pct}% - ${half}px)`,
+          `transparent calc(${pct}% - ${half}px)`,
+          `transparent calc(${pct}% + ${half}px)`,
+          `#000 calc(${pct}% + ${half}px)`,
+        );
+      }
+      stops.push("#000 100%");
+      const mask = `linear-gradient(to right, ${stops.join(", ")})`;
+      bar.style.setProperty("-webkit-mask-image", mask);
+      bar.style.maskImage = mask;
+    }
 
     // Add chapter dividers (gaps between chapters)
     for (let i = 1; i < chapters.length; i++) {
