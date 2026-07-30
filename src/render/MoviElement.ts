@@ -16489,8 +16489,6 @@ export class MoviElement extends HTMLElement {
       .movi-controls-right .movi-quality-container,
       .movi-controls-right .movi-speed-container,
       .movi-controls-right .movi-stable-audio-container,
-      .movi-controls-right .movi-audio-track-container,
-      .movi-controls-right .movi-aspect-ratio-btn,
       .movi-controls-right .movi-loop-btn {
         /* The whole CONTAINER, not just the button inside it: an empty flex
            item still takes its share of the row's gap, which is where the hole
@@ -16499,6 +16497,24 @@ export class MoviElement extends HTMLElement {
            inline display the quality logic writes still reads correctly, since
            this rule never touches the style attribute. */
         display: none !important;
+      }
+
+      /* ...with two exceptions. Audio track and aspect ratio are things people
+         switch mid-playback rather than set once, so on a bar with room to
+         spare they keep the button they always had, in the place they always
+         had it — the panel still lists them, the bar is just a shortcut. Below
+         the desktop breakpoint the row is tight, so they fold back into the
+         gear and this rule takes over.
+
+         Scoped to narrow widths INSTEAD of being overridden at wide ones on
+         purpose: their own logic writes an inline display (audio hides itself
+         with a single track, aspect follows the fit mode), and an !important
+         override at wide widths would out-rank that and force them visible. */
+      @container movi-host (max-width: 720px) {
+        .movi-controls-right .movi-audio-track-container,
+        .movi-controls-right .movi-aspect-ratio-btn {
+          display: none !important;
+        }
       }
 
       .movi-settings-container {
