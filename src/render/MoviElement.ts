@@ -6867,15 +6867,13 @@ export class MoviElement extends HTMLElement {
     // currently-playing rendition's dimensions instead so the gear badge stays
     // informative. Shaka backs both HLS and DASH via the unified streamWrapper.
     let activeHeight = activeTrack?.height || 0;
-    let activeWidth = (activeTrack as any)?.width || 0;
     if (!activeHeight && activeTrack?.id === -1) {
       try {
         const res = (this.player as any).streamWrapper?.getActiveResolution?.();
         activeHeight = res?.height || 0;
-        activeWidth = res?.width || 0;
       } catch {}
     }
-    this._updateQualityBtnBadge(this._heightBadge(activeHeight, activeWidth));
+    this._updateQualityBtnBadge(this._heightBadge(activeHeight));
 
     qualityList.innerHTML = uniqueTracks
       .map((track) => {
@@ -6887,13 +6885,8 @@ export class MoviElement extends HTMLElement {
         if (track.id === -1 && activeTrack?.id === -1 && activeHeight > 0) {
           label = `Auto (${activeHeight}p)`;
         }
-        const h = track.height || 0;
-        const w = (track as any).width || 0;
-        const eff = w > 0 ? Math.max(h, Math.round(w * 9 / 16)) : h;
-        let badge = "";
-        if (eff >= 4320) badge = "8K";
-        else if (eff >= 2160) badge = "4K";
-        else if (eff >= 1080) badge = "HD";
+        // Height alone, same as the gear's own badge — see _heightBadge.
+        const badge = this._heightBadge(track.height || 0);
         const badgeHtml = badge
           ? `<span class="movi-quality-badge movi-quality-badge-${badge.toLowerCase()}">${badge}</span>`
           : "";
@@ -7571,13 +7564,16 @@ export class MoviElement extends HTMLElement {
     return tiers[tiers.length - 1][1];
   }
 
-  private _heightBadge(height: number, width: number = 0): string {
-    // Use the 16:9-normalised height when a width is known so ultrawide /
-    // letterboxed tracks (e.g. 3840×2080) still tier as 4K rather than HD.
-    const eff = width > 0 ? Math.max(height, Math.round(width * 9 / 16)) : height;
-    if (eff >= 4320) return "8K";
-    if (eff >= 2160) return "4K";
-    if (eff >= 1080) return "HD";
+  private _heightBadge(height: number): string {
+    // The encoded height decides the tier, and nothing else. Normalising a
+    // known width to 16:9 first (so an ultrawide 3840x2080 would still read
+    // 4K) promoted every wide-but-short source a whole tier above what the
+    // player itself was calling it: a 1360p file wore a 4K chip, a 4050p one
+    // wore 8K. Whatever the badge says has to agree with the label right next
+    // to it.
+    if (height >= 4320) return "8K";
+    if (height >= 2160) return "4K";
+    if (height >= 1080) return "HD";
     return "";
   }
 
@@ -7618,7 +7614,7 @@ export class MoviElement extends HTMLElement {
         ?.getMediaInfo?.()
         ?.tracks?.find((t) => t.type === "video");
       this._qualityBadge = v?.height
-        ? this._heightBadge(v.height, v.width || 0)
+        ? this._heightBadge(v.height)
         : noLadder
           ? ""
           : this._qualityBadge;
@@ -10696,9 +10692,20 @@ export class MoviElement extends HTMLElement {
    *  when there is nothing to choose between. */
   private singleQualityLabel(): string {
     const only = this._videoQualities.length === 1 ? this._videoQualities[0] : null;
-    if (only?.label) return only.label;
+    if (only?.label) {
+      const fps = Math.round(only.fps || 0);
+      return fps > 30 && !new RegExp(`${fps}$`).test(only.label)
+        ? `${only.label}${fps}`
+        : only.label;
+    }
     const v = this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video");
-    return v?.height ? `${v.height}p` : "";
+    if (!v?.height) return "";
+    // Same suffix the ladder uses: "2160p60". A high frame rate is as much a
+    // part of "what am I watching" as the resolution is, and this row was
+    // reading 2160p for a 60fps file while a two-rung ladder of the same
+    // material said 2160p60.
+    const fps = Math.round(v.frameRate || 0);
+    return fps > 30 ? `${v.height}p${fps}` : `${v.height}p`;
   }
 
   /** The aspect row's icon is the CURRENT crop, not a generic frame — the value
