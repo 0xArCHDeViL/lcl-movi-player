@@ -6717,6 +6717,9 @@ export class MoviElement extends HTMLElement {
       // A track change reaches here from every path - the keyboard, the
     // panel, a host call - so this is where an open menu learns about it.
     this.refreshOpenSettingsSurfaces();
+    // Track availability is exactly what decides whether the mobile tray has
+    // anything worth folding away.
+    this.syncMobileExtras();
   }
 
   /*
@@ -9571,6 +9574,9 @@ export class MoviElement extends HTMLElement {
       // A track change reaches here from every path - the keyboard, the
     // panel, a host call - so this is where an open menu learns about it.
     this.refreshOpenSettingsSurfaces();
+    // Track availability is exactly what decides whether the mobile tray has
+    // anything worth folding away.
+    this.syncMobileExtras();
   }
 
   /**
@@ -10692,6 +10698,34 @@ export class MoviElement extends HTMLElement {
     const icon =
       MoviElement.ASPECT_ICONS[fit as string] || MoviElement.ASPECT_ICONS.contain;
     return `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+  }
+
+  /**
+   * Decide whether the mobile "more" tray is worth having.
+   *
+   * It folds the audio-track / HDR / captions controls away on narrow players,
+   * but what it holds depends entirely on the source: an MP4 with one audio
+   * track and sidecar captions leaves exactly one button in there, and then the
+   * tray costs a tap and hides the control instead of organising anything.
+   */
+  private syncMobileExtras(): void {
+    const tray = this.shadowRoot?.querySelector(
+      ".movi-mobile-expandable",
+    ) as HTMLElement | null;
+    if (!tray) return;
+    const shown = Array.from(tray.children).filter((child) => {
+      const el = child as HTMLElement;
+      // COMPUTED display, not the inline one. The tray collapses itself with
+      // width/opacity rather than hiding its children, so their own display is
+      // still meaningful — and the controls that moved into the settings panel
+      // are hidden by a stylesheet rule, which an inline check can't see.
+      if (getComputedStyle(el).display === "none") return false;
+      const btn = el.matches("button")
+        ? el
+        : (el.querySelector("button") as HTMLElement | null);
+      return !btn || getComputedStyle(btn).display !== "none";
+    }).length;
+    this.classList.toggle("movi-single-extra", shown <= 1);
   }
 
   private buildSettingsRoot(): void {
@@ -11892,9 +11926,13 @@ export class MoviElement extends HTMLElement {
            only way it can sit on the title's line is to be centred with the
            same numbers the title uses. Hardcoding them twice drifts: the gear
            rode 8px high as soon as the title font grew. */
-        /* How far chrome sits from the frame's right edge. The top-right button
-           and the bar's last control both use it, so they line up in a single
-           vertical run instead of each keeping its own inset. */
+        /* How far chrome sits from the frame's right edge, for the DEFAULT
+           layout. It can't be re-declared per breakpoint: the breakpoints are
+           @container queries on this very element, and a container query cannot
+           style its own container — those overrides looked right and did
+           nothing, quietly giving every size the base value. So the size
+           classes below set their inset directly, on both the bar and the
+           top-right button, and this stays the fallback. */
         --movi-chrome-inset: 20px;
         --movi-title-font: clamp(16px, 4vw, 20px);
         --movi-title-line: calc(var(--movi-title-font) * 1.4);
@@ -12608,9 +12646,12 @@ export class MoviElement extends HTMLElement {
            layout rules, so any height arithmetic here goes stale the moment
            those change. The slide-in offset rides on the same transform. */
         top: calc(var(--movi-title-pad-top) + var(--movi-title-line) / 2);
-        /* Same inset as the bar's last control - the two are the only things on
-           the frame's right edge, and 14 vs 10 read as one being off. */
-        right: var(--movi-chrome-inset);
+        /* Tucked closer to the edge than the bar's inset. Matching the bar
+           exactly is the correct-on-paper answer and the wrong-looking one: the
+           bar is a full-width band whose row reads as a group, while this button
+           floats alone against the picture, so the same inset leaves it looking
+           adrift rather than pinned to the corner. */
+        right: max(4px, calc(var(--movi-chrome-inset) - 8px));
         z-index: 30;
         width: var(--movi-btn-size);
         height: var(--movi-btn-size);
@@ -15016,6 +15057,11 @@ export class MoviElement extends HTMLElement {
          buttons under the text. left/right (not transform) so the slide-up
          animation's translateY isn't overridden. */
       @container movi-host (max-width: 400px) {
+        /* Top-right button: tucked closer to the edge than the bar - see the
+           --movi-chrome-inset note on :host. */
+        .movi-gear-btn {
+          right: 4px;
+        }
         .movi-resume-dialog {
           left: 16px;
           right: 16px;
@@ -15044,7 +15090,6 @@ export class MoviElement extends HTMLElement {
         :host {
           --movi-controls-height: var(--movi-controls-height-mobile);
           --movi-btn-size: var(--movi-btn-size-mobile);
-          --movi-chrome-inset: 10px;
         }
         
         .movi-loader-container {
@@ -15127,8 +15172,14 @@ export class MoviElement extends HTMLElement {
           font-size: 10px;
         }
 
+        /* Top-right button: closer to the edge than the bar's inset - see the
+           --movi-chrome-inset note on :host for why this is per-breakpoint. */
+        .movi-gear-btn {
+          right: 4px;
+        }
+
         .movi-controls-bar {
-          padding: 4px var(--movi-chrome-inset) 6px;
+          padding: 4px 10px 6px;
           gap: 2px;
           min-height: var(--movi-controls-height-mobile);
         }
@@ -15301,6 +15352,18 @@ export class MoviElement extends HTMLElement {
           z-index: 12;
         }
 
+        /* One extra control is not a tray. Tapping "more" to reveal a single
+           button is two taps for one action, and the button it hides is usually
+           captions — the one people reach for most. So when only one of the
+           foldable controls is available, it sits on the bar and the more button
+           goes away. */
+        :host(.movi-single-extra) .movi-more-btn {
+          display: none !important;
+        }
+        :host(.movi-single-extra) .movi-mobile-expandable {
+          display: contents;
+        }
+
         .movi-controls-right.expanded ~ .movi-controls-left,
         .movi-controls-left:has(~ .movi-controls-right.expanded),
         :host([theme]) .movi-controls-right.expanded .movi-controls-left {
@@ -15446,14 +15509,16 @@ export class MoviElement extends HTMLElement {
 
       /* Tablet-sized players (721px to 1024px) */
       @container movi-host (min-width: 721px) and (max-width: 1024px) {
-        :host {
-          --movi-chrome-inset: 18px;
+        /* Top-right button: tucked closer to the edge than the bar - see the
+           --movi-chrome-inset note on :host. */
+        .movi-gear-btn {
+          right: 10px;
         }
         .movi-controls-bar {
           /* Bottom inset stays small at every size — see the base rule. These
              per-breakpoint paddings were symmetric, so they quietly restored
              the 14/16px lift the base rule had just removed. */
-          padding: 14px var(--movi-chrome-inset) 5px;
+          padding: 14px 18px 5px;
         }
 
         .movi-time {
@@ -15489,7 +15554,7 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: 36px;
         }
         .movi-controls-bar {
-          padding: 2px var(--movi-chrome-inset) 5px;
+          padding: 2px 8px 5px;
         }
         .movi-buttons-row {
           gap: 4px;
@@ -15555,11 +15620,13 @@ export class MoviElement extends HTMLElement {
 
       /* Large players (1025px and above) */
       @container movi-host (min-width: 1025px) {
-        :host {
-          --movi-chrome-inset: 24px;
+        /* Top-right button: tucked closer to the edge than the bar - see the
+           --movi-chrome-inset note on :host. */
+        .movi-gear-btn {
+          right: 16px;
         }
         .movi-controls-bar {
-          padding: 16px var(--movi-chrome-inset) 7px;
+          padding: 16px 24px 7px;
         }
         /* A 22px glyph that reads fine in a 640px pane looks undersized across
            a fullscreen TV — the box stays 44px, only the mark inside grows. */
@@ -21051,13 +21118,19 @@ export class MoviElement extends HTMLElement {
         // ignore so the supported handlers still register.
       }
     };
+    // The centre flash is the acknowledgement for a toggle, and a lock-screen
+    // or media-key press is as much a toggle as a click on the bar — without it
+    // the picture just freezes with nothing to say why.
     set("play", () => {
+      this.flashCenterIcon("play");
       this.play().catch(() => {});
     });
     set("pause", () => {
+      this.flashCenterIcon("pause");
       this.pause();
     });
     set("stop", () => {
+      this.flashCenterIcon("pause");
       this.pause();
     });
     set("seekbackward", (details) => {
@@ -22901,6 +22974,11 @@ export class MoviElement extends HTMLElement {
         el.style.pointerEvents = "auto";
       }
     });
+      // Cheap, and self-correcting: the tray's contents depend on per-control
+    // visibility that settles at different times (tracks resolve late, HDR
+    // later still), so re-deciding on every state change beats trying to
+    // catch the last of them.
+    this.syncMobileExtras();
   }
 
   private updateAmbientWrapperElement(): void {
@@ -26214,6 +26292,7 @@ export class MoviElement extends HTMLElement {
 
     // Availability just changed — the badge reads it, so re-render.
     this._renderGearBadge();
+    this.syncMobileExtras();
 
     Logger.debug(
       TAG,
