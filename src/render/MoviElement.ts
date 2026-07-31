@@ -16591,47 +16591,28 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
-      /* The state lives in the value, so the value is what gets drawn: a small
-         chip, the same shape as the shortcut key sitting beside it, so the row
-         reads as label — state — key. Off states are a neutral chip; on states
-         take the accent. One signal, no row chrome, and nothing moves when it
-         flips. */
-      .movi-context-menu-status {
-        font-size: 12px;
-        font-weight: 600;
-        line-height: 1;
-        padding: 3px 8px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.08);
-        color: var(--movi-text-secondary, rgba(255, 255, 255, 0.7));
-      }
-
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: transparent;
-      }
-      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status {
-        background: color-mix(in srgb, var(--movi-primary) 26%, transparent);
-        color: var(--movi-primary-light, var(--movi-primary));
-      }
-
-      /* A submenu value row has no chip to colour — it IS the value — so it
-         takes the accent itself, with a tick where the shortcut key would be.
-         Same shape the quality and speed lists already use. */
-      .movi-context-menu-item.movi-context-menu-active[data-speed],
-      .movi-context-menu-item.movi-context-menu-active[data-fit] .movi-context-menu-label {
-        color: var(--movi-primary-light, var(--movi-primary));
+        background-color: color-mix(in srgb, var(--movi-primary) 0.12);
+        color: var(--movi-primary-light);
         font-weight: 600;
       }
-      .movi-context-menu-item.movi-context-menu-active[data-speed]::after,
-      .movi-context-menu-item.movi-context-menu-active[data-fit]::after {
-        content: "";
-        width: 14px;
-        height: 8px;
-        margin-left: auto;
-        border-left: 2px solid var(--movi-primary-light, var(--movi-primary));
-        border-bottom: 2px solid var(--movi-primary-light, var(--movi-primary));
-        border-radius: 1px;
-        transform: rotate(-45deg) translate(1px, -2px);
+      
+      .movi-context-menu-item.movi-context-menu-active::before {
+        content: '';
+        position: absolute;
+        left: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 12px;
+        background: var(--movi-primary);
+        border-radius: 4px;
+        box-shadow: 0 0 10px var(--movi-primary);
+      }
+
+      /* Adjust label position for active indicator */
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-label {
+        padding-left: 8px;
       }
 
       .movi-context-menu-label {
