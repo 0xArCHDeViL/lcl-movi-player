@@ -2012,15 +2012,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await this.abrCommit(up.url, now);
       return;
     }
-    // Climb ONE rung at a time. The estimate that sizes the jump is measured
-    // against the rung currently playing, and on a small, fully-cached one it
-    // reads like a much faster link than it is: a 144p file that finished
-    // downloading reported 3.9Mbps and justified a leap to 1080p60, which the
-    // link then couldn't hold — down again twelve seconds later. Stepping makes
-    // each climb a cheap experiment the next tick can confirm or undo, and the
-    // ladder walks up to the highest rung that actually holds instead of
-    // swinging between the top and the bottom.
-    if (upIdx < activeIdx - 1) {
+    // Climb ONE rung at a time WHILE PLAYING. The estimate that sizes the jump
+    // is measured against the rung currently playing, and on a small,
+    // fully-cached one it reads like a much faster link than it is: a 144p file
+    // that finished downloading reported 3.9Mbps and justified a leap to
+    // 1080p60, which the link then couldn't hold — down again twelve seconds
+    // later. Stepping makes each climb a cheap experiment the next tick can
+    // confirm or undo, and the ladder walks up to the highest rung that holds
+    // instead of swinging between the top and the bottom.
+    //
+    // PAUSED is the exception, and it is the one moment the estimate can be
+    // trusted whole: nothing is being consumed, the buffer isn't racing a
+    // deadline, and the download running underneath is measuring the link
+    // rather than the rung's own pacing. Stepping there just means the viewer
+    // presses play on a rung several steps below what their connection has
+    // already demonstrated. The target probe below still has the final say.
+    const paused = this.stateManager.getState() === "paused";
+    if (!paused && upIdx < activeIdx - 1) {
       upIdx = activeIdx - 1;
       up = rungs[upIdx];
     }
