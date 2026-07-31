@@ -1746,8 +1746,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       0,
       this.getBufferedTime() - this.getCurrentTime(),
     );
+    // …but only while there is still something to fetch. Once the whole file is
+    // in hand the buffer shrinks by a second for every second played, forever,
+    // and that is not the link failing to keep up — it is the download being
+    // finished. Reading it as a drain left Auto pinned: on a fully buffered
+    // 144p rung every tick looked like a buffer in trouble, so the upshift gate
+    // refused, and quality only ever climbed if the viewer PAUSED (which stops
+    // the playhead, so the buffer stops shrinking).
+    const duration = this.getDuration();
+    const nothingLeftToFetch =
+      (this.source as { isFullyCached?: () => boolean } | null)?.isFullyCached?.() === true ||
+      (duration > 0 && this.getBufferedTime() >= duration - 0.5);
     const draining =
-      this._lastBufferAhead > 0 && bufferAhead < this._lastBufferAhead - 1.5;
+      !nothingLeftToFetch &&
+      this._lastBufferAhead > 0 &&
+      bufferAhead < this._lastBufferAhead - 1.5;
     this._lastBufferAhead = bufferAhead;
 
     // DOWNSHIFT (responsive) — a hard buffering stall OR a draining/low buffer
