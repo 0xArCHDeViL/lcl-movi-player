@@ -16601,14 +16601,12 @@ export class MoviElement extends HTMLElement {
 
       /* An active row is drawn as a card: the accent tint that was always meant
          to be here (the old value, color-mix(… 0.12), had no percentage in it
-         and so rendered nothing), a hairline of the same colour around it, and
-         a soft bloom underneath. The label stays white — the accent belongs to
-         the things that carry the state. */
+         and so rendered nothing) over a soft bloom of the same colour. No
+         outline — the fill is the shape. The label stays white; the accent
+         belongs to the things that carry the state. */
       .movi-context-menu-item.movi-context-menu-active {
         background-color: color-mix(in srgb, var(--movi-primary) 13%, transparent);
-        box-shadow:
-          inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 38%, transparent),
-          0 4px 16px color-mix(in srgb, var(--movi-primary) 14%, transparent);
+        box-shadow: 0 4px 16px color-mix(in srgb, var(--movi-primary) 14%, transparent);
       }
 
       /* The rail: small, rounded, tucked inside the card's left edge. */
@@ -16639,8 +16637,7 @@ export class MoviElement extends HTMLElement {
       }
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-shortcut {
         color: var(--movi-primary-light, var(--movi-primary));
-        background: color-mix(in srgb, var(--movi-primary) 18%, transparent);
-        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 38%, transparent);
+        background: color-mix(in srgb, var(--movi-primary) 22%, transparent);
       }
 
       /* The rail needs room, and the label has to clear the icon's new square.
