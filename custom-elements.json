@@ -575,6 +575,10 @@
           ],
           "cssProperties": [
             {
+              "name": "--movi-chrome-inset",
+              "description": "Movi Player theme variable.\n\nDefault: `20px`"
+            },
+            {
               "name": "--movi-title-font",
               "description": "Movi Player theme variable.\n\nDefault: `clamp(16px, 4vw, 20px)`"
             },
@@ -640,7 +644,7 @@
             },
             {
               "name": "--movi-bar-bg",
-              "description": "Movi Player theme variable.\n\nDefault: `linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%)`"
+              "description": "Movi Player theme variable.\n\nDefault: `linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 45%, transparent 100%)`"
             },
             {
               "name": "--movi-overlay-bg",

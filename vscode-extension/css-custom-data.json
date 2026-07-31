@@ -2,6 +2,19 @@
   "version": 1.1,
   "properties": [
     {
+      "name": "--movi-chrome-inset",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `20px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-title-font",
       "description": {
         "kind": "markdown",
@@ -213,7 +226,7 @@
       "name": "--movi-bar-bg",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%)`"
+        "value": "Movi Player theme variable.\n\nDefault: `linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 45%, transparent 100%)`"
       },
       "references": [
         {
