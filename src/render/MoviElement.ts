@@ -16562,12 +16562,16 @@ export class MoviElement extends HTMLElement {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 12px 16px;
+        /* A selected row is filled edge to edge of this box, so the row's own
+           height IS the card's height — 12px of padding made those cards read
+           as slabs stacked against each other. Slightly shorter rows with a
+           little more air between them give the fill room to look like a card. */
+        padding: 9px 16px;
         cursor: pointer;
         user-select: none;
         transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         position: relative;
-        margin: 2px 6px;
+        margin: 4px 6px;
         border-radius: 10px;
         letter-spacing: 0.01em;
       }
