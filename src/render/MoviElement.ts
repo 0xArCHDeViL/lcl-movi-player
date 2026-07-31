@@ -58,6 +58,8 @@ const OSD = {
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
   ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  // Plain monitor: the picture's quality changed, without claiming a direction.
+  quality: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
   // The same monitor with the arrow reversed: the picture, stepped back up.
   qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
   seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
@@ -7038,9 +7040,8 @@ export class MoviElement extends HTMLElement {
   // for a moment after that: video decode is skipped while hidden, so the first
   // readings on return describe the background spell, not a stall.
   private _becameVisibleAt = 0;
-  // Whether the rounding clip has been re-applied on top of a live canvas
-  // layer for this source. See syncPictureRounding.
-  private _roundingReapplied = false;
+  // Pending re-applies of the rounding clip, cancelled on disconnect.
+  private _roundingTimers = new Set<ReturnType<typeof setTimeout>>();
   // Steady means: playing, on the rung we were dropped to, with this much
   // buffered ahead, held for this long. Both generous — a restore that turns
   // out to be premature costs another rebuild, so it should only fire when the
@@ -7940,7 +7941,9 @@ export class MoviElement extends HTMLElement {
         // Confirm it like every other setting does - from inside the panel the
         // list closes immediately, so the toast is the only feedback.
         const picked = this._videoQualities.find((q) => q.src === newSrc);
-        if (picked) this.showOSD(OSD.speed, picked.label || "Quality");
+        // A screen, not a speedometer: this is the picture changing, and the
+        // speed icon here read as though the playback rate had moved.
+        if (picked) this.showOSD(OSD.quality, picked.label || "Quality");
         if (newSrc && newSrc !== activeSrc) this.switchPremuxedQuality(newSrc);
         else this.updateQualityMenu();
         closeMenu();
@@ -18675,6 +18678,22 @@ export class MoviElement extends HTMLElement {
     };
     publishPlayerWidth();
 
+    // Firefox reads the rounding clip when the canvas's compositing layer is
+    // built, and there is no layer at connect — so the clip set above is simply
+    // never applied and the corners stay square until something rebuilds the
+    // canvas (which is why a quality switch "fixed" them). Re-apply it a few
+    // times over the first couple of seconds: the first one to land after the
+    // layer exists takes, the rest cost a style write each. Not tied to
+    // playback — the layer appears with the canvas's first paint, which
+    // happens whether or not a frame has decoded yet.
+    for (const delay of [120, 400, 1200, 2500]) {
+      const t = setTimeout(() => {
+        this._roundingTimers.delete(t);
+        this.syncPictureRounding(true);
+      }, delay);
+      this._roundingTimers.add(t);
+    }
+
     // Hydrate persisted subtitle appearance settings, then let any
     // explicit attributes override (precedence: attribute >
     // localStorage > built-in defaults). Finally push the resulting
@@ -18866,6 +18885,10 @@ export class MoviElement extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // Drop any pending rounding re-applies — see connectedCallback.
+    for (const t of this._roundingTimers) clearTimeout(t);
+    this._roundingTimers.clear();
+
     // If removed while in the iOS pseudo-fullscreen fallback, restore the page
     // scroll we locked and drop the resize listeners (setPseudoFullscreen(false)
     // won't run otherwise).
@@ -20849,18 +20872,7 @@ export class MoviElement extends HTMLElement {
       // for data (`waiting`) and when it genuinely resumed (`playing`). Without
       // these, a host had to subscribe to our non-standard `statechange` and
       // know our internal PlayerState names just to drive a spinner.
-      if (state === "playing") {
-        this.dispatchEvent(new Event("playing"));
-        // First frames are on screen now, so the canvas has a compositing
-        // layer for the rounding clip to attach to — see syncPictureRounding.
-        // Once per load; the flag resets with the next source.
-        if (!this._roundingReapplied) {
-          this._roundingReapplied = true;
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => this.syncPictureRounding(true)),
-          );
-        }
-      }
+      if (state === "playing") this.dispatchEvent(new Event("playing"));
       else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
       // The replacement player is up — stop holding the controls open on the
       // rebuild's behalf and let the normal state gating take over again.
@@ -21415,7 +21427,6 @@ export class MoviElement extends HTMLElement {
     if (!this._qualitySwitchInProgress && !this._fullRecreateInFlight) {
       this._switchResumeDuration = 0;
       // A pending restore belongs to the material that was interrupted.
-      this._roundingReapplied = false;
       this._restoreRungSrc = null;
       this._restoreHealthySince = 0;
       this._frozenRecreateTried = false;
