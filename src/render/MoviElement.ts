@@ -7714,6 +7714,12 @@ export class MoviElement extends HTMLElement {
     // Audio has no resolution to badge — and its cover art is carried as a
     // video track, so deriving from the media would put "360p"-worth of
     // artwork on the gear.
+    // Audio-only, either because the SOURCE has no picture or because the
+    // viewer asked for audio alone (the data-saver toggle): nothing is being
+    // fetched to badge. The stored value is left alone so switching video back
+    // on restores the chip without waiting for the ladder to report again.
+    const audioOnly =
+      this.classList.contains("movi-audio-mode") || this._audioOnly;
     if (this.classList.contains("movi-audio-mode")) {
       this._qualityBadge = "";
     }
@@ -7723,10 +7729,7 @@ export class MoviElement extends HTMLElement {
     // the badge was empty meant every drop below 1080p went looking for a
     // resolution to badge instead — and found a stale one, so an HD chip sat
     // over a 720p picture. Only fall back before the menu has ever reported.
-    if (
-      !this.classList.contains("movi-audio-mode") &&
-      (noLadder || !this._qualityBadgeReported)
-    ) {
+    if (!audioOnly && (noLadder || !this._qualityBadgeReported)) {
       // The ACTIVE track first. An in-place rendition swap replaces the track
       // but leaves the demuxer's mediaInfo describing whichever rung opened the
       // file, so reading mediaInfo alone reports the quality we started on.
@@ -7766,10 +7769,11 @@ export class MoviElement extends HTMLElement {
       ".movi-hdr-container",
     ) as HTMLElement | null;
     const hdrOn =
+      !audioOnly &&
       hdrContainer?.style.display === "flex" &&
       this.isControlAvailable("hdr") &&
       this._hdr;
-    const quality = this._qualityBadge;
+    const quality = audioOnly ? "" : this._qualityBadge;
     let text = quality;
     if (hdrOn) {
       text =
@@ -24085,6 +24089,10 @@ export class MoviElement extends HTMLElement {
     this.updateCoverArtOverlay();
     this.updateControlsVisibility();
     this.updateLiveState(); // keep the LIVE badge correct (stream stays loaded)
+    // The gear's resolution chip describes a picture that isn't being fetched
+    // any more — a 4K badge over an audio-only stream is just wrong. It comes
+    // straight back when video does.
+    this._renderGearBadge();
   }
 
   /**
