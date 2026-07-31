@@ -1683,6 +1683,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (this._audioOnly) this._lastBufferAhead = 0;
       return;
     }
+    // Hidden tab: make no decision at all, and forget the buffer reading.
+    //
+    // Video decode is skipped while hidden, so the video buffer drains as the
+    // clock runs even on a link that is perfectly fine — and the comparison
+    // against the pre-background reading then reads as a collapsing buffer the
+    // moment the tab comes back, which is why returning to a tab dropped the
+    // quality. Clearing the baseline means the first tick after the return
+    // establishes a fresh one instead of measuring against history.
+    //
+    // PiP is exempt: the video is visible there and decoding normally.
+    if (this.isBackgrounded && !this.isPiPActive) {
+      this._lastBufferAhead = 0;
+      this._abrUpCandidate = "";
+      this._abrUpConfirms = 0;
+      return;
+    }
+
     // Best-first: index 0 = highest bitrate.
     const rungs = this._dashRenditions
       .filter((r) => (r.bandwidth || 0) > 0)
@@ -1741,6 +1758,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seconds after a seek — that buffering is a normal re-fill, and swapping
     // into it races the seek's own re-prime and crashed the demuxer.
     const postSeekSettling = now - this._lastSeekAt < 4000;
+    // The first seconds back from a hidden tab are a refill, not a verdict: the
+    // buffer drained because decode was skipped, and it fills again at whatever
+    // rate the link always had. Long enough to cover the refill, short enough
+    // that a link which genuinely degraded while we were away is still caught
+    // on the tick after.
+    const postBackgroundSettling =
+      this._foregroundRecoveryAt > 0 &&
+      now - this._foregroundRecoveryAt < 8000;
     const stalling = this.stateManager.is("buffering");
     // An in-place quality switch resets the buffered range to ~0 at the current
     // playhead, so bufferAhead reads low for the first several seconds while the
@@ -1784,6 +1809,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (
       (stalling || bufferLow) &&
       !postSeekSettling &&
+      !postBackgroundSettling &&
       sinceSwitch > 5000 &&
       activeIdx >= 0 &&
       activeIdx < rungs.length - 1

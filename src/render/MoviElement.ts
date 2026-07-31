@@ -504,6 +504,9 @@ export class MoviElement extends HTMLElement {
       // frame between visibility-visible and webglcontextlost firing.
       this._showSnapshotPoster();
     } else {
+      // Note when we came back: the watchdogs below judge a picture that isn't
+      // advancing, and while hidden it legitimately doesn't (decode is skipped).
+      this._becameVisibleAt = performance.now();
       // Visible again. If the GL context is still alive, hide the snapshot
       // immediately. If it was lost, leave the snapshot up — handleContextLost
       // / handleContextRestored own the recovery teardown.
@@ -7031,6 +7034,10 @@ export class MoviElement extends HTMLElement {
   private _restoreHealthySince = 0;
   // True while an in-place rendition switch is opening the new file.
   private _renditionSwitching = false;
+  // When the tab last became visible. The frozen/starved watchdogs stand down
+  // for a moment after that: video decode is skipped while hidden, so the first
+  // readings on return describe the background spell, not a stall.
+  private _becameVisibleAt = 0;
   // Steady means: playing, on the rung we were dropped to, with this much
   // buffered ahead, held for this long. Both generous — a restore that turns
   // out to be premature costs another rebuild, so it should only fire when the
@@ -7038,6 +7045,7 @@ export class MoviElement extends HTMLElement {
   private static readonly RESTORE_MIN_BUFFER_S = 20;
   private static readonly RESTORE_STEADY_MS = 30000;
   private static readonly STARVED_RESCUE_MS = 6000;
+  private static readonly VISIBILITY_SETTLE_MS = 4000;
   // A rescue switch has to open a new source and re-prime; firing another one
   // inside that window would tear down the rescue in progress.
   private static readonly RUNG_RESCUE_COOLDOWN_MS = 8000;
@@ -11842,6 +11850,16 @@ export class MoviElement extends HTMLElement {
       !(p.getVideoTracks?.().length)
     ) {
       this._frozenSince = 0;
+      return;
+    }
+    // Just back from a hidden tab: the clock ran on while decode was skipped, so
+    // "time moving, no new frames" is true by construction for a moment. Let the
+    // pipeline re-prime before judging it.
+    if (now - this._becameVisibleAt < MoviElement.VISIBILITY_SETTLE_MS) {
+      this._frozenSince = 0;
+      this._starvedSince = 0;
+      this._frozenLastFrames = p.getRenderHealth?.()?.framesPresented ?? -1;
+      this._frozenLastTime = p.getCurrentTime?.() ?? -1;
       return;
     }
     const t = p.getCurrentTime?.() ?? 0;
