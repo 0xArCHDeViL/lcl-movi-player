@@ -10948,7 +10948,12 @@ export class MoviElement extends HTMLElement {
     // cropped means anything. Cover art makes this worse rather than better —
     // the attached picture IS a video track, so the ladder happily reported
     // "360p" for the artwork's own dimensions.
-    const audioOnly = this.classList.contains("movi-audio-mode");
+    // Audio-only counts either way: a source with no picture, or the viewer's
+    // own data-saver toggle. Under the toggle nothing about the video is being
+    // fetched, so a Quality list and an Aspect page describe something that
+    // isn't there.
+    const audioOnly =
+      this.classList.contains("movi-audio-mode") || this._audioOnly;
     if (
       !audioOnly &&
       this.settingsRowAvailable(".movi-quality-container", ".movi-quality-item")
@@ -10994,7 +10999,7 @@ export class MoviElement extends HTMLElement {
     const hdrEl = this.shadowRoot?.querySelector(
       ".movi-hdr-container",
     ) as HTMLElement | null;
-    if (hdrEl?.style.display === "flex" && this.isControlAvailable("hdr")) {
+    if (!audioOnly && hdrEl?.style.display === "flex" && this.isControlAvailable("hdr")) {
       rows.push(toggle("hdr", "HDR", this._hdr));
     }
     rows.push(toggle("stable", "Stable volume", this._stableVolume));
@@ -24099,6 +24104,10 @@ export class MoviElement extends HTMLElement {
     // any more — a 4K badge over an audio-only stream is just wrong. It comes
     // straight back when video does.
     this._renderGearBadge();
+    // Same for the panel: if it is open, it is showing a Quality list and an
+    // Aspect page for a video that has just stopped being fetched (or has just
+    // come back). Nothing else notices this toggle.
+    this.refreshOpenSettingsSurfaces();
   }
 
   /**
