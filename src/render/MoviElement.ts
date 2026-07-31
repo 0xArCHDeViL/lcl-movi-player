@@ -7724,25 +7724,22 @@ export class MoviElement extends HTMLElement {
       this._qualityBadge = "";
     }
     const noLadder = this._videoQualities.length <= 1;
-    // With a ladder the menu is the authority and an EMPTY badge is a real
-    // answer, not a gap to fill: 720p and below wear no chip. Deriving whenever
-    // the badge was empty meant every drop below 1080p went looking for a
-    // resolution to badge instead — and found a stale one, so an HD chip sat
-    // over a 720p picture. Only fall back before the menu has ever reported.
-    if (!audioOnly && (noLadder || !this._qualityBadgeReported)) {
-      // The ACTIVE track first. An in-place rendition swap replaces the track
-      // but leaves the demuxer's mediaInfo describing whichever rung opened the
-      // file, so reading mediaInfo alone reports the quality we started on.
+    if (!audioOnly) {
+      // What is ACTUALLY on screen decides the chip.
+      //
+      // The rung's own badge can't: a ladder reports height alone, and height
+      // alone can't tell a 2560x960 scope master (which the stats call 2K) from
+      // something that earns nothing — the gear sat bare over it. Nor can the
+      // demuxer's mediaInfo, which an in-place swap never updates, so reading
+      // that stamped the rung that OPENED the file over every rung after it.
+      //
+      // The active video track knows both dimensions. Under Shaka (HLS/DASH)
+      // and the native fallback that track is the "Auto" entry with no height
+      // of its own, so those wrappers answer instead — Shaka with its active
+      // resolution, any of them with the video element's intrinsic size.
       const active = this.player?.trackManager?.getActiveVideoTrack?.() as
         | { width?: number; height?: number }
         | undefined;
-      // …then the playing RESOLUTION. Under Shaka (HLS/DASH) and the native
-      // fallback the active track is the "Auto" entry, which carries no height
-      // of its own, and there is no demuxer mediaInfo to fall back on — so the
-      // gear wore no badge at all on those paths, however high the rung Auto
-      // had actually settled on. Both wrappers can say what is on screen: Shaka
-      // through its own resolution, and any of them through the video element's
-      // intrinsic size.
       const wrapperRes = (
         this.player as unknown as {
           streamWrapper?: { getActiveResolution?: () => { width: number; height: number } };
@@ -7752,16 +7749,25 @@ export class MoviElement extends HTMLElement {
         this.video?.videoHeight > 0
           ? { width: this.video.videoWidth, height: this.video.videoHeight }
           : undefined;
-      const v = active?.height
+      const live = active?.height
         ? active
-        : this.player?.getMediaInfo?.()?.tracks?.find((t) => t.type === "video") ||
-          (wrapperRes?.height ? wrapperRes : undefined) ||
-          nativeRes;
-      this._qualityBadge = v?.height
-        ? this._heightBadge(v.height, v.width || 0)
-        : noLadder
-          ? ""
-          : this._qualityBadge;
+        : wrapperRes?.height
+          ? wrapperRes
+          : nativeRes;
+      if (live?.height) {
+        this._qualityBadge = this._heightBadge(live.height, live.width || 0);
+      } else if (noLadder || !this._qualityBadgeReported) {
+        // Nothing decoding yet — the container's own description is all there
+        // is, and it is right until the first switch.
+        const v = this.player
+          ?.getMediaInfo?.()
+          ?.tracks?.find((t) => t.type === "video");
+        this._qualityBadge = v?.height
+          ? this._heightBadge(v.height, v.width || 0)
+          : noLadder
+            ? ""
+            : this._qualityBadge;
+      }
     }
     // Same gate as the panel row - the badge must not claim HDR before the
     // bar's own logic has said the source has it.
