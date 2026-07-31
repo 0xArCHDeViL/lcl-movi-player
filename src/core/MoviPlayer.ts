@@ -2238,19 +2238,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * size probe was enough to leave a real session frozen until the viewer
    * seeked by hand.
    *
-   * Works with Auto OFF too, and that is deliberate. A rung the viewer picked
-   * by hand is a preference, not an instruction to sit on a frozen picture: a
-   * 4320p pick made on a good connection is unplayable on a phone tether, and
-   * with Auto off nothing else in the player will ever move off it. The pick is
-   * overridden only once playback has actually stopped, and the element says so
-   * on screen rather than silently changing quality under the viewer.
+   * Auto only. A rung the viewer picked by hand is their decision, and this
+   * does not get to overrule it: if the link can't carry 1080p, a viewer who
+   * asked for 1080p gets buffering, not a quality they didn't choose. (It used
+   * to override the pick once playback stopped, on the grounds that a stalled
+   * picture helps nobody. The choice is the viewer's to make and to change.)
    *
    * Returns the label of the rung it moved to, or null when there was nothing
-   * to switch to (no ladder, already lowest) — then the caller falls back to
-   * its own recovery.
+   * to switch to (Auto off, no ladder, already lowest) — then the caller falls
+   * back to its own recovery.
    */
   async abrEmergencyDownshift(reason: string): Promise<string | null> {
-    if (this._abrSwitchInProgress) return null;
+    if (!this._autoQuality || this._abrSwitchInProgress) return null;
     // A rung that was only just switched to has nothing buffered yet BY
     // DEFINITION — every switch starts a new file from zero. Rescuing that
     // state drops another rung, which starts another empty buffer, which looks

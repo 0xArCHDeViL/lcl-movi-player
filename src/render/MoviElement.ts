@@ -60,8 +60,6 @@ const OSD = {
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
   // The same monitor with the arrow reversed: the picture, stepped back up.
   qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
-  // A monitor with a downward arrow: the picture, stepped down.
-  qualityDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 7v6"/><path d="m9.5 10.5 2.5 2.5 2.5-2.5"/></svg>`,
   seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
 } as const;
 
@@ -12004,23 +12002,12 @@ export class MoviElement extends HTMLElement {
     this._lastRungRescueAt = now;
     // Anything the rescue changes is the player's doing, not a pick to remember.
     this._involuntaryQualityUntil = now + 30000;
-    // Under Auto, quality moving is the feature working — say nothing. Against a
-    // hand-picked rung it is the player overriding a choice the viewer made, so
-    // it has to be visible, or the video quietly comes back worse and the reason
-    // is invisible.
-    const announce = !p.isAutoQuality?.();
+    // No announcement: the rescue is Auto-only now (a hand-picked rung is the
+    // viewer's decision — see abrEmergencyDownshift), and under Auto quality
+    // moving on its own is the feature working, not news.
     void p.abrEmergencyDownshift(reason).then((rung) => {
       // Nothing to drop to — let the next tick fall through to the seek.
-      if (!rung) {
-        this._lastRungRescueAt = 0;
-        return;
-      }
-      if (announce) {
-        this.showOSD(
-          OSD.qualityDown,
-          `Quality lowered to ${rung} — slow connection`,
-        );
-      }
+      if (!rung) this._lastRungRescueAt = 0;
     });
     return true;
   }
