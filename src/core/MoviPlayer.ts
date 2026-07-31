@@ -3791,9 +3791,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Audio desync detection: if audio falls significantly behind video at 1x.
     // Clock syncs to audio so clock vs audio is always ~0. Compare audio against
     // maxScheduledMediaTime vs actual playback position to detect real desync.
-    // Skip when muted — demux loop drops audio decode entirely (see muted check
-    // in process loop), so getAudioClock() stays clamped and would falsely trip.
-    if (this.stateManager.getState() === "playing" && !this.disableAudio && !this.muted && !inPlayGrace && Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01) {
+    // Skip only when audio is genuinely out of the pipeline (muted AND a
+    // suspended context — autoplay blocked): there the demux loop drops audio
+    // frames, so getAudioClock() stays clamped and this would falsely trip. A
+    // muted-but-running context schedules audio normally and can desync just
+    // like an audible one.
+    if (this.stateManager.getState() === "playing" && !this.disableAudio && !this.audioRenderer.isDroppingAudio() && !inPlayGrace && Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01) {
       const audioTime = this.audioRenderer.getAudioClock();
       const videoTime = this.videoRenderer
         ? (this.videoRenderer as any).currentTime ?? -1
@@ -4093,7 +4096,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const audioStarving = gateOnAudio && hasAudioToStarve && audioBuffered < 0.1;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
-    const skipVideoDecodeForAudio = !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
+    // Muted is not the same as audio-less. The clock is mastered by audio in
+    // every state, so an empty audio buffer stalls playback whether or not
+    // anyone can hear it — and gating this protection on `muted` is why a
+    // software-decoded file played fine with sound and stuttered with the
+    // spinner flashing while it was still on muted autoplay: unmuted, video
+    // decode yields to keep audio alive; muted, it didn't, and the buffers ran
+    // dry every couple of seconds. The one state where audio really is out of
+    // the pipeline is muted-and-suspended (autoplay blocked, pre-gesture),
+    // where frames are dropped rather than scheduled.
+    const audioInPipeline = !this.audioRenderer.isDroppingAudio();
+    const skipVideoDecodeForAudio =
+      audioInPipeline && (videoBufferFull || videoDecoderFull) && audioStarving;
 
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
@@ -4187,7 +4201,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (videoQueue < 30 || currentAudioBuffered < bufferTarget) {
           if (
             inPlayGrace &&
-            !this.muted &&
+            !this.audioRenderer.isDroppingAudio() &&
             !this.disableAudio &&
             !isSoftware &&
             // Software audio can't afford the gentle ramp either — 20 packets a
@@ -6934,12 +6948,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // buffer-duration reading is unreliable, so a buffer-only gate let audio
     // race far ahead of the wall-clock-rolling video and land wildly out of sync
     // on unmute. Gating on how far the last decoded PTS is past the playhead
-    // keeps audio close to the video in every state. Crucially, while MUTED
-    // (autoplay-blocked, pre-gesture) keep the lead tiny — the muted renderer
-    // advances its media clock to the lead edge, so a big lead becomes exactly
-    // that much A/V drift the instant the user unmutes. A small lead makes
-    // unmute land on the playhead. Once audible, use the full smooth-buffer lead.
-    const lead = this.muted ? 0.25 : bufferedTarget;
+    // keeps audio close to the video in every state. Crucially, while audio is
+    // being DROPPED (muted with a suspended context — autoplay blocked, before
+    // any gesture) keep the lead tiny: that renderer advances its media clock to
+    // the lead edge, so a big lead becomes exactly that much A/V drift the
+    // instant the user unmutes. A small lead makes unmute land on the playhead.
+    // A muted-but-RUNNING context schedules audio like any other, so it gets the
+    // full smooth-buffer lead — starving it there was making muted playback
+    // stall in a loop while the same file played smoothly with sound.
+    const lead = this.audioRenderer.isDroppingAudio() ? 0.25 : bufferedTarget;
     const mediaNow = Math.max(0, this.clock.getTime() - this.startTime);
     if (this._lastSplitAudioPts - mediaNow > lead) return true;
 

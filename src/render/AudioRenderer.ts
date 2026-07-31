@@ -1459,6 +1459,17 @@ export class AudioRenderer {
   /**
    * Get filtered buffered duration (seconds ahead of current time)
    */
+  /**
+   * True when audio frames are being thrown away rather than scheduled: muted
+   * with a context the browser won't let us start (the autoplay-blocked state,
+   * before any gesture). Only then is audio genuinely absent from the pipeline
+   * — a muted context that IS running still schedules everything, at gain 0,
+   * and still drives the clock.
+   */
+  isDroppingAudio(): boolean {
+    return this._muted && this.audioContext?.state === "suspended";
+  }
+
   getBufferedDuration(): number {
     if (!this.audioContext) return 0;
     return Math.max(0, this.scheduledTime - this.audioContext.currentTime);
