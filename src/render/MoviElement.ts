@@ -16591,27 +16591,32 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
-      /* Selected rows carry no chrome of their own. A tint, a rail and a
-         recoloured label all say the same thing three times over, and in a menu
-         where several rows can be "on" at once that reads as clutter — so the
-         accent goes on the two things that ARE the state (the icon and its
-         value) and everything else is left alone. */
+      /* The state lives in the value, so the value is what gets drawn: a small
+         chip, the same shape as the shortcut key sitting beside it, so the row
+         reads as label — state — key. Off states are a neutral chip; on states
+         take the accent. One signal, no row chrome, and nothing moves when it
+         flips. */
+      .movi-context-menu-status {
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--movi-text-secondary, rgba(255, 255, 255, 0.7));
+      }
+
       .movi-context-menu-item.movi-context-menu-active {
         background-color: transparent;
       }
-
-      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon {
-        color: var(--movi-primary-light, var(--movi-primary));
-      }
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status {
+        background: color-mix(in srgb, var(--movi-primary) 26%, transparent);
         color: var(--movi-primary-light, var(--movi-primary));
-        font-weight: 600;
       }
 
-      /* A submenu value row has neither icon nor value — it IS the value — so
-         it takes the accent itself, with a tick where the shortcut key would
-         be. That is the same shape the quality and speed lists already use, so
-         a picked value looks picked wherever it is read. */
+      /* A submenu value row has no chip to colour — it IS the value — so it
+         takes the accent itself, with a tick where the shortcut key would be.
+         Same shape the quality and speed lists already use. */
       .movi-context-menu-item.movi-context-menu-active[data-speed],
       .movi-context-menu-item.movi-context-menu-active[data-fit] .movi-context-menu-label {
         color: var(--movi-primary-light, var(--movi-primary));
