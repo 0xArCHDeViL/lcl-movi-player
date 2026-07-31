@@ -12644,6 +12644,14 @@ export class MoviElement extends HTMLElement {
         height: 100%;
         display: block;
         object-fit: contain; /* Maintain aspect ratio */
+        /* Carry the host's own rounding down to the picture. The host clips
+           with overflow:hidden, which is enough in Chromium, but Firefox does
+           not apply a rounded clip to a composited child — a canvas or a
+           <video> — so a page that rounds the player got square corners on the
+           picture inside a rounded frame. These are direct children of the
+           shadow root, so inheriting reads the host's own radius, whatever the
+           page set it to. */
+        border-radius: inherit;
         user-select: none;
         -webkit-user-select: none;
         -moz-user-select: none;
