@@ -2909,6 +2909,8 @@ export class MoviElement extends HTMLElement {
 
     // Fullscreen change listener
     document.addEventListener("fullscreenchange", () => {
+      // Entering or leaving changes whether the picture should be rounded.
+      this.syncPictureRounding();
       const isFullscreen = !!document.fullscreenElement;
       this.applyFullscreenUiState(isFullscreen);
       this.applyFullscreenOrientation(isFullscreen);
@@ -18679,6 +18681,7 @@ export class MoviElement extends HTMLElement {
       // Track menus (subtitle / audio / quality) cap themselves at this
       // height so the panel never grows taller than the player itself.
       if (h > 0) this.style.setProperty("--movi-player-height", `${h}px`);
+      this.syncPictureRounding();
     };
     publishPlayerWidth();
 
@@ -21119,6 +21122,9 @@ export class MoviElement extends HTMLElement {
     const renditionSwitchHandler = (e: { active: boolean }) => {
       this._renditionSwitching = e.active;
       this.updateLoadingIndicator();
+      // The swap reconfigures the canvas; re-apply the clip so the rounding
+      // survives the new surface.
+      if (!e.active) this.syncPictureRounding();
     };
     this.player.on("renditionSwitch", renditionSwitchHandler);
     this.eventHandlers.set("renditionSwitch", () =>
@@ -23651,6 +23657,49 @@ export class MoviElement extends HTMLElement {
         return this.hasMediaSource();
       default:
         return false;
+    }
+  }
+
+  /**
+   * Clip the picture to the rounding the page asked for.
+   *
+   * border-radius alone is not enough on a canvas that the browser has already
+   * composited: Firefox keeps painting square corners inside the rounded frame
+   * until something rebuilds the layer — which is why the corners were square
+   * on load and came good the moment a quality switch reconfigured the canvas.
+   * A clip-path is applied by the compositor itself, so it holds from the first
+   * frame.
+   *
+   * The radius comes from the host's own computed style — whatever the page
+   * set, in whatever units — so this follows a themed or responsive value
+   * without the page having to tell us about it.
+   */
+  private syncPictureRounding(): void {
+    // Fullscreen fills the screen — there are no corners to round there, and a
+    // page radius left over from the inline layout would cut into the picture.
+    const fullscreen =
+      document.fullscreenElement === this ||
+      (document as unknown as { webkitFullscreenElement?: Element })
+        .webkitFullscreenElement === this ||
+      this.classList.contains("movi-pseudo-fullscreen");
+    if (fullscreen) {
+      for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
+        if (el && el.style.clipPath) el.style.clipPath = "";
+      }
+      return;
+    }
+    const cs = getComputedStyle(this);
+    const corners = [
+      cs.borderTopLeftRadius,
+      cs.borderTopRightRadius,
+      cs.borderBottomRightRadius,
+      cs.borderBottomLeftRadius,
+    ];
+    const rounded = corners.some((c) => parseFloat(c) > 0);
+    const clip = rounded ? `inset(0 round ${corners.join(" ")})` : "";
+    for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
+      if (!el) continue;
+      if (el.style.clipPath !== clip) el.style.clipPath = clip;
     }
   }
 
