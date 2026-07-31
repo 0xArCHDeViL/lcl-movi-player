@@ -7040,6 +7040,9 @@ export class MoviElement extends HTMLElement {
   // for a moment after that: video decode is skipped while hidden, so the first
   // readings on return describe the background spell, not a stall.
   private _becameVisibleAt = 0;
+  // Whether the rounding clip has been re-applied on top of a live canvas
+  // layer for this source. See syncPictureRounding.
+  private _roundingReapplied = false;
   // Steady means: playing, on the rung we were dropped to, with this much
   // buffered ahead, held for this long. Both generous — a restore that turns
   // out to be premature costs another rebuild, so it should only fire when the
@@ -20859,7 +20862,18 @@ export class MoviElement extends HTMLElement {
       // for data (`waiting`) and when it genuinely resumed (`playing`). Without
       // these, a host had to subscribe to our non-standard `statechange` and
       // know our internal PlayerState names just to drive a spinner.
-      if (state === "playing") this.dispatchEvent(new Event("playing"));
+      if (state === "playing") {
+        this.dispatchEvent(new Event("playing"));
+        // First frames are on screen now, so the canvas has a compositing
+        // layer for the rounding clip to attach to — see syncPictureRounding.
+        // Once per load; the flag resets with the next source.
+        if (!this._roundingReapplied) {
+          this._roundingReapplied = true;
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => this.syncPictureRounding(true)),
+          );
+        }
+      }
       else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
       // The replacement player is up — stop holding the controls open on the
       // rebuild's behalf and let the normal state gating take over again.
@@ -21124,7 +21138,7 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator();
       // The swap reconfigures the canvas; re-apply the clip so the rounding
       // survives the new surface.
-      if (!e.active) this.syncPictureRounding();
+      if (!e.active) this.syncPictureRounding(true);
     };
     this.player.on("renditionSwitch", renditionSwitchHandler);
     this.eventHandlers.set("renditionSwitch", () =>
@@ -21414,6 +21428,7 @@ export class MoviElement extends HTMLElement {
     if (!this._qualitySwitchInProgress && !this._fullRecreateInFlight) {
       this._switchResumeDuration = 0;
       // A pending restore belongs to the material that was interrupted.
+      this._roundingReapplied = false;
       this._restoreRungSrc = null;
       this._restoreHealthySince = 0;
       this._frozenRecreateTried = false;
@@ -23674,7 +23689,7 @@ export class MoviElement extends HTMLElement {
    * set, in whatever units — so this follows a themed or responsive value
    * without the page having to tell us about it.
    */
-  private syncPictureRounding(): void {
+  private syncPictureRounding(force = false): void {
     // Fullscreen fills the screen — there are no corners to round there, and a
     // page radius left over from the inline layout would cut into the picture.
     const fullscreen =
@@ -23699,6 +23714,16 @@ export class MoviElement extends HTMLElement {
     const clip = rounded ? `inset(0 round ${corners.join(" ")})` : "";
     for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
       if (!el) continue;
+      // Firefox only reads the clip when the canvas's compositing layer is
+      // built, and at connect there is no layer yet — the clip set here is
+      // simply never applied, which is why the corners stayed square until a
+      // quality switch rebuilt the layer and the browser re-read it. Once
+      // there IS a layer, taking the clip off and putting it back makes it
+      // read again; that is what `force` does, from the first painted frame.
+      if (force && clip) {
+        el.style.clipPath = "none";
+        void el.offsetWidth; // flush, so the pair isn't coalesced into a no-op
+      }
       if (el.style.clipPath !== clip) el.style.clipPath = clip;
     }
   }
