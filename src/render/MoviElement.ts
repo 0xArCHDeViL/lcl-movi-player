@@ -16591,42 +16591,42 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
-      /* The current setting should be findable at a glance, not shouted. The
-         label keeps the menu's own colour so the list still reads as a list;
-         the accent goes on what actually carries the state — the icon and its
-         value — over a faint tint of the same colour.
-         (The tint used to be written color-mix(… 0.12), which is not a
-         percentage and resolved to nothing, so the row was carried entirely by
-         a glowing bar, bold text, and an 8px label shift that made the text
-         jump as you toggled.) */
+      /* Selected rows carry no chrome of their own. A tint, a rail and a
+         recoloured label all say the same thing three times over, and in a menu
+         where several rows can be "on" at once that reads as clutter — so the
+         accent goes on the two things that ARE the state (the icon and its
+         value) and everything else is left alone. */
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: color-mix(in srgb, var(--movi-primary) 14%, transparent);
-        font-weight: 500;
+        background-color: transparent;
       }
 
-      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon,
-      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status,
-      /* A submenu value row is nothing BUT its text, so there the text is what
-         takes the accent. */
-      .movi-context-menu-item.movi-context-menu-active[data-speed] {
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon {
         color: var(--movi-primary-light, var(--movi-primary));
       }
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status {
+        color: var(--movi-primary-light, var(--movi-primary));
         font-weight: 600;
       }
 
-      /* A hairline down the edge rather than a floating, glowing pill: it marks
-         the row without competing with the icon beside it. Inset from the
-         corners so it doesn't fight the menu's rounding. */
-      .movi-context-menu-item.movi-context-menu-active::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 6px;
-        bottom: 6px;
-        width: 2px;
-        background: var(--movi-primary);
-        border-radius: 0 2px 2px 0;
+      /* A submenu value row has neither icon nor value — it IS the value — so
+         it takes the accent itself, with a tick where the shortcut key would
+         be. That is the same shape the quality and speed lists already use, so
+         a picked value looks picked wherever it is read. */
+      .movi-context-menu-item.movi-context-menu-active[data-speed],
+      .movi-context-menu-item.movi-context-menu-active[data-fit] .movi-context-menu-label {
+        color: var(--movi-primary-light, var(--movi-primary));
+        font-weight: 600;
+      }
+      .movi-context-menu-item.movi-context-menu-active[data-speed]::after,
+      .movi-context-menu-item.movi-context-menu-active[data-fit]::after {
+        content: "";
+        width: 14px;
+        height: 8px;
+        margin-left: auto;
+        border-left: 2px solid var(--movi-primary-light, var(--movi-primary));
+        border-bottom: 2px solid var(--movi-primary-light, var(--movi-primary));
+        border-radius: 1px;
+        transform: rotate(-45deg) translate(1px, -2px);
       }
 
       .movi-context-menu-label {
