@@ -18629,6 +18629,17 @@ export class MoviElement extends HTMLElement {
     this.updateFastSeek();
     this.updatePoster();
 
+    // The settings that belong to the ELEMENT rather than to a loaded media —
+    // stable volume, loop, ambient, the crop — are usable before playback and
+    // the panel already shows them that way. The context menu was left holding
+    // whatever its markup was written with, so it read "Stable Volume Off"
+    // beside a panel showing the same setting on. These sync it to the truth
+    // at connect; each one is re-run on its own change as before.
+    this.updateStableAudioUI();
+    this.updateLoopUI();
+    this.updateAmbientUI();
+    this.updateAspectRatioIcon();
+
     // Publish the player's own width as a CSS custom property so
     // descendant CSS (subtitle font sizing in particular) can scale
     // against the player rather than the viewport.
