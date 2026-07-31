@@ -16591,28 +16591,62 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
+      /* An active row is drawn as a card: the accent tint that was always meant
+         to be here (the old value, color-mix(… 0.12), had no percentage in it
+         and so rendered nothing), a hairline of the same colour around it, and
+         a soft bloom underneath. The label stays white — the accent belongs to
+         the things that carry the state. */
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: color-mix(in srgb, var(--movi-primary) 0.12);
-        color: var(--movi-primary-light);
-        font-weight: 600;
+        background-color: color-mix(in srgb, var(--movi-primary) 13%, transparent);
+        box-shadow:
+          inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 38%, transparent),
+          0 4px 16px color-mix(in srgb, var(--movi-primary) 14%, transparent);
       }
-      
+
+      /* The rail: small, rounded, tucked inside the card's left edge. */
       .movi-context-menu-item.movi-context-menu-active::before {
         content: '';
         position: absolute;
-        left: 6px;
+        left: 10px;
         top: 50%;
         transform: translateY(-50%);
         width: 3px;
-        height: 12px;
-        background: var(--movi-primary);
-        border-radius: 4px;
-        box-shadow: 0 0 10px var(--movi-primary);
+        height: 20px;
+        background: var(--movi-primary-light, var(--movi-primary));
+        border-radius: 999px;
       }
 
-      /* Adjust label position for active indicator */
-      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-label {
-        padding-left: 8px;
+      /* The icon takes the accent and nothing else — no tinted square behind
+         it. The card already carries the row; a second patch of colour around
+         the glyph only muddied it. */
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon {
+        color: var(--movi-primary-light, var(--movi-primary));
+      }
+
+      /* …and the value + its shortcut key pick up the accent, so the row reads
+         as one object rather than a line with a highlight on it. */
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status {
+        color: var(--movi-primary-light, var(--movi-primary));
+        font-weight: 600;
+      }
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-shortcut {
+        color: var(--movi-primary-light, var(--movi-primary));
+        background: color-mix(in srgb, var(--movi-primary) 18%, transparent);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 38%, transparent);
+      }
+
+      /* The rail needs room, and the label has to clear the icon's new square.
+         Both come out of the row's own padding so the card's edges stay put. */
+      .movi-context-menu-item.movi-context-menu-active {
+        padding-left: 22px;
+      }
+
+      /* A submenu value row is nothing but its text, so it takes the accent
+         itself — the card, rail and icon chip have nothing to sit on there. */
+      .movi-context-menu-item.movi-context-menu-active[data-speed],
+      .movi-context-menu-item.movi-context-menu-active[data-fit] .movi-context-menu-label {
+        color: var(--movi-primary-light, var(--movi-primary));
+        font-weight: 600;
       }
 
       .movi-context-menu-label {
