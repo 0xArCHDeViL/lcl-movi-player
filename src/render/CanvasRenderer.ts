@@ -4063,6 +4063,15 @@ export class CanvasRenderer {
       this.lastRenderedFrame = null;
     }
 
+    // …and everything still waiting to be presented. A VideoFrame holds a
+    // decoded buffer that only close() gives back; dropping the reference
+    // leaves it to garbage collection, which is what produces "A VideoFrame was
+    // garbage collected without being closed" and, until the collector runs,
+    // starves the decoder of the buffers it needs. The queue is tens of frames
+    // deep at 60fps, and every quality switch and error recovery destroys a
+    // renderer.
+    this.clearQueue();
+
     this.clear();
     if (this.gl) {
       if (this.texture) this.gl.deleteTexture(this.texture);
