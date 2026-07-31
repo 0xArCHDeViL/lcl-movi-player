@@ -16591,28 +16591,42 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
+      /* The current setting should be findable at a glance, not shouted. The
+         label keeps the menu's own colour so the list still reads as a list;
+         the accent goes on what actually carries the state — the icon and its
+         value — over a faint tint of the same colour.
+         (The tint used to be written color-mix(… 0.12), which is not a
+         percentage and resolved to nothing, so the row was carried entirely by
+         a glowing bar, bold text, and an 8px label shift that made the text
+         jump as you toggled.) */
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: color-mix(in srgb, var(--movi-primary) 0.12);
-        color: var(--movi-primary-light);
+        background-color: color-mix(in srgb, var(--movi-primary) 14%, transparent);
+        font-weight: 500;
+      }
+
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon,
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status,
+      /* A submenu value row is nothing BUT its text, so there the text is what
+         takes the accent. */
+      .movi-context-menu-item.movi-context-menu-active[data-speed] {
+        color: var(--movi-primary-light, var(--movi-primary));
+      }
+      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status {
         font-weight: 600;
       }
-      
+
+      /* A hairline down the edge rather than a floating, glowing pill: it marks
+         the row without competing with the icon beside it. Inset from the
+         corners so it doesn't fight the menu's rounding. */
       .movi-context-menu-item.movi-context-menu-active::before {
         content: '';
         position: absolute;
-        left: 6px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 3px;
-        height: 12px;
+        left: 0;
+        top: 6px;
+        bottom: 6px;
+        width: 2px;
         background: var(--movi-primary);
-        border-radius: 4px;
-        box-shadow: 0 0 10px var(--movi-primary);
-      }
-
-      /* Adjust label position for active indicator */
-      .movi-context-menu-item.movi-context-menu-active .movi-context-menu-label {
-        padding-left: 8px;
+        border-radius: 0 2px 2px 0;
       }
 
       .movi-context-menu-label {
