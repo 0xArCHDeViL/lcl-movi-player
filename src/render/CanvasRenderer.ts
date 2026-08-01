@@ -4079,6 +4079,16 @@ export class CanvasRenderer {
     }
   }
 
+  /**
+   * Frames put on screen since the queue was last cleared — a seek, or a
+   * rendition swap. 0 means nothing from the new pipeline has been painted yet,
+   * which is what "the picture has actually changed over" means to a caller
+   * that wants to hold a loading indicator until it has.
+   */
+  presentedSinceClear(): number {
+    return this.framesPresented;
+  }
+
   /** Radius in DRAWING-BUFFER pixels, which is what the shader measures in. */
   private cornerRadiusBufferPx(): number {
     if (!this.cornerRadiusCss || !this.canvas) return 0;

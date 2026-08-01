@@ -180,6 +180,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     height?: number;
   }[] = [];
   private _activeDashRendition: string = "";
+  // Stamps each rendition-switch indicator, so an end that arrives after the
+  // next switch has started can't clear the newer one's indicator.
+  private _switchIndicatorGen = 0;
   // Adaptive-quality (ABR) state for the demuxer/premuxed in-place switch.
   private _autoQuality: boolean = false;
   private _abrTimer: ReturnType<typeof setInterval> | null = null;
@@ -1391,9 +1394,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const switchLabel = this._dashRenditions.find(
       (r) => r.url === newRenditionUrl,
     )?.label;
-    this.emit("renditionSwitch", { active: true, label: switchLabel });
+    // The start event is NOT emitted here. Everything up to the atomic swap is
+    // prep — opening and seeking the new demuxer, off the current pipeline —
+    // and the old rendition keeps playing throughout, untouched. Announcing a
+    // switch during it put a loading indicator over a picture that was running
+    // perfectly, for however long the network took, and then cleared it at the
+    // return below — which is BEFORE the new frames reach the screen. So the
+    // indicator covered the calm part and was gone by the time the picture
+    // actually jumped. It goes up at the swap instead, and comes down when the
+    // first new frame is painted.
+    let indicatorOn = false;
+    // The end can arrive late (it waits for the first painted frame) while a
+    // NEXT switch has already raised its own indicator. Stamp each one so a
+    // straggler can only ever clear the indicator it put up.
+    let myIndicator = 0;
+    const beginSwitchIndicator = () => {
+      if (indicatorOn) return;
+      indicatorOn = true;
+      myIndicator = ++this._switchIndicatorGen;
+      this.emit("renditionSwitch", { active: true, label: switchLabel });
+    };
     const endSwitch = <T,>(result: T): T => {
-      this.emit("renditionSwitch", { active: false, label: switchLabel });
+      if (indicatorOn && myIndicator === this._switchIndicatorGen) {
+        indicatorOn = false;
+        this.emit("renditionSwitch", { active: false, label: switchLabel });
+      }
       return result;
     };
     const isHls = srcUrl.toLowerCase().includes(".m3u8");
@@ -1476,6 +1501,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
     // the video source/demuxer, reconfigure the video decoder, resume. ---
+    // This is where the picture stops, so this is where the indicator starts.
+    beginSwitchIndicator();
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
@@ -1563,7 +1590,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       TAG,
       `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}`,
     );
-    return endSwitch(true);
+    // Hold the indicator until the new rendition is actually on screen. The
+    // swap is complete here, but the decoder has not produced a frame yet —
+    // clearing now leaves the picture frozen with nothing explaining it, which
+    // is the gap the viewer sees. Detached on purpose: the caller (ABR) is
+    // waiting on this promise to release its own switch lock, and holding that
+    // until the first frame lands would delay the next decision.
+    void this.clearSwitchIndicatorOnFirstFrame(endSwitch);
+    return true;
+  }
+
+  /**
+   * Clear a rendition-switch indicator once the renderer has painted a frame
+   * from the new pipeline — clearQueue() zeroes that count at the swap, so the
+   * first non-zero reading IS the changeover the viewer sees.
+   *
+   * Bounded: a decoder that never produces (a rung the machine can't handle,
+   * a stalled fetch) must not leave the indicator up forever. The stall then
+   * shows as ordinary buffering, which is what it is.
+   */
+  private async clearSwitchIndicatorOnFirstFrame(
+    end: <T>(r: T) => T,
+  ): Promise<void> {
+    const deadline = performance.now() + 4000;
+    const renderer = this.videoRenderer as unknown as {
+      presentedSinceClear?: () => number;
+    } | null;
+    if (renderer?.presentedSinceClear) {
+      while (performance.now() < deadline) {
+        if ((renderer.presentedSinceClear() || 0) > 0) break;
+        await new Promise((r) => setTimeout(r, 32));
+      }
+    }
+    end(undefined);
   }
 
   /**
@@ -8177,6 +8236,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // Was the audio being thrown away? Read it BEFORE unmute() flips the state.
+    // While muted with a browser-suspended context every decoded audio frame is
+    // dropped, so there is no audio for the picture on screen — the decoder has
+    // run on ahead with the demuxer, a video buffer's worth past the presented
+    // frame. See the re-sync below.
+    const wasDroppingAudio = this.audioRenderer.isDroppingAudio();
+
     if (muted) {
       this.audioRenderer.mute();
     } else {
@@ -8193,6 +8259,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // which muted autoplay couldn't get without a gesture. Best-effort, after
       // unmute — losing the activation to it here is harmless; losing audio isn't.
       this.ensureWakeLock();
+
+      // The WASM path has no <audio> element to re-anchor the way the native
+      // branch below does, and the audio for this moment is gone — dropped
+      // while the context was suspended. Whatever the decoder holds now belongs
+      // to the demuxer's read position, one video buffer AHEAD of the frame on
+      // screen. Let that start playing and the clock, which audio masters, jumps
+      // forward with it: the viewer hears a second or two of audio from the
+      // future while the picture sits still, then the video catches up. That is
+      // the "1-3s of audio, then video continues" on tap-to-unmute.
+      //
+      // The only way to get the audio for the current position is to read it
+      // again, which is a seek — to exactly where we already are, so nothing is
+      // lost but the re-read, and the bytes are still in the source's buffer.
+      if (
+        wasDroppingAudio &&
+        !this.nativeAudioEl &&
+        this.stateManager.getState() === "playing"
+      ) {
+        const at = this.getCurrentTime();
+        Logger.info(
+          TAG,
+          `Unmute: audio was being dropped — re-reading from ${at.toFixed(2)}s so it lands with the picture`,
+        );
+        this.seek(at).catch(() => {});
+      }
     }
     if (this.nativeAudioEl) {
       this.nativeAudioEl.muted = muted;
