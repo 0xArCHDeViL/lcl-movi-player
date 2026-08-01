@@ -659,6 +659,12 @@ export class CanvasRenderer {
     out vec4 outColor;
     void main() {
       outColor = texture(u_image, v_texCoord);
+      // The picture is opaque: the context is transparent only so a CUT corner
+      // can show the page through it. Trusting the texture's own alpha instead
+      // turned the whole canvas transparent on the paths that upload without
+      // one (10-bit HEVC lands in RGBA16F with alpha 0) — the video vanished
+      // and the page behind showed through as a black screen.
+      outColor.a = 1.0;
       if (u_round.x > 0.0) {
         vec2 halfSize = u_round.yz * 0.5;
         vec2 q = abs(gl_FragCoord.xy - halfSize) - (halfSize - vec2(u_round.x));
@@ -818,7 +824,7 @@ export class CanvasRenderer {
       // Apply gamma (2.2 for accurate color reproduction)
       vec3 display = pow(sdr, vec3(1.0/2.2));
 
-      outColor = vec4(display, color.a);
+      outColor = vec4(display, 1.0); // opaque — see the passthrough program
       if (u_round.x > 0.0) {
         vec2 halfSizeR = u_round.yz * 0.5;
         vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
@@ -996,6 +1002,7 @@ export class CanvasRenderer {
       // edge never shows a black void.
       vec2 uv = vec2(eye.x * u_uScale + u_uOffset, eye.y);
       outColor = texture(u_image, uv);
+      outColor.a = 1.0; // opaque — see the passthrough program
       if (u_round.x > 0.0) {
         vec2 halfSizeR = u_round.yz * 0.5;
         vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
