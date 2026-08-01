@@ -1837,8 +1837,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const ns = (
         this.source as {
           getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
-        }
-      ).getNetworkStats?.();
+        } | null
+      )?.getNetworkStats?.();
       const downBits = ((ns?.lastSpeed ?? ns?.currentSpeed ?? 0) || 0) * 8;
       // A soft bufferLow (not a hard stall) is only a real "can't sustain the
       // rung" signal when the source is ACTIVELY downloading and STILL can't
@@ -1936,8 +1936,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const netStats = (
       this.source as {
         getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
-      }
-    ).getNetworkStats?.();
+      } | null
+    )?.getNetworkStats?.();
     // Prefer lastSpeed (the last measured rate, which survives idle) over
     // currentSpeed (0 once a small file finishes caching) so Auto keeps a real
     // estimate to size the rung from.
@@ -2276,8 +2276,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const ns = (
       this.source as {
         getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
-      }
-    ).getNetworkStats?.();
+      } | null
+    )?.getNetworkStats?.();
     // A frozen source often reports no live speed at all, and reading that as
     // "the link is dead" sent a 480p stall straight to 144p. The remembered
     // estimate is the better answer when there is no fresh one.
@@ -5916,11 +5916,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * thinking the link is slow, would sit stuck at the low starting rung.
    */
   sampleThroughput(): void {
+    // `this.source` is null whenever a wrapper owns the networking (Shaka /
+    // HLS / DASH), and it is null again after unload. The `?.()` below only
+    // guards a MISSING METHOD, not a missing source — so the UI tick, which
+    // calls this every ~250ms regardless of which pipeline is playing, threw
+    // "Cannot read properties of null (reading 'getNetworkStats')" on every
+    // HLS playback. Same shape at the three ABR call sites.
     const s = (
       this.source as {
         getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
-      }
-    ).getNetworkStats?.();
+      } | null
+    )?.getNetworkStats?.();
     const raw = s?.lastSpeed ?? s?.currentSpeed ?? 0;
     if (raw > 0) {
       this._lastThroughputBps =
