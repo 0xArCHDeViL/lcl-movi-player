@@ -5843,9 +5843,15 @@ export class MoviElement extends HTMLElement {
     // and silently swallowed here, with no Escape key on touch.
     const currentlyActive = this.isFullscreenActive();
 
+    // Loading is NOT a reason to refuse. A source that is still opening is a
+    // video that is about to play, and wanting it full-screen before it starts
+    // is ordinary — the load carries on either way, and the picture arrives
+    // into the size the viewer already chose. Blocking here is what made the
+    // enabled button feel broken: it lit up, took the click, and did nothing.
+    // What IS a reason: nothing to play at all, or a source we can't play.
     if (
       !currentlyActive &&
-      (this.isLoading || this._isUnsupported || !this.player)
+      (this._isUnsupported || !this.player || !this.hasMediaSource())
     ) {
       return;
     }
