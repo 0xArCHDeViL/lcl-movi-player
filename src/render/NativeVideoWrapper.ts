@@ -123,6 +123,9 @@ export class NativeVideoWrapper extends EventEmitter<PlayerEventMap> {
   // the list (parsed from <source data-height>) and drives the menu; the wrapper
   // only has to report the active one and swap it (switchVideoRenditionInPlace).
   private activeSrc = "";
+  // Identity of the last video track handed to the TrackManager — see
+  // publishActiveVideoTrack for why republishing the same one is not harmless.
+  private _publishedTrackStamp = "";
   // "Auto" state: the ladder, plus the buffer-watching loop that climbs and
   // drops through it (see setAutoQuality for why it's buffer- not rate-based).
   private renditions: {
@@ -546,6 +549,15 @@ export class NativeVideoWrapper extends EventEmitter<PlayerEventMap> {
   private publishActiveVideoTrack(): void {
     const active = this.renditions.find((r) => r.url === this.activeSrc);
     if (!active) return;
+    // setTracks() emits tracksChange unconditionally, and MoviElement answers
+    // that by re-rendering the quality menu — which calls setDashRenditions(),
+    // which lands back here. Publishing a track identical to the live one
+    // therefore recursed: measured 569 rounds of the whole menu rebuild on a
+    // single gear-panel open, blocking the page for ~2.5s. Only publish when
+    // the rung actually changed; a repeat is not news.
+    const stamp = `${active.url}|${active.height || 0}|${active.label || ""}`;
+    if (stamp === this._publishedTrackStamp) return;
+    this._publishedTrackStamp = stamp;
     this.trackManager.setTracks([
       {
         id: 0,
@@ -566,10 +578,9 @@ export class NativeVideoWrapper extends EventEmitter<PlayerEventMap> {
    * and clock survive — here a reload would tear the whole fallback down and
    * re-run the WASM path that already failed.
    *
-   * Deliberately no "Auto": sizing renditions needs a throughput estimate, and
-   * a native element decodes opaquely — there's nothing to measure. The menu
-   * hides its Auto row for this wrapper (it gates on setDashRenditions, which
-   * this class doesn't implement).
+   * Auto IS offered here, but on a different signal: sizing renditions by
+   * throughput needs byte counters a native element doesn't expose, so
+   * setAutoQuality above adapts off the buffer instead.
    */
   async switchVideoRenditionInPlace(url: string): Promise<boolean> {
     if (this._destroyed || !url) return false;

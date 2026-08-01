@@ -20797,7 +20797,23 @@ export class MoviElement extends HTMLElement {
    * but left the badge (and the host) on the rung it started at.
    */
   private handleTracksChange(): void {
-    {
+    // Re-entrancy guard. This handler re-renders the quality menu, and that
+    // render pushes the ladder back into the player (setDashRenditions) —
+    // which, on an engine that answers by republishing its track list, emits
+    // tracksChange again from inside this very call. The native fallback did
+    // exactly that: one gear-panel open ran the whole cascade 569 times and
+    // froze the page for ~2.5s.
+    //
+    // Nested calls don't just get dropped: the state they carry might land
+    // after the outer pass has already read it, so remember that one arrived
+    // and run a single extra pass at the end. One, not a loop — a handler that
+    // keeps provoking itself has a bug the retry would only hide.
+    if (this._inTracksChange) {
+      this._tracksChangedAgain = true;
+      return;
+    }
+    this._inTracksChange = true;
+    try {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
@@ -20867,6 +20883,12 @@ export class MoviElement extends HTMLElement {
           chapters: this.player?.getChapters() || [],
         },
       }));
+    } finally {
+      this._inTracksChange = false;
+    }
+    if (this._tracksChangedAgain) {
+      this._tracksChangedAgain = false;
+      this.handleTracksChange();
     }
   }
 
@@ -22202,6 +22224,9 @@ export class MoviElement extends HTMLElement {
   /** Buffered-end at the last `progress` dispatch. Reset on a new source. */
   private _lastProgressBufferEnd = -1;
   /** Intrinsic size at the last `resize` dispatch. */
+  // handleTracksChange re-entrancy — see the guard at the top of it.
+  private _inTracksChange = false;
+  private _tracksChangedAgain = false;
   private _lastVideoWidth = 0;
   private _lastVideoHeight = 0;
   /** `canplaythrough` is once-per-source. */
