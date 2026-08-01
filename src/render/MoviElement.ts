@@ -11019,7 +11019,11 @@ export class MoviElement extends HTMLElement {
       rows.push(toggle("stable", "Stable volume", this._stableVolume));
     }
     rows.push(toggle("loop", "Loop", this._loop));
-    if (!audioOnly) {
+    // Aspect is the canvas renderer's fit mode. The native fallback has no
+    // canvas — its setFitMode() is an empty method — so the page would let the
+    // viewer pick a fit and then do nothing with it. The control-bar aspect
+    // button is already absent there; this row was the one that wasn't.
+    if (!audioOnly && this.isControlAvailable("aspect")) {
       rows.push(
       `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
       );
