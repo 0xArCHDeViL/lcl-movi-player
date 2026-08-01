@@ -74,6 +74,11 @@ export class MoviElement extends HTMLElement {
   // image-based PGS/DVB cues, so it isn't a reliable SR source on its own).
   private _captionLive: HTMLElement | null = null;
   private _captionObserver: MutationObserver | null = null;
+  // Watches the declarative <source> children so a host can swap videos without
+  // replacing the element — see _watchSourceChildren.
+  private _sourceObserver: MutationObserver | null = null;
+  private _sourceSignature = "";
+  private _sourceSwapQueued = false;
   private _lastCaptionText: string = "";
   // QoE analytics: collects startup/rebuffer/error/decode metrics and fans them
   // to sinks (and a `movi-qoe` DOM event). Heartbeats while playing.
@@ -7086,6 +7091,75 @@ export class MoviElement extends HTMLElement {
    * every field is a fresh assignment — so it's safe to re-run on a fresh
    * recreate after clearing `_src`.
    */
+  /** The ladder as declared right now, for spotting a real change. */
+  private _sourceChildrenSignature(): string {
+    return Array.from(this.querySelectorAll("source"))
+      .map(
+        (el) =>
+          `${el.getAttribute("kind") || "video"}:${el.getAttribute("src") || ""}`,
+      )
+      .join("\n");
+  }
+
+  /**
+   * Reload when the host swaps the `<source>` children for a different video.
+   *
+   * Without this the only way to change the ladder is to replace the whole
+   * element — which is what a framework does when it keys the player by video
+   * id. That works, but it takes fullscreen down with it: fullscreen belongs to
+   * the element, and the moment it leaves the DOM the browser exits. Playing
+   * the next video then drops the viewer back to the page, and re-entering
+   * needs a fresh gesture the auto-advance doesn't have. Reacting to the
+   * children instead lets the same element carry on — fullscreen, the unlocked
+   * AudioContext and the volume all survive the change.
+   *
+   * A batch of adds and removes is one change: React replaces children one node
+   * at a time, so this settles on a microtask and compares the resulting list
+   * against the last one. Identical children (a re-render of the same video)
+   * do nothing.
+   */
+  private _watchSourceChildren(): void {
+    this._sourceSignature = this._sourceChildrenSignature();
+    this._sourceObserver?.disconnect();
+    this._sourceObserver = new MutationObserver(() => {
+      if (this._sourceSwapQueued) return;
+      this._sourceSwapQueued = true;
+      queueMicrotask(() => {
+        this._sourceSwapQueued = false;
+        const next = this._sourceChildrenSignature();
+        if (!next || next === this._sourceSignature) return;
+        this._sourceSignature = next;
+        this._reloadFromSourceChildren();
+      });
+    });
+    this._sourceObserver.observe(this, { childList: true });
+  }
+
+  private _reloadFromSourceChildren(): void {
+    Logger.info(TAG, "Source children changed — reloading in place");
+    // A bare `src` attribute hides the children, so it has to go first; the
+    // same clearing the source-error rebuild does before re-parsing.
+    if (this.hasAttribute("src")) this.removeAttribute("src");
+    this._src = null;
+    this._parseChildSources();
+    if (!this._src) return; // nothing playable declared — leave the player be
+    // Everything the `src` attribute path resets for a fresh source. Without
+    // this the new video inherits the last one's engine walk, speed test and
+    // forced rung.
+    this._streamDemuxTried = false;
+    this._streamEngineTried = false;
+    this._engineTried.clear();
+    this._startProbeDone = false;
+    this._measuredStartBps = 0;
+    this._forcedDashRendition = null;
+    this._hasEverPlayed = false;
+    this._restoreRungSrc = "";
+    this.dispatchEvent(
+      new CustomEvent("loadstart", { detail: { src: this._src } }),
+    );
+    this.load();
+  }
+
   private _parseChildSources(): void {
     if (!this._src && !this._encrypted) {
       const sourceEls = this.querySelectorAll("source");
@@ -18782,6 +18856,7 @@ export class MoviElement extends HTMLElement {
 
     // If no src attribute, check for <source> child elements (Video.js-style)
     this._parseChildSources();
+    this._watchSourceChildren();
 
     // Parse <track> child elements (Video.js / standard <video>-style) into
     // external subtitle tracks. Lets integrators declare captions
@@ -18923,6 +18998,10 @@ export class MoviElement extends HTMLElement {
     // Drop any pending rounding re-applies — see connectedCallback.
     for (const t of this._roundingTimers) clearTimeout(t);
     this._roundingTimers.clear();
+
+    // Stop watching the <source> children; a reconnect re-observes them.
+    this._sourceObserver?.disconnect();
+    this._sourceObserver = null;
 
     // If removed while in the iOS pseudo-fullscreen fallback, restore the page
     // scroll we locked and drop the resize listeners (setPseudoFullscreen(false)
@@ -23561,12 +23640,19 @@ export class MoviElement extends HTMLElement {
       // bar is inert behind it, and the only escape left is a keyboard the page
       // may not have (touch).
       //
-      // Only while fullscreen, though. Exempting it unconditionally left one lit
-      // button in an otherwise dead bar on the "Nothing to Play" screen — an
-      // invitation to fullscreen an empty player.
+      // …and it goes live the moment there IS something loading, for the same
+      // reason play/pause does below: going fullscreen while a source spins up
+      // is a normal thing to want, and the load carries on regardless of what
+      // size the picture will arrive at. Dead until the first frame meant
+      // waiting out the whole load with the pointer on an inert button.
+      //
+      // Still gated on there being a media source at all. Exempting it
+      // unconditionally left one lit button in an otherwise dead bar on the
+      // "Nothing to Play" screen — an invitation to fullscreen an empty player.
       if (
         el.classList.contains("movi-fullscreen-btn") &&
-        this.isFullscreenActive()
+        (this.isFullscreenActive() ||
+          (!isUnsupported && this.hasMediaSource()))
       ) {
         el.style.opacity = "1";
         el.style.pointerEvents = "auto";
