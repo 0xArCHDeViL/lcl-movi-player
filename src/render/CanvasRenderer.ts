@@ -669,7 +669,12 @@ export class CanvasRenderer {
         vec2 halfSize = u_round.yz * 0.5;
         vec2 q = abs(gl_FragCoord.xy - halfSize) - (halfSize - vec2(u_round.x));
         float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - u_round.x;
-        outColor *= 1.0 - smoothstep(-0.75, 0.75, d);
+        // d is in pixels, and the centre of an edge pixel sits exactly 0.5
+        // inside the shape — so the falloff has to be one pixel wide and
+        // centred on the boundary. A wider band (this was -0.75..0.75) still
+        // takes ~7% off that last row, which reads as a thin dark line along
+        // every straight edge where the host's black shows through.
+        outColor *= 1.0 - smoothstep(-0.5, 0.5, d);
       }
     }`;
 
@@ -829,7 +834,7 @@ export class CanvasRenderer {
         vec2 halfSizeR = u_round.yz * 0.5;
         vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
         float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
-        outColor *= 1.0 - smoothstep(-0.75, 0.75, dR);
+        outColor *= 1.0 - smoothstep(-0.5, 0.5, dR);
       }
     }`;
 
@@ -1007,7 +1012,7 @@ export class CanvasRenderer {
         vec2 halfSizeR = u_round.yz * 0.5;
         vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
         float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
-        outColor *= 1.0 - smoothstep(-0.75, 0.75, dR);
+        outColor *= 1.0 - smoothstep(-0.5, 0.5, dR);
       }
     }`;
 
