@@ -4228,6 +4228,7 @@ export class MoviElement extends HTMLElement {
             const statusEl = this.contextMenuRoot().querySelector(".movi-rotate-status");
             if (statusEl) statusEl.textContent = `${deg}°`;
             this.syncThumbnailRotation(deg);
+            this.emitSettingChange("rotatechange", { degrees: deg });
           }
           break;
         case "a":
@@ -5328,6 +5329,9 @@ export class MoviElement extends HTMLElement {
           const statusEl = this.contextMenuRoot().querySelector(".movi-rotate-status");
           if (statusEl) statusEl.textContent = `${deg}°`;
           this.syncThumbnailRotation(deg);
+          // The action rotates through the PLAYER, so the element's `rotate`
+          // setter (which announces it) is never involved — report it here.
+          this.emitSettingChange("rotatechange", { degrees: deg });
           this.showOSD(
             OSD.rotate,
             `Rotate ${deg}°`,
@@ -11212,14 +11216,45 @@ export class MoviElement extends HTMLElement {
     );
   }
 
+  /**
+   * Announce a viewer-changeable setting so a host can remember it.
+   *
+   * The gear panel and the context menu let the viewer change loop, stable
+   * volume, HDR, ambient, rotation and audio-only, and none of those reached
+   * the page: the value went into a private field (and, for some, the player's
+   * own SettingsStorage) and stopped there. A host that wants a preference to
+   * outlive the element — the way movi-tube keeps quality and aspect — had
+   * nothing to listen to. Fired on real changes only, so a host echoing the
+   * value back cannot feed itself.
+   */
+  private emitSettingChange(name: string, detail: Record<string, unknown>): void {
+    this.dispatchEvent(
+      new CustomEvent(name, { detail, bubbles: true, composed: true }),
+    );
+  }
+
   private applyAspectChoice(fit: string): void {
-    if (this._objectFit === "control") {
+    const viaControl = this._objectFit === "control";
+    if (viaControl) {
       this._currentFit = fit as typeof this._currentFit;
     } else {
       this._objectFit = fit as typeof this._objectFit;
     }
     this.updateFitMode();
     this.showAspectOsd(fit);
+    // Tell the host what the viewer picked, so it can remember it. Nothing
+    // else reported this: the menu wrote to a private field, and a host that
+    // wanted the choice to outlive the page had no way to read it — the same
+    // gap `qualitychange` fills for the quality menu. Fired only from the
+    // viewer's own choice, never from the `objectfit` attribute path, so a
+    // host echoing the value back can't feed itself.
+    this.dispatchEvent(
+      new CustomEvent("aspectchange", {
+        detail: { fit, mode: viaControl ? "control" : "objectfit" },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   /**
@@ -24411,6 +24446,7 @@ export class MoviElement extends HTMLElement {
     if (enabled) this.setAttribute("audioonly", "");
     else this.removeAttribute("audioonly");
     if (this.isConnected) this.applyAudioOnly();
+    this.emitSettingChange("audioonlychange", { enabled });
   }
 
   /**
@@ -24757,13 +24793,16 @@ export class MoviElement extends HTMLElement {
   }
 
   set loop(value: boolean) {
-    this._loop = !!value;
+    const enabled = !!value;
+    const changed = enabled !== this._loop;
+    this._loop = enabled;
     if (this._loop) {
       this.setAttribute("loop", "");
     } else {
       this.removeAttribute("loop");
     }
     this.updateLoopUI();
+    if (changed) this.emitSettingChange("loopchange", { enabled });
   }
 
   /**
@@ -25809,6 +25848,7 @@ export class MoviElement extends HTMLElement {
   }
 
   set ambientMode(value: boolean) {
+    const changed = !!value !== !!this._ambientMode;
     this._ambientMode = value;
     if (value) {
       this.setAttribute("ambientmode", "");
@@ -25817,6 +25857,9 @@ export class MoviElement extends HTMLElement {
     }
     this.updateAmbientMode();
     SettingsStorage.getInstance().save({ ambientMode: this._ambientMode });
+    if (changed) {
+      this.emitSettingChange("ambientchange", { enabled: !!this._ambientMode });
+    }
   }
 
   get stableVolume(): boolean {
@@ -25824,6 +25867,7 @@ export class MoviElement extends HTMLElement {
   }
 
   set stableVolume(value: boolean) {
+    const changed = !!value !== this._stableVolume;
     this._stableVolume = !!value;
     if (this._stableVolume) {
       this.setAttribute("stablevolume", "");
@@ -25835,6 +25879,9 @@ export class MoviElement extends HTMLElement {
       this.updateStableAudioUI();
     }
     SettingsStorage.getInstance().save({ stableVolume: this._stableVolume });
+    if (changed) {
+      this.emitSettingChange("stablevolumechange", { enabled: this._stableVolume });
+    }
   }
 
   get currentTime(): number {
@@ -26868,8 +26915,10 @@ export class MoviElement extends HTMLElement {
 
   set rotate(deg: number) {
     const snapped = (Math.round(((((deg || 0) % 360) + 360) % 360) / 90) * 90) % 360;
+    const changed = snapped !== this._rotate;
     if (snapped) this.setAttribute("rotate", String(snapped));
     else this.removeAttribute("rotate");
+    if (changed) this.emitSettingChange("rotatechange", { degrees: snapped });
   }
 
   get thumb(): boolean {
@@ -26909,6 +26958,7 @@ export class MoviElement extends HTMLElement {
     }
 
     SettingsStorage.getInstance().save({ hdr: this._hdr });
+    this.emitSettingChange("hdrchange", { enabled: this._hdr });
   }
 
   /**

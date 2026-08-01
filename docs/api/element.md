@@ -1784,6 +1784,13 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `leavepictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
 | `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
+| `aspectchange`         | `{ fit, mode }`                      | Viewer picked an aspect from the gear menu (`fit` is `contain`/`cover`/`fill`/`zoom`; `mode` says whether it landed on `objectfit` or the `control` fit) |
+| `loopchange`           | `{ enabled: boolean }`               | Loop toggled                                       |
+| `stablevolumechange`   | `{ enabled: boolean }`               | Stable volume toggled                              |
+| `hdrchange`            | `{ enabled: boolean }`               | HDR toggled                                        |
+| `ambientchange`        | `{ enabled: boolean }`               | Ambient glow toggled                               |
+| `rotatechange`         | `{ degrees: number }`                | Picture rotated (menu, hotkey or property)         |
+| `audioonlychange`      | `{ enabled: boolean }`               | Audio-only (data saver) toggled                    |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
 | `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
 | `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI like the thumbnail strip |
