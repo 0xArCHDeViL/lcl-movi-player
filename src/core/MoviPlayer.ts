@@ -468,6 +468,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // outruns the HTTP stream.
   private static readonly PREBUFFER_AUDIO_SECONDS = 0.5;
   private static readonly PREBUFFER_VIDEO_FRAMES = 2;
+  // How many further packets to read looking for the video frames once audio is
+  // already satisfied. Bounded because the stash is drained before playback
+  // reads anything new — see the note in the prebuffer loop.
+  private static readonly PREBUFFER_VIDEO_SEARCH_PACKETS = 120;
   private static readonly PREBUFFER_MAX_WALL_MS = 5000;
   private static readonly PREBUFFER_MAX_PACKETS = 400;
 
@@ -2526,10 +2530,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !hasInFileAudio ||
       audioDurationStashed >= MoviPlayer.PREBUFFER_AUDIO_SECONDS;
 
+    // Once audio has what it needs, keep looking for the video frames — but not
+    // to the end of the packet budget. A file can interleave so much audio at
+    // the head (two TrueHD tracks and PGS subtitles, in the case this was found
+    // on) that chasing a second video frame stashes hundreds of audio packets,
+    // and every one of them has to be chewed through before playback reads
+    // anything new. Past this point the pipeline is better off starting and
+    // letting the normal read loop find the rest.
+    // Stash size at the moment audio was satisfied; the video search gets a
+    // bounded number of packets beyond it.
+    let audioMetAt = -1;
+    const packetBudget = () => {
+      if (audioMetAt < 0 && audioTargetMet()) {
+        audioMetAt = this.pendingPrebufferPackets.length;
+      }
+      return audioMetAt < 0
+        ? MoviPlayer.PREBUFFER_MAX_PACKETS
+        : Math.min(
+            MoviPlayer.PREBUFFER_MAX_PACKETS,
+            audioMetAt + MoviPlayer.PREBUFFER_VIDEO_SEARCH_PACKETS,
+          );
+    };
     while (
       (!videoTargetMet() || !audioTargetMet()) &&
       !eof &&
-      this.pendingPrebufferPackets.length < MoviPlayer.PREBUFFER_MAX_PACKETS
+      this.pendingPrebufferPackets.length < packetBudget()
     ) {
       if (performance.now() - startWall > MoviPlayer.PREBUFFER_MAX_WALL_MS) {
         Logger.warn(
@@ -4261,9 +4286,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Check both video and audio queues after seek to prevent overwhelming decoders
         // When audio is starving, don't let video queue fullness stop the burst — we need
         // to keep reading packets to find audio data (video decode is skipped below).
+        //
+        // The AUDIO queue does not gate the prebuffer stash. Those packets were
+        // read before playback began and are already in memory; holding them
+        // back throttles them out at audio-decode speed, and the video packets
+        // buried behind them arrive at that same crawl. On a file whose opening
+        // is dense with audio — two TrueHD tracks here — the stash ended up
+        // holding 400 packets and exactly one video frame, so the picture sat
+        // on that frame for half a minute while slow software audio decode let
+        // the rest dribble through. Seeking cleared the stash, which is why a
+        // seek "fixed" it.
+        const drainingStash = this.pendingPrebufferPackets.length > 0;
         if (
           (!skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
-          (!this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue)
+          (!drainingStash && !this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue)
         ) {
           // Queue getting full, stop to let decoders catch up
           if (isPostSeek) {
