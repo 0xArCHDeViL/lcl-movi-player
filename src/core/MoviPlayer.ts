@@ -75,6 +75,23 @@ const deviceDecodeBoundHeights = new Set<number>();
 // cleared by the reload, so every fresh visit paid the same stutter to
 // re-learn it. Small and self-correcting: the ceiling only ever rises to what
 // the machine has actually failed at, and clearing site data resets it.
+// The thumbnail pipeline's WASM module, kept for the whole page session.
+//
+// It used to be built fresh per video — a second emscripten instance, its own
+// multi-megabyte heap, its own compile. On a low-end device that is the most
+// expensive thing a video change does, and it lands exactly where it hurts:
+// alongside the new video's decode ramp, which is what pushed audio into
+// underrun ("gap filled" → duck → the clicking) after a couple of playbacks.
+// The module is stateless between videos; only the FFmpeg CONTEXT inside it is
+// per-file, and that is still created and destroyed each time.
+//
+// Handlers (onReadRequest / _pendingSeek) live on the MODULE, so exactly one
+// ThumbnailBindings may use it at a time. `inUse` enforces that: a second
+// pipeline — which happens only in the overlap of an in-place quality switch —
+// gets its own throwaway instance rather than corrupting this one.
+let sharedThumbnailModule: Awaited<ReturnType<typeof loadWasmModuleNew>> | null = null;
+let sharedThumbnailModuleInUse = false;
+
 const DECODE_CEILING_KEY = "movi:decode-ceiling";
 
 function loadPersistedDecodeCeiling(): void {
@@ -194,6 +211,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // screenRungsForDecodeCapability. Instance-level: the answers it produces go
   // into the module-level ceiling, so re-asking costs nothing but time.
   private _decodeScreened = new Set<string>();
+  // True while THIS player holds the shared thumbnail WASM module.
+  private _usingSharedThumbModule = false;
 
   /**
    * Resolutions this device has been shown not to sustain — learned from a
@@ -5756,11 +5775,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.debug(TAG, "Initializing thumbnail pipeline...");
     // Use a NEW isolated WASM module instance for thumbnails
     // This prevents onReadRequest handler conflicts with main playback
-    const module = await loadWasmModuleNew({
-      wasmBinary: this.config.wasmBinary,
-    });
-    Logger.debug(TAG, "Isolated WASM module loaded for thumbnails");
-    if (superseded()) return;
+    let module: Awaited<ReturnType<typeof loadWasmModuleNew>>;
+    if (sharedThumbnailModule && !sharedThumbnailModuleInUse) {
+      module = sharedThumbnailModule;
+      sharedThumbnailModuleInUse = true;
+      this._usingSharedThumbModule = true;
+      Logger.debug(TAG, "Reusing the shared thumbnail WASM module");
+    } else {
+      module = await loadWasmModuleNew({
+        wasmBinary: this.config.wasmBinary,
+      });
+      if (!sharedThumbnailModule) {
+        // First one becomes the shared instance every later video reuses.
+        sharedThumbnailModule = module;
+        sharedThumbnailModuleInUse = true;
+        this._usingSharedThumbModule = true;
+      }
+    }
+    Logger.debug(TAG, "Thumbnail WASM module ready");
+    if (superseded()) {
+      this.releaseSharedThumbModule();
+      return;
+    }
 
     // Encrypted playback: reuse the main EncryptedHttpSource for thumbnails.
     // A 2nd EncryptedHttpSource spins up an independent ECDH handshake +
@@ -5860,6 +5896,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         } catch {}
       }
       this.thumbnailSource = null;
+      this.releaseSharedThumbModule();
       return;
     }
 
@@ -5894,6 +5931,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.thumbnailBindings.destroy();
       } catch {}
       this.thumbnailBindings = null;
+      this.releaseSharedThumbModule();
       return;
     }
 
@@ -5980,8 +6018,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.debug(TAG, "Thumbnail pipeline initialized successfully");
   }
 
+  /** Hand the shared thumbnail module back, if this player holds it. */
+  private releaseSharedThumbModule(): void {
+    if (!this._usingSharedThumbModule) return;
+    this._usingSharedThumbModule = false;
+    sharedThumbnailModuleInUse = false;
+    // A read or seek left in flight belongs to the context being torn down;
+    // the next video's bindings must not inherit it.
+    try {
+      const m = sharedThumbnailModule as unknown as { _pendingSeek?: unknown } | null;
+      if (m && m._pendingSeek) m._pendingSeek = null;
+    } catch {
+      /* nothing to clear */
+    }
+  }
+
   private destroyPreviewPipeline() {
     this._previewGeneration++;
+    this.releaseSharedThumbModule();
     if (this.thumbnailBindings) {
       try {
         this.thumbnailBindings.destroy();
