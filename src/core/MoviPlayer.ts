@@ -3499,6 +3499,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     ).toLowerCase();
     return (
       !this.disableAudio &&
+      // Nothing to prime when the audio is being discarded: muted with a
+      // context the browser won't start (autoplay blocked). The cushion the
+      // prime waits for can never appear, so it would only freeze the picture
+      // for the full max-dwell before starting anyway.
+      !this.audioRenderer.isDroppingAudio() &&
       this.audioDecoder.usesSoftware &&
       /truehd|mlp|dts|dca/.test(codec)
     );
@@ -4068,9 +4073,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // - Background (not PiP): video decode is skipped entirely
     // - Buffering: presentation loop stopped, frames accumulate but aren't consumed
     //   (must keep demuxing so audio data flows and isRebufferingForRateChange clears)
+    // The buffering case exists to keep AUDIO flowing while the presentation
+    // loop is stopped. When audio is being thrown away instead (muted with a
+    // browser-suspended context), nothing flows and nothing ever ends the read:
+    // the audio buffer can't grow, so the resume gate waits out its full dwell
+    // while this loop reads with no ceiling on either side — tens of seconds of
+    // an audio-dense file in one burst. Keep video backpressure in that state;
+    // it is the only remaining brake.
     const skipVideoBackpressure =
       (this.isBackgrounded && !this.isPiPActive) ||
-      currentState === "buffering";
+      (currentState === "buffering" && !this.audioRenderer.isDroppingAudio());
 
     // Stuck decoder detection: if video decoder queue is full but renderer queue
     // stays empty for too long, the decoder is hung (e.g. 8K content too heavy).

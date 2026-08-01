@@ -420,8 +420,17 @@ export class AudioRenderer {
     }
 
     // If muted and context is suspended (autoplay muted), just drop the audio
-    // Audio will start playing once user unmutes (which resumes the context)
-    if (this._muted && this.audioContext.state === "suspended") {
+    // Audio will start playing once user unmutes (which resumes the context).
+    // isDroppingAudio() — not a raw state check — so a prime's OWN suspend is
+    // excluded: primeForBuffering() suspends the context on purpose so decoded
+    // audio piles up against a frozen clock, and a raw check threw away exactly
+    // the audio it was told to accumulate. On a muted autoplay that made the
+    // cushion unreachable, so the prime dwelled its full 4s with video
+    // backpressure lifted (state === buffering) and the demux loop ran away ~30s
+    // into the file; when the context finally resumed, the clock re-anchored to
+    // that far-ahead audio and every decoded frame behind it was stale — the
+    // picture sat on frame 0 until decode caught up. That is the black start.
+    if (this.isDroppingAudio()) {
       this.droppedWhileSuspended = true;
       audioData.close();
       return;
@@ -464,7 +473,7 @@ export class AudioRenderer {
   renderPCM(frame: PCMFrame): void {
     if (!this.audioContext || !this.gainNode) return;
     if (!this.isPlaying) return;
-    if (this._muted && this.audioContext.state === "suspended") {
+    if (this.isDroppingAudio()) {
       this.droppedWhileSuspended = true;
       return;
     }
@@ -1473,9 +1482,17 @@ export class AudioRenderer {
    * before any gesture). Only then is audio genuinely absent from the pipeline
    * — a muted context that IS running still schedules everything, at gain 0,
    * and still drives the clock.
+   *
+   * An intentional suspend (a prime / buffering hold) is explicitly NOT this
+   * state: we suspended the context ourselves precisely so decoded audio
+   * accumulates against a frozen clock, and it resumes on our own call.
    */
   isDroppingAudio(): boolean {
-    return this._muted && this.audioContext?.state === "suspended";
+    return (
+      this._muted &&
+      !this.intentionalSuspend &&
+      this.audioContext?.state === "suspended"
+    );
   }
 
   getBufferedDuration(): number {
