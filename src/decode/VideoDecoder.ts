@@ -16,6 +16,8 @@ export class MoviVideoDecoder {
   private swDecoder: SoftwareVideoDecoder | null = null;
   private bindings: WasmBindings | null = null;
   private useSoftware: boolean = false;
+  private _configuredCodecString: string = "";
+
 
   private pendingFrames: VideoFrame[] = [];
   private pendingChunks: Array<{
@@ -190,6 +192,11 @@ export class MoviVideoDecoder {
       return false;
     }
 
+
+    // Remembered so callers can ask "would THIS resolution decode in hardware?"
+    // without re-deriving the string — the ABR uses it to screen a rung before
+    // climbing into it (see MoviPlayer.rungDecodableInHardware).
+    this._configuredCodecString = codecString;
 
     // Build config object
     const config: VideoDecoderConfig = {
@@ -1419,6 +1426,17 @@ export class MoviVideoDecoder {
     }
     this.pendingFrames = [];
     this.pendingChunks = [];
+  }
+
+  /**
+   * The WebCodecs codec string the current track was configured with, e.g.
+   * "av01.0.13M.10". Empty until configure() has run. Callers use it to ask
+   * isConfigSupported() about a DIFFERENT resolution of the same stream —
+   * every rung of a ladder is the same codec, so this is what makes a
+   * before-the-fact capability check possible.
+   */
+  get configuredCodec(): string {
+    return this._configuredCodecString;
   }
 
   /**

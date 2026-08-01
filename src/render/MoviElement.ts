@@ -7744,8 +7744,14 @@ export class MoviElement extends HTMLElement {
     // playback is stable, so a fast link still climbs — it just doesn't OPEN on
     // a rung that chokes the audio.
     const affordableBits = bits * 0.55;
+    // A rung this device has already been shown not to decode is not a
+    // candidate however fast the link is. The ABR honours the same list, but it
+    // only gets to speak after playback starts — so without this the machine
+    // opened on 8K and stepped down in full view, every load.
+    const barred = new Set(MoviPlayer.decodeBoundHeights());
     let pick = smallest;
     for (const q of byBitrate) {
+      if (barred.has(q.height)) continue;
       const b = q.bandwidth || this._estimateBitrate(q.height);
       if (b <= affordableBits) pick = q;
       else break;

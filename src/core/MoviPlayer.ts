@@ -70,6 +70,37 @@ const TAG = "MoviPlayer";
 // renderer tries an FPS cap first, means "can't sustain even at half rate": a
 // device limit, not a transient. Cleared only on a full page reload.
 const deviceDecodeBoundHeights = new Set<number>();
+// …and the same lesson, kept across reloads. A device that cannot sustain 8K
+// today cannot sustain it after F5 either, but the in-memory set above is
+// cleared by the reload, so every fresh visit paid the same stutter to
+// re-learn it. Small and self-correcting: the ceiling only ever rises to what
+// the machine has actually failed at, and clearing site data resets it.
+const DECODE_CEILING_KEY = "movi:decode-ceiling";
+
+function loadPersistedDecodeCeiling(): void {
+  try {
+    const raw = localStorage.getItem(DECODE_CEILING_KEY);
+    if (!raw) return;
+    for (const h of JSON.parse(raw) as number[]) {
+      if (typeof h === "number" && h > 0) deviceDecodeBoundHeights.add(h);
+    }
+  } catch {
+    /* private mode / bad JSON — the session just re-learns */
+  }
+}
+
+function persistDecodeCeiling(): void {
+  try {
+    localStorage.setItem(
+      DECODE_CEILING_KEY,
+      JSON.stringify([...deviceDecodeBoundHeights]),
+    );
+  } catch {
+    /* storage unavailable — the in-memory set still holds for this session */
+  }
+}
+
+loadPersistedDecodeCeiling();
 
 export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // One-shot UA classification: mobile devices get the same conservative
@@ -159,6 +190,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // Stamps each rendition-switch indicator, so an end that arrives after the
   // next switch has started can't clear the newer one's indicator.
   private _switchIndicatorGen = 0;
+  // codec@height already put to MediaCapabilities — see
+  // screenRungsForDecodeCapability. Instance-level: the answers it produces go
+  // into the module-level ceiling, so re-asking costs nothing but time.
+  private _decodeScreened = new Set<string>();
+
+  /**
+   * Resolutions this device has been shown not to sustain — learned from a
+   * decode-bound stall or from MediaCapabilities, and kept across reloads.
+   * Public because the pick happens BEFORE any player exists: the element's
+   * pre-play speed test chooses the opening rung off a bandwidth measurement
+   * alone, so without this a machine that cannot decode 8K still opened on it
+   * and stepped down a moment later, in full view.
+   */
+  static decodeBoundHeights(): number[] {
+    return [...deviceDecodeBoundHeights];
+  }
   // Adaptive-quality (ABR) state for the demuxer/premuxed in-place switch.
   private _autoQuality: boolean = false;
   private _abrTimer: ReturnType<typeof setInterval> | null = null;
@@ -2244,6 +2291,92 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * the lower rung is still too heavy: switchVideoRenditionInPlace reconfigures
    * the renderer, which re-arms its perf window for a fresh measurement.
    */
+  /**
+   * Ask the device, BEFORE climbing, whether it can actually play a rung.
+   *
+   * The reactive path learns a ceiling by climbing into a rung, stuttering for
+   * a perf window or two, and dropping back out — so every machine that cannot
+   * do 8K tries 8K, on a good connection, every time. MediaCapabilities answers
+   * beforehand: decodingInfo() reports `smooth` (real-time) and
+   * `powerEfficient` (hardware) for a codec at a resolution and frame rate.
+   * A rung that isn't smooth here goes into the same ceiling the decode-bound
+   * detector fills, so the ABR simply never offers it.
+   *
+   * Screened once per ladder, and only above 4K. Below that, software decode is
+   * a legitimate option plenty of machines sustain, and screening it out would
+   * cost quality on devices that were coping fine.
+   *
+   * Above it, three verdicts bar a rung: unsupported, not smooth, and NOT
+   * powerEfficient. The last one matters because `smooth` is optimistic —
+   * measured on a Mac, Chrome answers 8K AV1 with smooth:true even where
+   * playback stutters, while 8K H.264 comes back powerEfficient:false. At that
+   * size powerEfficient:false means a software decoder, and software 8K is not
+   * real-time on anything. Whatever this misses, the decode-bound detector
+   * still catches — once, now that the ceiling survives a reload.
+   */
+  private async screenRungsForDecodeCapability(
+    rungs: { url: string; label?: string; height?: number; bandwidth?: number }[],
+  ): Promise<void> {
+    const caps = (
+      navigator as unknown as {
+        mediaCapabilities?: {
+          decodingInfo?: (c: unknown) => Promise<{
+            supported?: boolean;
+            smooth?: boolean;
+            powerEfficient?: boolean;
+          }>;
+        };
+      }
+    ).mediaCapabilities;
+    if (!caps?.decodingInfo) return;
+    const codec = this.videoDecoder?.configuredCodec || "";
+    if (!codec) return;
+    const fps = this.trackManager?.getActiveVideoTrack()?.frameRate || 30;
+    // Containers the codec strings map to. Getting this wrong makes
+    // decodingInfo reject the query outright, which we treat as "no answer".
+    const container = /^(vp0?[89]|vp8)/i.test(codec) ? "video/webm" : "video/mp4";
+
+    for (const r of rungs) {
+      const h = r.height ?? 0;
+      if (h <= 2160) continue;
+      if (deviceDecodeBoundHeights.has(h)) continue;
+      const key = `${codec}@${h}`;
+      if (this._decodeScreened.has(key)) continue;
+      this._decodeScreened.add(key);
+      try {
+        const info = await caps.decodingInfo({
+          type: "file",
+          video: {
+            contentType: `${container}; codecs="${codec}"`,
+            width: Math.round((h * 16) / 9),
+            height: h,
+            bitrate: r.bandwidth || 0,
+            framerate: fps,
+          },
+        });
+        const verdict =
+          info?.supported === false
+            ? "unsupported"
+            : info?.smooth === false
+              ? "not smooth"
+              : info?.powerEfficient === false
+                ? "software-decoded"
+                : "";
+        if (verdict) {
+          Logger.info(
+            TAG,
+            `ABR: this device reports ${h}p ${codec} as ${verdict} — barring it before we ever climb into it`,
+          );
+          deviceDecodeBoundHeights.add(h);
+          persistDecodeCeiling();
+        }
+      } catch {
+        /* query rejected (bad contentType, unimplemented) — leave it to the
+           reactive path, which is what used to carry this alone. */
+      }
+    }
+  }
+
   private abrDeviceDownshift(): void {
     if (!this._autoQuality || this._abrSwitchInProgress) return;
     const rungs = this._dashRenditions
@@ -2268,7 +2401,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // before the old 2-fail cap engaged). Reload re-learns.
     const failH = failing.height ?? 0;
     const capped = failH > 0;
-    if (capped) deviceDecodeBoundHeights.add(failH);
+    if (capped) {
+      deviceDecodeBoundHeights.add(failH);
+      persistDecodeCeiling();
+    }
     this._abrPenaltyUntil = Math.max(
       this._abrPenaltyUntil,
       now + MoviPlayer.ABR_DECODE_PENALTY_MS,
@@ -2405,6 +2541,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           TAG,
           `Video decoder configured: ${videoTrack.codec} ${videoTrack.width}x${videoTrack.height}`,
         );
+        // The ladder usually arrives BEFORE this (the quality menu hands it
+        // over as soon as the element parses its <source> children), and the
+        // capability screen needs the codec string, which only exists once the
+        // decoder has been configured. Run it again now that it does.
+        void this.screenRungsForDecodeCapability(this._dashRenditions);
         if (this.videoRenderer) {
           // Pass color space metadata for HDR detection and frame rate for 60fps conversion
           // Support manual frame rate override (fps parameter)
@@ -5914,6 +6055,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // module level and must persist across sources (a device that can't decode
     // 8K can't decode it for the next video either).
     this._dashRenditions = renditions;
+    // Ask the device about the big rungs now, while nothing is riding on the
+    // answer, so the ABR never has to learn a ceiling by stuttering into it.
+    void this.screenRungsForDecodeCapability(renditions);
     if (activeUrl && !this._activeDashRendition) {
       this._activeDashRendition = activeUrl;
     }
