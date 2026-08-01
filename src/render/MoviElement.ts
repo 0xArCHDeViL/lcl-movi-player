@@ -23710,6 +23710,17 @@ export class MoviElement extends HTMLElement {
     ];
     const rounded = corners.some((c) => parseFloat(c) > 0);
     const clip = rounded ? `inset(0 round ${corners.join(" ")})` : "";
+    // The canvas rounds ITSELF, in the shader. CSS can't be relied on here:
+    // Firefox composites the canvas as its own layer and ignores both
+    // border-radius and clip-path on it, so a rounded page frame ended up with
+    // square video inside it. The clip below stays for the browsers that do
+    // honour it (and for the <video> element, which has no shader).
+    const renderer = (this.player as unknown as {
+      videoRenderer?: { setCornerRadius?: (px: number) => void };
+    } | null)?.videoRenderer;
+    // One radius for the picture: a shader cut per corner is a lot of machinery
+    // for a case (four different radii on a video) nobody asks for.
+    renderer?.setCornerRadius?.(rounded ? parseFloat(corners[0]) || 0 : 0);
     for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
       if (!el) continue;
       // Firefox only reads the clip when the canvas's compositing layer is

@@ -465,7 +465,11 @@ export class CanvasRenderer {
     // Initialize WebGL
     try {
       const contextOptions: WebGLContextAttributes = {
-        alpha: false,
+        // Transparent, so the corners the shader declines to draw show whatever
+        // is behind the player rather than black. Premultiplied, so the shader
+        // scales colour and alpha together when it feathers a corner.
+        alpha: true,
+        premultipliedAlpha: true,
         desynchronized: false, // Disabled to prevent flickering on low-end devices
         antialias: false,
         depth: false,
@@ -642,10 +646,25 @@ export class CanvasRenderer {
     const fsSource = `#version 300 es
     precision highp float;
     uniform sampler2D u_image;
+    // Rounded corners, cut in the shader.
+    //
+    // CSS cannot do this here: Firefox composites the canvas as its own layer
+    // and ignores both border-radius and clip-path on it until that layer is
+    // rebuilt, so a page that rounds the player got square corners over its own
+    // rounded frame. Pixels the shader refuses to draw are transparent whatever
+    // the compositor believes, so the rounding survives.
+    // x = radius in drawing-buffer pixels (0 disables), yz = buffer size.
+    uniform vec3 u_round;
     in vec2 v_texCoord;
     out vec4 outColor;
     void main() {
       outColor = texture(u_image, v_texCoord);
+      if (u_round.x > 0.0) {
+        vec2 halfSize = u_round.yz * 0.5;
+        vec2 q = abs(gl_FragCoord.xy - halfSize) - (halfSize - vec2(u_round.x));
+        float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - u_round.x;
+        outColor *= 1.0 - smoothstep(-0.75, 0.75, d);
+      }
     }`;
 
     // Create Program
@@ -740,6 +759,10 @@ export class CanvasRenderer {
     precision highp float;
     uniform sampler2D u_image;
     uniform float u_hdrEnabled; // 0.0 = disabled, 1.0 = enabled
+    // Rounded corners cut in the shader — see the passthrough program.
+    // x = radius in drawing-buffer pixels (0 disables), yz = buffer size.
+    uniform vec3 u_round;
+
     in vec2 v_texCoord;
     out vec4 outColor;
 
@@ -796,6 +819,12 @@ export class CanvasRenderer {
       vec3 display = pow(sdr, vec3(1.0/2.2));
 
       outColor = vec4(display, color.a);
+      if (u_round.x > 0.0) {
+        vec2 halfSizeR = u_round.yz * 0.5;
+        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
+        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
+        outColor *= 1.0 - smoothstep(-0.75, 0.75, dR);
+      }
     }`;
 
     // Create Program
@@ -914,6 +943,8 @@ export class CanvasRenderer {
     uniform float u_uOffset; // 0 = left eye, 0.5 = right eye
     uniform float u_planetScale; // stereographic: image radius of the horizon
     uniform float u_srcAspect;   // source frame width/height (keeps the disc round)
+    // Rounded corners cut in the shader — see the passthrough program.
+    uniform vec3 u_round;
     in vec2 v_ndc;
     out vec4 outColor;
 
@@ -965,6 +996,12 @@ export class CanvasRenderer {
       // edge never shows a black void.
       vec2 uv = vec2(eye.x * u_uScale + u_uOffset, eye.y);
       outColor = texture(u_image, uv);
+      if (u_round.x > 0.0) {
+        vec2 halfSizeR = u_round.yz * 0.5;
+        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
+        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
+        outColor *= 1.0 - smoothstep(-0.75, 0.75, dR);
+      }
     }`;
 
     const createShader = (type: number, source: string) => {
@@ -1051,6 +1088,7 @@ export class CanvasRenderer {
     const latDiv = Math.min(Math.PI, lonDiv / eyeAspect);
 
     gl.useProgram(this.vrProgram);
+    this.applyRoundUniform(this.vrProgram);
     gl.bindVertexArray(this.vao);
     const locs = this.vrLocs!;
     if (locs.yaw) gl.uniform1f(locs.yaw, this.vrYaw);
@@ -1870,7 +1908,7 @@ export class CanvasRenderer {
       // WebGL contexts are robust to resize usually.
       if (!this.gl) {
         // Try to init if missing
-        const opts = { alpha: false, desynchronized: false };
+        const opts = { alpha: true, premultipliedAlpha: true, desynchronized: false };
         this.gl = this.canvas.getContext(
           "webgl2",
           opts,
@@ -2723,6 +2761,7 @@ export class CanvasRenderer {
       this.uploadFrameTexture(gl, frame);
 
       gl.useProgram(this.program);
+      this.applyRoundUniform(this.program);
       gl.bindVertexArray(this.vao);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -2831,10 +2870,16 @@ export class CanvasRenderer {
     // texture are still bound from the main drawArrays above this call.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
     gl.viewport(0, 0, size, size);
+    // No corner cut on this pass. The rounding uniform measures in the main
+    // canvas's pixels, and this draws the same quad into a 16x16 buffer — every
+    // fragment would fall outside the rounded rect and the ambient sample would
+    // come back empty. Restored right after.
+    this.setRoundUniformOff();
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.applyRoundUniform(this.program);
     // Restore main viewport for any subsequent GL work this tick.
     gl.viewport(0, 0, this.width, this.height);
   }
@@ -3995,6 +4040,69 @@ export class CanvasRenderer {
    * Clear frame queue (useful for seek operations)
    * Resets all presentation timing to prevent stuttering after seek
    */
+  private cornerRadiusCss = 0;
+  private roundLocs = new Map<WebGLProgram, WebGLUniformLocation | null>();
+
+  /**
+   * Corner radius (CSS pixels) for the picture itself.
+   *
+   * Firefox composites the canvas as its own layer and ignores border-radius
+   * and clip-path on it until that layer is rebuilt, so a rounded page frame
+   * ended up with square video inside it. Pixels the shader declines to draw
+   * are transparent whatever the compositor thinks, so this holds everywhere.
+   * 0 turns it off.
+   */
+  setCornerRadius(cssPx: number): void {
+    const r = Math.max(0, cssPx || 0);
+    if (r === this.cornerRadiusCss) return;
+    this.cornerRadiusCss = r;
+    // A paused player never draws again on its own; repaint so the change shows.
+    // (Same retained frame the VR camera nudges and resizes repaint from.)
+    if (this.lastRenderedFrame) {
+      try {
+        this.drawFrame(this.lastRenderedFrame, true);
+      } catch {
+        /* the next real frame will carry it */
+      }
+    }
+  }
+
+  /** Radius in DRAWING-BUFFER pixels, which is what the shader measures in. */
+  private cornerRadiusBufferPx(): number {
+    if (!this.cornerRadiusCss || !this.canvas) return 0;
+    const cssW =
+      (this.canvas as HTMLCanvasElement).clientWidth || this.canvas.width;
+    const scale = cssW > 0 ? this.canvas.width / cssW : 1;
+    return this.cornerRadiusCss * scale;
+  }
+
+  /** Turn the corner cut off for a pass that draws somewhere else (see the
+   *  ambient thumbnail). */
+  private setRoundUniformOff(): void {
+    const gl = this.gl;
+    if (!gl || !this.program) return;
+    const loc = this.roundLocs.get(this.program);
+    if (loc) gl.uniform3f(loc, 0, 0, 0);
+  }
+
+  /** Feed the rounding uniform to whichever program is about to draw. */
+  private applyRoundUniform(program: WebGLProgram | null): void {
+    const gl = this.gl;
+    if (!gl || !program) return;
+    let loc = this.roundLocs.get(program);
+    if (loc === undefined) {
+      loc = gl.getUniformLocation(program, "u_round");
+      this.roundLocs.set(program, loc);
+    }
+    if (!loc) return;
+    gl.uniform3f(
+      loc,
+      this.cornerRadiusBufferPx(),
+      this.canvas?.width || 0,
+      this.canvas?.height || 0,
+    );
+  }
+
   clearQueue(): void {
     for (const frame of this.frameQueue) {
       frame.close();
