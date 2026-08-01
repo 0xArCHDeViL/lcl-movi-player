@@ -8260,11 +8260,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // unmute — losing the activation to it here is harmless; losing audio isn't.
       this.ensureWakeLock();
 
-      // The WASM path has no <audio> element to re-anchor the way the native
-      // branch below does, and the audio for this moment is gone — dropped
-      // while the context was suspended. Whatever the decoder holds now belongs
-      // to the demuxer's read position, one video buffer AHEAD of the frame on
-      // screen. Let that start playing and the clock, which audio masters, jumps
+      // The audio for this moment is gone — dropped, frame by frame, while the
+      // context was suspended. What the decoder holds now belongs to the
+      // demuxer's read position, one video buffer AHEAD of the frame on screen.
+      // Let that start playing and the clock, which audio masters, jumps
       // forward with it: the viewer hears a second or two of audio from the
       // future while the picture sits still, then the video catches up. That is
       // the "1-3s of audio, then video continues" on tap-to-unmute.
@@ -8272,11 +8271,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // The only way to get the audio for the current position is to read it
       // again, which is a seek — to exactly where we already are, so nothing is
       // lost but the re-read, and the bytes are still in the source's buffer.
-      if (
-        wasDroppingAudio &&
-        !this.nativeAudioEl &&
-        this.stateManager.getState() === "playing"
-      ) {
+      if (wasDroppingAudio && this.stateManager.getState() === "playing") {
         const at = this.getCurrentTime();
         Logger.info(
           TAG,
