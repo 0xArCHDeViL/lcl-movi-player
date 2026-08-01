@@ -2909,9 +2909,11 @@ export class MoviElement extends HTMLElement {
 
     // Fullscreen change listener
     document.addEventListener("fullscreenchange", () => {
-      // Entering or leaving changes whether the picture should be rounded.
-      this.syncPictureRounding();
       const isFullscreen = !!document.fullscreenElement;
+      // Entering or leaving changes whether the picture should be rounded.
+      // Leaving forces the clip: the transition rebuilds the canvas layer, and
+      // a clip written against the old one is not carried over.
+      this.syncPictureRounding(!isFullscreen);
       this.applyFullscreenUiState(isFullscreen);
       this.applyFullscreenOrientation(isFullscreen);
       requestAnimationFrame(() => {
@@ -23687,6 +23689,17 @@ export class MoviElement extends HTMLElement {
    * set, in whatever units — so this follows a themed or responsive value
    * without the page having to tell us about it.
    */
+  /** The canvas renderer, when there is one — it owns the shader-side cut. */
+  private pictureRenderer():
+    | { setCornerRadius?: (px: number) => void }
+    | undefined {
+    return (
+      this.player as unknown as {
+        videoRenderer?: { setCornerRadius?: (px: number) => void };
+      } | null
+    )?.videoRenderer;
+  }
+
   private syncPictureRounding(force = false): void {
     // Fullscreen fills the screen — there are no corners to round there, and a
     // page radius left over from the inline layout would cut into the picture.
@@ -23699,6 +23712,15 @@ export class MoviElement extends HTMLElement {
       for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
         if (el && el.style.clipPath) el.style.clipPath = "";
       }
+      // The shader cut has to come off too. Clearing only the CSS clip left the
+      // page's inline radius carved into a fullscreen picture — and, worse for
+      // the way back: the radius never changed value across the whole
+      // fullscreen trip, so the exit below was a no-op and never repainted.
+      // On a paused player (or between frames) that left the corners square
+      // after exiting, since Firefox rebuilds the canvas layer on the
+      // transition and drops the CSS clip it had been honouring. Off on the way
+      // in, back on on the way out — each is a real change, so each repaints.
+      this.pictureRenderer()?.setCornerRadius?.(0);
       return;
     }
     const cs = getComputedStyle(this);
@@ -23715,12 +23737,11 @@ export class MoviElement extends HTMLElement {
     // border-radius and clip-path on it, so a rounded page frame ended up with
     // square video inside it. The clip below stays for the browsers that do
     // honour it (and for the <video> element, which has no shader).
-    const renderer = (this.player as unknown as {
-      videoRenderer?: { setCornerRadius?: (px: number) => void };
-    } | null)?.videoRenderer;
     // One radius for the picture: a shader cut per corner is a lot of machinery
     // for a case (four different radii on a video) nobody asks for.
-    renderer?.setCornerRadius?.(rounded ? parseFloat(corners[0]) || 0 : 0);
+    this.pictureRenderer()?.setCornerRadius?.(
+      rounded ? parseFloat(corners[0]) || 0 : 0,
+    );
     for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
       if (!el) continue;
       // Firefox only reads the clip when the canvas's compositing layer is
