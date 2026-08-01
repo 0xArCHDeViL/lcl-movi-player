@@ -1572,29 +1572,44 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // is the gap the viewer sees. Detached on purpose: the caller (ABR) is
     // waiting on this promise to release its own switch lock, and holding that
     // until the first frame lands would delay the next decision.
-    void this.clearSwitchIndicatorOnFirstFrame(endSwitch);
+    void this.clearSwitchIndicatorOnResumedPlayback(endSwitch);
     return true;
   }
 
   /**
-   * Clear a rendition-switch indicator once the renderer has painted a frame
-   * from the new pipeline — clearQueue() zeroes that count at the swap, so the
-   * first non-zero reading IS the changeover the viewer sees.
+   * Clear a rendition-switch indicator once the new pipeline is not just
+   * painting but painting SMOOTHLY.
    *
-   * Bounded: a decoder that never produces (a rung the machine can't handle,
+   * The first frame is the wrong moment to let go of it. clearQueue() empties
+   * the renderer at the swap, so that frame arrives with nothing behind it —
+   * the decoder is still filling, and what the viewer gets for the next few
+   * hundred milliseconds is a frame here, a frame there. Hiding the indicator
+   * on it just moves the unexplained stutter to right after the indicator
+   * disappears. Wait for about a third of a second of frames AND a queue with
+   * something in reserve, which together are what "it's running again" means.
+   *
+   * Bounded: a decoder that never gets there (a rung the machine can't handle,
    * a stalled fetch) must not leave the indicator up forever. The stall then
    * shows as ordinary buffering, which is what it is.
    */
-  private async clearSwitchIndicatorOnFirstFrame(
+  private async clearSwitchIndicatorOnResumedPlayback(
     end: <T>(r: T) => T,
   ): Promise<void> {
     const deadline = performance.now() + 4000;
     const renderer = this.videoRenderer as unknown as {
       presentedSinceClear?: () => number;
+      getQueueSize?: () => number;
     } | null;
     if (renderer?.presentedSinceClear) {
+      const fps = this.trackManager?.getActiveVideoTrack()?.frameRate || 24;
+      const settledFrames = Math.max(3, Math.round(fps * 0.3));
       while (performance.now() < deadline) {
-        if ((renderer.presentedSinceClear() || 0) > 0) break;
+        const painted = renderer.presentedSinceClear() || 0;
+        // A queue with frames in it is the difference between "a frame landed"
+        // and "frames keep landing". Renderers without the accessor fall back
+        // to the frame count alone.
+        const readyAhead = renderer.getQueueSize ? renderer.getQueueSize() >= 2 : true;
+        if (painted >= settledFrames && readyAhead) break;
         await new Promise((r) => setTimeout(r, 32));
       }
     }
