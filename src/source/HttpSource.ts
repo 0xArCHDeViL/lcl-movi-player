@@ -15,6 +15,19 @@ const MIN_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB minimum
 const DEFAULT_MAX_BUFFER_SIZE_MB = 250; // ~250MB cap (YouTube-like: Chrome gives ~150-300MB per tab for video)
 const BUFFER_PERCENTAGE = 0.08; // 8% of file size — covers ~60-90s of content for large files
 const MAX_STREAM_BUFFER_SIZE = 250 * 1024 * 1024; // Match max buffer — stream until buffer is full
+// Largest bytes= range asked for in ONE request. The window a stream fills is
+// still MAX_STREAM_BUFFER_SIZE / the whole file; this only splits it into
+// chunks, which the loop fetches back to back.
+//
+// Reason: CDNs that pace a long-lived response serve a SHORT range at full
+// link speed and then throttle to roughly the stream's own bitrate. Measured
+// against googlevideo on a 28MB audio track: 4MB in 0.42s (~10 MB/s), 8MB in
+// 2.0s, and 12MB+ delivered 377KB in 12s — parked at ~30 KB/s. Asking for the
+// whole file (which a small one did, since it fits the buffer) therefore made
+// the demuxer's open wait ~18s for bytes it should have had in under a second;
+// that was the entire startup delay on a split-audio YouTube source. 4MB sits
+// comfortably under the cliff and costs one extra request per chunk.
+const MAX_RANGE_CHUNK_SIZE = 4 * 1024 * 1024;
 const CORS_DETECTION_THRESHOLD = 3; // Only treat "Failed to fetch" as CORS after N consecutive failures while online
 // IMPORTANT: Header size increased to 6 Int32 values (24 bytes) to support 64-bit buffer start offsets
 const HEADER_SIZE = 24; // Header bytes for atomics (6 Int32 values)
@@ -945,9 +958,14 @@ export class HttpSource implements SourceAdapter {
         // When the file fits entirely in the buffer, request the full remainder
         // so we don't leave a gap at the end that forces a second fetch.
         const fileCanFit = this.size > 0 && this.bufferSize >= this.size;
-        const maxDownload = fileCanFit
-          ? this.size  // Full file — no limit needed
+        const windowLimit = fileCanFit
+          ? this.size  // Full file — the window is the whole thing
           : Math.floor(Math.min(MAX_STREAM_BUFFER_SIZE, this.bufferSize * 0.9));
+        // …but never ask for the window in one request — see
+        // MAX_RANGE_CHUNK_SIZE. The loop below continues from where the chunk
+        // ended, so the window still fills; it just fills at link speed
+        // instead of whatever pace the CDN puts a long range on.
+        const maxDownload = Math.min(windowLimit, MAX_RANGE_CHUNK_SIZE);
         const rangeEnd = this.size > 0
           ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
           : resumeOffset + maxDownload - 1;
@@ -1089,7 +1107,18 @@ export class HttpSource implements SourceAdapter {
           if (!this.atomicIsStreaming() || this.reader !== reader) break;
           const { done, value } = await reader.read();
           if (done) {
-            this.atomicSetStreaming(false);
+            // A body that ends short of the file is normally OUR range cap
+            // (MAX_RANGE_CHUNK_SIZE), not the end of the data. Stay streaming
+            // and let the outer loop fetch the next chunk from where this one
+            // stopped — tearing the stream down here would make the next read
+            // miss and pay a full restart every few MB. `downloadedBytes > 0`
+            // keeps a server that answers with an empty body from spinning
+            // the loop.
+            const nextOffset =
+              this.atomicGetBufferStart() + this.atomicGetWritePos();
+            const moreToFetch =
+              this.size > 0 && nextOffset < this.size && downloadedBytes > 0;
+            if (!moreToFetch) this.atomicSetStreaming(false);
             break;
           }
 
