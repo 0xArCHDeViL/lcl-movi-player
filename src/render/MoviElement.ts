@@ -12632,6 +12632,15 @@ export class MoviElement extends HTMLElement {
         left: 0;
         right: 0;
         bottom: 0;
+        /* A screen has no corners to round. The page's inline radius otherwise
+           rides along into fullscreen, and since the host clips its own
+           overflow, everything inside gets cut with it — the title row at the
+           top and the control bar at the bottom visibly clipped at all four
+           corners, not just the picture. The pseudo-fullscreen rule above has
+           always done this; the native one had not. Zeroing it here also makes
+           the computed radius the picture reads 0, so canvas/video (which
+           inherit it) flatten with everything else. */
+        border-radius: 0 !important;
       }
 
       canvas, video {
