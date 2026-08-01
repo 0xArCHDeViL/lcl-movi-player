@@ -381,6 +381,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private thumbnailHDREnabled: boolean = true; // HDR enabled by default
   private isPreviewGenerating: boolean = false;
   private audioRenderer: AudioRenderer;
+  // Bumped every time the preview pipeline is torn down, so an init still
+  // suspended in one of its awaits can tell that the pipeline it is building
+  // belongs to a source (or a player) that is already gone.
+  private _previewGeneration = 0;
   private previewInitPromise: Promise<void> | null = null; // Guard for preview initialization
   private previewInitAttempts: number = 0; // Bounded retries for preview pipeline init
   // Deferred eager preview warm-up (see load()): keeps the thumbnail decoder
@@ -5671,8 +5675,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return results;
   }
 
+  /**
+   * The rung to decode seek previews from, or null when there is no ladder to
+   * choose from (a single file — there is nothing cheaper to read).
+   *
+   * Lowest rung that still has some detail: a preview is a ~160px-wide still,
+   * so anything above ~240p is pixels nobody sees, paid for in bytes and in
+   * decode time on the machine already decoding playback. Below 240p the
+   * picture starts to read as mush at 2x DPR, so that is the floor — and if
+   * the ladder's smallest rung is lower than that, it is still the cheapest
+   * thing on offer and wins by default.
+   */
+  private pickPreviewRendition(): {
+    url: string;
+    label: string;
+    height?: number;
+  } | null {
+    const rungs = this._dashRenditions.filter((r) => r.url);
+    if (rungs.length < 2) return null;
+    const bySize = rungs
+      .slice()
+      .sort((a, b) => (a.height || 0) - (b.height || 0));
+    return bySize.find((r) => (r.height || 0) >= 240) || bySize[0];
+  }
+
   private async initPreviewPipeline() {
     if (this.thumbnailBindings) return; // Already initialized
+    // Everything below allocates — an isolated WASM module and FFmpeg context,
+    // a WebCodecs decoder, a WebGL context — and it does so across long awaits
+    // (module load, network open). destroy() or a load() of a new source can
+    // land inside any of them, and both run destroyPreviewPipeline() before
+    // this returns: whatever is built after that point is built onto a
+    // pipeline nobody owns and nobody will release. Stop at each await.
+    const gen = this._previewGeneration;
+    const superseded = () => this._destroyed || gen !== this._previewGeneration;
 
     Logger.debug(TAG, "Initializing thumbnail pipeline...");
     // Use a NEW isolated WASM module instance for thumbnails
@@ -5681,12 +5717,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       wasmBinary: this.config.wasmBinary,
     });
     Logger.debug(TAG, "Isolated WASM module loaded for thumbnails");
-    // The caller checked _destroyed before starting, but loading a WASM module
-    // takes long enough for the player to be torn down inside that wait — and
-    // everything below allocates (FFmpeg context, WebCodecs decoder, WebGL
-    // context). Building them onto a destroyed player leaks the lot, since
-    // destroy() has already been and gone.
-    if (this._destroyed) return;
+    if (superseded()) return;
 
     // Encrypted playback: reuse the main EncryptedHttpSource for thumbnails.
     // A 2nd EncryptedHttpSource spins up an independent ECDH handshake +
@@ -5700,6 +5731,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const isEncrypted = sourceConfig
       && typeof sourceConfig !== "string"
       && (sourceConfig as any).type === "encrypted";
+    const previewRung = this.pickPreviewRendition();
     // HLS demuxer fallback: the media is a concatenated segment stream, not the
     // .m3u8 playlist in config.source — opening that URL as media would fail.
     // Reuse the SegmentStreamSource: its read() is offset-explicit (safe to
@@ -5714,6 +5746,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailSource = this.source;
     } else if (isEncrypted && this.source) {
       this.thumbnailSource = this.source;
+    } else if (previewRung) {
+      // A ladder is available, so preview off a SMALL rung instead of whatever
+      // the player is streaming. A hover thumbnail is ~160 CSS px wide; pulling
+      // and decoding a 4K keyframe to fill it costs ~50x the pixels it can
+      // show, and every one of those decodes lands on the same machine that is
+      // busy decoding playback. The rung is also a fraction of the bytes, so
+      // the seek-scrub reads stop competing with the playback stream.
+      //
+      // No borrow source here: a different rendition is a different file, so
+      // the main source's cached bytes are not ours to read.
+      Logger.debug(
+        TAG,
+        `Thumbnail source: using ${previewRung.label || previewRung.height + "p"} rung instead of the playing rendition`,
+      );
+      this.thumbnailSource = new ThumbnailHttpSource(
+        previewRung.url,
+        (sourceConfig && typeof sourceConfig !== "string" && "headers" in sourceConfig
+          ? sourceConfig.headers
+          : undefined) || {},
+        null,
+      );
     } else {
       // Plain HTTP / URL sources: use a dedicated ThumbnailHttpSource that
       // borrows (read-only) from the main source's metadata LRU +
@@ -5756,6 +5809,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     const fileSize = await this.thumbnailSource.getSize();
     Logger.debug(TAG, `Thumbnail source created, file size: ${fileSize}`);
+    // Sizing a fresh reader is a network round trip of its own.
+    if (superseded()) {
+      if (this.thumbnailSource !== this.source) {
+        try {
+          this.thumbnailSource.close();
+        } catch {}
+      }
+      this.thumbnailSource = null;
+      return;
+    }
 
     // Create thumbnail bindings
     this.thumbnailBindings = new ThumbnailBindings(module);
@@ -5781,9 +5844,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.debug(TAG, `Thumbnail context open result: ${opened}`);
     if (!opened) throw new Error("Failed to open thumbnail media");
 
-    // Opening reads over the network — the same teardown race as above, and
-    // this side of it holds an FFmpeg context. Hand it back before returning.
-    if (this._destroyed) {
+    // Opening reads over the network — the same race as above, and this side
+    // of it holds an FFmpeg context. Hand it back before returning.
+    if (superseded()) {
       try {
         this.thumbnailBindings.destroy();
       } catch {}
@@ -5800,31 +5863,65 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (tracks.length > 0) videoTrack = tracks[0];
     }
 
-    if (videoTrack) {
+    // Reading a different rendition means the main track describes the wrong
+    // file — different dimensions, possibly a different codec, and certainly
+    // different extradata. Take the picture's shape from the preview demuxer's
+    // OWN stream info in that case; the main track stays the fallback for the
+    // ordinary same-file path (and if the preview's info is unreadable).
+    const previewInfo = previewRung
+      ? this.thumbnailBindings.getStreamInfo()
+      : null;
+    const shape = previewInfo?.width
+      ? {
+          width: previewInfo.width,
+          height: previewInfo.height,
+          rotation: previewInfo.rotation || 0,
+          colorPrimaries: previewInfo.colorPrimaries,
+          colorTransfer: previewInfo.colorTransfer,
+          codec: previewInfo.codecName,
+          profile: previewInfo.profile,
+          level: previewInfo.level,
+          extradata: this.thumbnailBindings.getExtradata(),
+        }
+      : videoTrack
+        ? {
+            width: videoTrack.width,
+            height: videoTrack.height,
+            rotation: videoTrack.rotation || 0,
+            colorPrimaries: videoTrack.colorPrimaries,
+            colorTransfer: videoTrack.colorTransfer,
+            codec: videoTrack.codec,
+            profile: videoTrack.profile,
+            level: videoTrack.level,
+            extradata: this.demuxer?.getExtradata(videoTrack.id) ?? null,
+          }
+        : null;
+
+    if (shape) {
       // Initialize renderer dimensions and HDR settings
       this.thumbnailRenderer.initialize({
-        width: videoTrack.width,
-        height: videoTrack.height,
-        rotation: videoTrack.rotation || 0,
-        colorPrimaries: videoTrack.colorPrimaries,
-        colorTransfer: videoTrack.colorTransfer,
+        width: shape.width,
+        height: shape.height,
+        rotation: shape.rotation,
+        colorPrimaries: shape.colorPrimaries,
+        colorTransfer: shape.colorTransfer,
         hdrEnabled: this.thumbnailHDREnabled,
       });
 
       // Configure internal VideoDecoder
-      const extradata = this.demuxer?.getExtradata(videoTrack.id) ?? null;
+      const extradata = shape.extradata;
 
       Logger.debug(
         TAG,
-        `Configuring thumbnail decoder with track: ${videoTrack.codec}, extradata: ${extradata ? extradata.length : 0} bytes`,
+        `Configuring thumbnail decoder with track: ${shape.codec} ${shape.width}x${shape.height}, extradata: ${extradata ? extradata.length : 0} bytes`,
       );
       const configured = await this.thumbnailRenderer.configureDecoder(
-        videoTrack.codec,
+        shape.codec,
         extradata, // can be null
-        videoTrack.width,
-        videoTrack.height,
-        videoTrack.profile,
-        videoTrack.level,
+        shape.width,
+        shape.height,
+        shape.profile,
+        shape.level,
       );
 
       if (!configured) {
@@ -5841,8 +5938,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   private destroyPreviewPipeline() {
+    this._previewGeneration++;
     if (this.thumbnailBindings) {
-      this.thumbnailBindings.destroy();
+      try {
+        this.thumbnailBindings.destroy();
+      } catch {}
       this.thumbnailBindings = null;
     }
 
@@ -5851,7 +5951,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailRenderer = null;
     }
 
+    // Only a reader of our own. The encrypted / HLS / custom-adapter paths
+    // deliberately share the MAIN source, and closing that here would pull it
+    // out from under playback (or, from destroy(), from the close that follows).
+    if (this.thumbnailSource && this.thumbnailSource !== this.source) {
+      try {
+        this.thumbnailSource.close();
+      } catch {}
+    }
     this.thumbnailSource = null;
+    this.previewInitPromise = null;
   }
 
   /**
@@ -9370,26 +9479,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // (the common pattern) therefore leaked one of each per video, and the
     // WebGL contexts are the sharp end: Chrome caps a page at ~16, after which
     // it starts killing the oldest — which may belong to the player on screen.
-    if (this.thumbnailRenderer) {
-      this.thumbnailRenderer.destroy();
-      this.thumbnailRenderer = null;
-    }
-    if (this.thumbnailBindings) {
-      try {
-        this.thumbnailBindings.destroy();
-      } catch {}
-      this.thumbnailBindings = null;
-    }
-    // The preview source is its own reader unless the pipeline borrowed the
-    // main one (FileSource / same-source path) — closing that here would pull
-    // the source out from under the close below, so only close a separate one.
-    if (this.thumbnailSource && this.thumbnailSource !== this.source) {
-      try {
-        this.thumbnailSource.close();
-      } catch {}
-    }
-    this.thumbnailSource = null;
-    this.previewInitPromise = null;
+    this.destroyPreviewPipeline();
 
     // Close source
     if (this.source) {
