@@ -11452,6 +11452,19 @@ export class MoviElement extends HTMLElement {
    * and it tells us when it's actually done instead of us guessing with a
    * timer.
    */
+  /**
+   * Drop an in-flight centre-icon flash. Its "cancel" handler restores
+   * pointer-events, so the button is immediately clickable again.
+   */
+  private cancelCenterFlash(): void {
+    this._centerFlashAnim?.cancel();
+    this._centerFlashAnim = null;
+    if (this._centerFlashTimer) {
+      clearTimeout(this._centerFlashTimer);
+      this._centerFlashTimer = null;
+    }
+  }
+
   private flashCenterIcon(kind: "play" | "pause"): void {
     if (!this._controls || this._isUnsupported) return;
     const btn = this.shadowRoot?.querySelector(
@@ -11465,7 +11478,7 @@ export class MoviElement extends HTMLElement {
     // which reads as a stutter. There the glyph is state, not a receipt, so
     // leave it to updatePlayPauseIcon and just acknowledge the press.
     if (btn.classList.contains("movi-center-visible")) {
-      this._centerFlashAnim?.cancel();
+      this.cancelCenterFlash();
       btn.animate(
         [
           { transform: "translate(-50%, -50%) scale(0.86)" },
@@ -22202,6 +22215,19 @@ export class MoviElement extends HTMLElement {
             // now handled by NOT gating on isSuppressedSeek (so spinner-less
             // buffering blips don't churn the icon) plus the isLoading guard,
             // so a sync add no longer races a remove.
+            // A flash that is still in flight has to go. flashCenterIcon()
+            // skips the fade when the button is ALREADY a persistent control,
+            // but the two can arrive in the other order: on an engine whose
+            // paused state lands asynchronously (the native fallback takes it
+            // from the <video>'s own `pause` event) the press fires the flash
+            // first and this class a beat later. The flash then fades a button
+            // the class says should be solid, and on its last frame — no fill —
+            // the element snaps back to opacity 1. Measured on the fallback:
+            // visible at 322ms, fading from 914ms, back to full at 1141ms.
+            // That snap IS the flicker.
+            if (!centerPlayPauseBtn.classList.contains("movi-center-visible")) {
+              this.cancelCenterFlash();
+            }
             centerPlayPauseBtn.classList.add("movi-center-visible");
           } else {
             centerPlayPauseBtn.classList.remove("movi-center-visible");
