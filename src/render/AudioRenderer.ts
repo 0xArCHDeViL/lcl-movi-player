@@ -46,6 +46,10 @@ export class AudioRenderer {
   private _playbackRate: number = 1.0;
   private activeSources: AudioBufferSourceNode[] = [];
   private _muted: boolean = false;
+  // Set while frames are being thrown away because the context is suspended
+  // and we are muted (autoplay-blocked). Tells the recovery path that the
+  // clock anchor describes dropped audio and has to be rebuilt.
+  private droppedWhileSuspended = false;
 
   // Audio clock tracking for A/V sync
   private firstBufferScheduledAt: number = 0;
@@ -418,6 +422,7 @@ export class AudioRenderer {
     // If muted and context is suspended (autoplay muted), just drop the audio
     // Audio will start playing once user unmutes (which resumes the context)
     if (this._muted && this.audioContext.state === "suspended") {
+      this.droppedWhileSuspended = true;
       audioData.close();
       return;
     }
@@ -459,7 +464,10 @@ export class AudioRenderer {
   renderPCM(frame: PCMFrame): void {
     if (!this.audioContext || !this.gainNode) return;
     if (!this.isPlaying) return;
-    if (this._muted && this.audioContext.state === "suspended") return;
+    if (this._muted && this.audioContext.state === "suspended") {
+      this.droppedWhileSuspended = true;
+      return;
+    }
 
     try {
       const audioTime = frame.timestamp / 1_000_000;
@@ -1716,6 +1724,26 @@ export class AudioRenderer {
         // false and the NEXT video re-showed "tap to unmute".
         sharedContextActivated = true;
         Logger.debug(TAG, "AudioContext recovered to running state");
+        // Audio frames that arrived while the context was suspended were
+        // dropped, so the clock mapping (first-buffer anchor + the
+        // max-scheduled clamp) describes a moment that never played. Left
+        // alone, getAudioClock() then reports a time pinned near where the
+        // drop began — and since video presentation follows the audio clock,
+        // the picture freezes on its first frame. That is the black start on
+        // a muted autoplay: unmuting and seeking rebuilt the mapping, which
+        // is why it "fixed itself".
+        //
+        // Drop the anchor instead: the next buffer scheduled after recovery
+        // re-establishes it, and until then getAudioClock() returns -1 and the
+        // wall clock drives the video.
+        if (this.droppedWhileSuspended) {
+          this.droppedWhileSuspended = false;
+          this.hasFirstBuffer = false;
+          this.firstBufferScheduledAt = 0;
+          this.firstBufferMediaTime = 0;
+          this.maxScheduledMediaTime = 0;
+          Logger.debug(TAG, "Audio clock anchor reset after suspended drop");
+        }
       }
     };
 
