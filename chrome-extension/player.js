@@ -3,6 +3,18 @@ import * as Movi from "./dist/element.js";
 const params = new URLSearchParams(window.location.search);
 const url = params.get("url");
 
+// ?movilog → expose the namespace and raise the log level so debug/FFmpeg lines
+// actually fire. The console sink itself is wired up by movilog.js, which the
+// page loads before this module (the bundle needs it in place at import time).
+if (params.has("movilog")) {
+  window.Movi = Movi;
+  try {
+    Movi.MoviPlayer.setLogLevel(Movi.LogLevel.TRACE);
+  } catch (e) {
+    console.warn("[movilog] setLogLevel failed", e);
+  }
+}
+
 const overlay = document.getElementById("fileOverlay");
 const dropZone = document.getElementById("dropZone");
 const filePicker = document.getElementById("filePicker");

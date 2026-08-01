@@ -34,7 +34,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["player.html", "player.js", "popup.js", "dist/*"],
+      "resources": ["player.html", "player.js", "movilog.js", "popup.js", "dist/*"],
       "matches": ["<all_urls>", "file:///*"]
     }
   ],
