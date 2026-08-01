@@ -5681,6 +5681,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       wasmBinary: this.config.wasmBinary,
     });
     Logger.debug(TAG, "Isolated WASM module loaded for thumbnails");
+    // The caller checked _destroyed before starting, but loading a WASM module
+    // takes long enough for the player to be torn down inside that wait — and
+    // everything below allocates (FFmpeg context, WebCodecs decoder, WebGL
+    // context). Building them onto a destroyed player leaks the lot, since
+    // destroy() has already been and gone.
+    if (this._destroyed) return;
 
     // Encrypted playback: reuse the main EncryptedHttpSource for thumbnails.
     // A 2nd EncryptedHttpSource spins up an independent ECDH handshake +
@@ -5774,6 +5780,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const opened = await this.thumbnailBindings.open();
     Logger.debug(TAG, `Thumbnail context open result: ${opened}`);
     if (!opened) throw new Error("Failed to open thumbnail media");
+
+    // Opening reads over the network — the same teardown race as above, and
+    // this side of it holds an FFmpeg context. Hand it back before returning.
+    if (this._destroyed) {
+      try {
+        this.thumbnailBindings.destroy();
+      } catch {}
+      this.thumbnailBindings = null;
+      return;
+    }
 
     // Initialize Renderer
     this.thumbnailRenderer = new ThumbnailRenderer();
@@ -9346,6 +9362,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.stopExternalSubtitles();
     this._externalSubCues = [];
     this._subtitleTracks = [];
+
+    // Tear down the thumbnail (seek-preview) pipeline. It is a SECOND, fully
+    // independent stack — its own isolated WASM module and FFmpeg context, its
+    // own WebCodecs decoder, its own WebGL context, its own HTTP source — and
+    // none of it was being released. A host that rebuilds the player per video
+    // (the common pattern) therefore leaked one of each per video, and the
+    // WebGL contexts are the sharp end: Chrome caps a page at ~16, after which
+    // it starts killing the oldest — which may belong to the player on screen.
+    if (this.thumbnailRenderer) {
+      this.thumbnailRenderer.destroy();
+      this.thumbnailRenderer = null;
+    }
+    if (this.thumbnailBindings) {
+      try {
+        this.thumbnailBindings.destroy();
+      } catch {}
+      this.thumbnailBindings = null;
+    }
+    // The preview source is its own reader unless the pipeline borrowed the
+    // main one (FileSource / same-source path) — closing that here would pull
+    // the source out from under the close below, so only close a separate one.
+    if (this.thumbnailSource && this.thumbnailSource !== this.source) {
+      try {
+        this.thumbnailSource.close();
+      } catch {}
+    }
+    this.thumbnailSource = null;
+    this.previewInitPromise = null;
 
     // Close source
     if (this.source) {
