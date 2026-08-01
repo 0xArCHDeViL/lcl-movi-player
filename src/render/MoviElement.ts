@@ -7160,6 +7160,14 @@ export class MoviElement extends HTMLElement {
     this._forcedDashRendition = null;
     this._hasEverPlayed = false;
     this._restoreRungSrc = "";
+    // "Don't start" belonged to the video that was here before. pause() sets
+    // this to cancel a queued autoplay, and a host that stops the outgoing
+    // video before handing over the next one (the sensible thing to do — its
+    // audio would otherwise play on under the new page) would otherwise be
+    // suppressing autoplay for a video nobody has decided anything about. A
+    // new source starts from the same clean slate a fresh element gets.
+    this._startCancelled = false;
+    this._pendingPlay = false;
     this.dispatchEvent(
       new CustomEvent("loadstart", { detail: { src: this._src } }),
     );
