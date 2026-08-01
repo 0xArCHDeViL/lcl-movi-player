@@ -11010,7 +11010,14 @@ export class MoviElement extends HTMLElement {
     if (!audioOnly && hdrEl?.style.display === "flex" && this.isControlAvailable("hdr")) {
       rows.push(toggle("hdr", "HDR", this._hdr));
     }
-    rows.push(toggle("stable", "Stable volume", this._stableVolume));
+    // Stable volume rides Movi's AudioContext compressor, which isn't in the
+    // path when audio plays through a media element — adaptive streams and the
+    // native fallback. The control bar button and the context-menu item are
+    // both hidden there (updateStableAudioUI); this row was not, so the one
+    // surface that could still offer it offered a switch that does nothing.
+    if (this.isControlAvailable("stableaudio")) {
+      rows.push(toggle("stable", "Stable volume", this._stableVolume));
+    }
     rows.push(toggle("loop", "Loop", this._loop));
     if (!audioOnly) {
       rows.push(
