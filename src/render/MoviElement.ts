@@ -5287,13 +5287,22 @@ export class MoviElement extends HTMLElement {
         hideContextMenu();
       } else if (item.dataset.fit) {
         const fitMode = item.dataset.fit as "contain" | "cover" | "fill" | "zoom";
-        if (this._objectFit === "control") {
+        const viaControl = this._objectFit === "control";
+        if (viaControl) {
           this._currentFit = fitMode;
         } else {
           this._objectFit = fitMode;
         }
         this.updateFitMode();
         this.updateAspectRatioIcon();
+        // The context menu applies the fit itself rather than going through
+        // applyAspectChoice (it also has its own submenu bookkeeping below), so
+        // it has to announce the change on its own — a viewer picking an aspect
+        // here is the same decision as picking it in the gear panel.
+        this.emitSettingChange("aspectchange", {
+          fit: fitMode,
+          mode: viaControl ? "control" : "objectfit",
+        });
         // Query within the item's own submenu, NOT contextMenu: the fit submenu
         // is moved out to be a sibling of contextMenu (so it escapes the menu's
         // overflow), so contextMenu.querySelectorAll finds none of these items —
