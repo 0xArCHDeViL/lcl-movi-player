@@ -150,6 +150,7 @@ export function MoviSource(props: MoviSourceProps): React.ReactElement {
   if (props.fps != null) attrs["data-fps"] = props.fps;
   if (props.badge) attrs["data-badge"] = props.badge;
   if (props.bandwidth != null) attrs["data-bandwidth"] = props.bandwidth;
+  if (props.codec) attrs["data-codec"] = props.codec;
   if (props.default) attrs["data-default"] = "";
   return React.createElement("source", attrs);
 }

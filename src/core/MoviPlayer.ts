@@ -92,6 +92,22 @@ const deviceDecodeBoundHeights = new Set<number>();
 let sharedThumbnailModule: Awaited<ReturnType<typeof loadWasmModuleNew>> | null = null;
 let sharedThumbnailModuleInUse = false;
 
+// Stand-ins for a bare codec FAMILY, so a host that knows only "av01" per rung
+// can still be asked a valid MediaCapabilities question. Profile/level here are
+// ordinary high-resolution choices — the answer turns on the codec and the
+// width/height passed alongside, not on the exact level digits.
+const REPRESENTATIVE_CODECS: Record<string, string> = {
+  av01: "av01.0.13M.08",
+  av1: "av01.0.13M.08",
+  vp9: "vp09.00.51.08",
+  vp09: "vp09.00.51.08",
+  avc1: "avc1.640033",
+  h264: "avc1.640033",
+  hvc1: "hvc1.1.6.L153.90",
+  hev1: "hev1.1.6.L153.90",
+  hevc: "hvc1.1.6.L153.90",
+};
+
 const DECODE_CEILING_KEY = "movi:decode-ceiling";
 
 function loadPersistedDecodeCeiling(): void {
@@ -202,6 +218,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     id: string;
     bandwidth?: number;
     height?: number;
+    /** This rung's own codec, when the host declared one — see the capability
+     *  screen, which cannot judge a rung by the codec currently playing. */
+    codec?: string;
   }[] = [];
   private _activeDashRendition: string = "";
   // Stamps each rendition-switch indicator, so an end that arrives after the
@@ -2334,7 +2353,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * still catches — once, now that the ceiling survives a reload.
    */
   private async screenRungsForDecodeCapability(
-    rungs: { url: string; label?: string; height?: number; bandwidth?: number }[],
+    rungs: {
+      url: string;
+      label?: string;
+      height?: number;
+      bandwidth?: number;
+      codec?: string;
+    }[],
   ): Promise<void> {
     const caps = (
       navigator as unknown as {
@@ -2348,17 +2373,43 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     ).mediaCapabilities;
     if (!caps?.decodingInfo) return;
-    const codec = this.videoDecoder?.configuredCodec || "";
-    if (!codec) return;
+    const activeCodec = this.videoDecoder?.configuredCodec || "";
+    const activeHeight = this.trackManager?.getActiveVideoTrack()?.height || 0;
     const fps = this.trackManager?.getActiveVideoTrack()?.frameRate || 30;
-    // Containers the codec strings map to. Getting this wrong makes
-    // decodingInfo reject the query outright, which we treat as "no answer".
-    const container = /^(vp0?[89]|vp8)/i.test(codec) ? "video/webm" : "video/mp4";
 
     for (const r of rungs) {
       const h = r.height ?? 0;
       if (h <= 2160) continue;
       if (deviceDecodeBoundHeights.has(h)) continue;
+      // Judge a rung by ITS OWN codec. A ladder is often mixed — H.264 low,
+      // AV1 high, which is what YouTube-style extractors produce — so asking
+      // about the codec that happens to be PLAYING answers the wrong question.
+      // Caught in throttled testing: from a 480p H.264 rung the screen asked
+      // "8K H.264?", got "software" (true almost everywhere) and barred 8K on
+      // devices whose 8K rung is AV1 and whose GPU handles it.
+      //
+      // Without a declared codec, fall back to the active one only while we
+      // are already in the same size regime (above 4K), where a ladder does
+      // not usually change codec. Otherwise leave it to the reactive path.
+      const declared = r.codec || (activeHeight > 2160 ? activeCodec : "");
+      if (!declared) continue;
+      // A full WebCodecs string ("av01.0.13M.10") can be asked about directly.
+      // A bare family ("av01"), which is all a host usually knows per rung, is
+      // NOT a valid contentType codec — decodingInfo answers `unsupported` to
+      // it, which would bar the rung for the wrong reason. Fill in a real
+      // string: the playing one when the family matches, else a representative.
+      const family = declared.split(".")[0].toLowerCase();
+      const activeFamily = activeCodec.split(".")[0].toLowerCase();
+      const exact = declared.includes(".");
+      const codec = exact
+        ? declared
+        : family === activeFamily && activeCodec
+          ? activeCodec
+          : REPRESENTATIVE_CODECS[family] || "";
+      if (!codec) continue;
+      // Containers the codec strings map to. Getting this wrong makes
+      // decodingInfo reject the query outright, which we treat as "no answer".
+      const container = /^(vp0?[89]|vp8)/i.test(codec) ? "video/webm" : "video/mp4";
       const key = `${codec}@${h}`;
       if (this._decodeScreened.has(key)) continue;
       this._decodeScreened.add(key);
@@ -2374,7 +2425,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           },
         });
         const verdict =
-          info?.supported === false
+          // "unsupported" is only trusted for a codec string the host actually
+          // declared. For one we filled in, it more likely means the guess was
+          // wrong than that the device can't play the rung.
+          info?.supported === false && exact
             ? "unsupported"
             : info?.smooth === false
               ? "not smooth"
@@ -6102,6 +6156,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       id: string;
       bandwidth?: number;
       height?: number;
+      codec?: string;
     }[],
     activeUrl?: string,
   ): void {

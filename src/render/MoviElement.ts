@@ -243,7 +243,7 @@ export class MoviElement extends HTMLElement {
   // Pre-muxed video qualities declared via multiple <source> tags with
   // data-height / data-label. Lets the player drive a YouTube-style quality
   // menu for plain MP4 sources (where there's no HLS manifest to enumerate).
-  private _videoQualities: { src: string; type?: string; height: number; label: string; fps?: number; badge?: string; bandwidth?: number }[] = [];
+  private _videoQualities: { src: string; type?: string; codec?: string; height: number; label: string; fps?: number; badge?: string; bandwidth?: number }[] = [];
   // Last resolution height we emitted a `qualitychange` for. Lets us fire the
   // event on an ABR/in-place switch (which doesn't route through the manual
   // switch path) so hosts can remember the settled quality — without spamming a
@@ -7236,6 +7236,7 @@ export class MoviElement extends HTMLElement {
           type: el.getAttribute("type") || undefined,
           kind: el.getAttribute("kind") || undefined,
           height: parseInt(el.getAttribute("data-height") || "", 10) || 0,
+          codec: el.getAttribute("data-codec") || "",
           label: el.getAttribute("data-label") || el.getAttribute("label") || "",
           fps: parseInt(el.getAttribute("data-fps") || "", 10) || 0,
           badge: el.getAttribute("data-badge") || "",
@@ -7261,6 +7262,7 @@ export class MoviElement extends HTMLElement {
             .map((s) => ({
               src: s.src,
               type: s.type,
+              codec: s.codec,
               height: s.height,
               label: s.label || (s.height ? `${s.height}p` : ""),
               fps: s.fps || undefined,
@@ -8009,6 +8011,7 @@ export class MoviElement extends HTMLElement {
             label: q.label,
             bandwidth: q.bandwidth || this._estimateBitrate(q.height),
             height: q.height,
+            codec: q.codec,
           })),
         activeSrc,
       );

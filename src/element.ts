@@ -256,6 +256,16 @@ export interface MoviSourceProps {
   badge?: string;
   /** Bitrate hint in bits/sec for ABR. → `data-bandwidth` */
   bandwidth?: number;
+  /**
+   * Codec of THIS rung — a WebCodecs string ("av01.0.13M.10") or just the
+   * family ("av01" / "avc1" / "vp9"). → `data-codec`
+   *
+   * Lets the player ask the device whether it can actually decode a rung
+   * before climbing into it. Without it, a mixed-codec ladder (H.264 low,
+   * AV1 high — what YouTube-style extractors produce) has to be judged by the
+   * codec currently playing, which answers the wrong question.
+   */
+  codec?: string;
   /** Make this the initial pick. → `data-default` */
   default?: boolean;
 }
