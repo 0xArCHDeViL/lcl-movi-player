@@ -7162,6 +7162,19 @@ export class MoviElement extends HTMLElement {
     this._src = null;
     this._parseChildSources();
     if (!this._src) return; // nothing playable declared — leave the player be
+    // Same full reset the `src` setter does. Without it the previous video's
+    // transient UI rode across the swap — most visibly its LAST SUBTITLE CUE,
+    // which sat on the new video until that one happened to paint a cue of its
+    // own. dispose() also saves the resume position, tears the old player down
+    // and clears the duration/title/timeline, all of which this path wants.
+    if (this._resume) this.saveResumePosition();
+    this.stopResumeSaving();
+    this._resumeCheckedWithTitle = false;
+    this.dispose();
+    // The <track> children changed with the <source> ones — re-read them, and
+    // let them REPLACE the list rather than defer to it, or the new video
+    // would inherit the previous one's subtitle menu (and its URLs).
+    this._parseChildSubtitleTracks(true);
     // Everything the `src` attribute path resets for a fresh source. Without
     // this the new video inherits the last one's engine walk, speed test and
     // forced rung.
@@ -7185,6 +7198,33 @@ export class MoviElement extends HTMLElement {
       new CustomEvent("loadstart", { detail: { src: this._src } }),
     );
     this.load();
+  }
+
+  /**
+   * Parse the declarative <track> children into the external subtitle list.
+   *
+   * `replace` is what a source swap needs. The connect-time call deliberately
+   * yields to a list already set through the `source` property (a host that
+   * passed subtitles in JS must not have them clobbered by children), but on a
+   * new video the children ARE the new truth — without replacing, the previous
+   * video's subtitle list and its URLs stayed in the menu.
+   */
+  private _parseChildSubtitleTracks(replace = false): void {
+    const trackEls = this.querySelectorAll(
+      'track[kind="subtitles"], track[kind="captions"], track:not([kind])',
+    );
+    if (!replace && this._subtitleTracks.length > 0) return;
+    const parsed = Array.from(trackEls)
+      .map((el) => ({
+        src: el.getAttribute("src") || "",
+        lang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
+        label:
+          el.getAttribute("label") || el.getAttribute("srclang") || "Subtitle",
+        format:
+          (el.getAttribute("data-format") as "vtt" | "srt" | undefined) || "vtt",
+      }))
+      .filter((t) => t.src);
+    if (replace || parsed.length > 0) this._subtitleTracks = parsed;
   }
 
   private _parseChildSources(): void {
@@ -18925,25 +18965,7 @@ export class MoviElement extends HTMLElement {
     // Parse <track> child elements (Video.js / standard <video>-style) into
     // external subtitle tracks. Lets integrators declare captions
     // declaratively without having to wire up the JS source setter.
-    const trackEls = this.querySelectorAll(
-      'track[kind="subtitles"], track[kind="captions"], track:not([kind])',
-    );
-    if (trackEls.length > 0 && this._subtitleTracks.length === 0) {
-      this._subtitleTracks = Array.from(trackEls)
-        .map((el) => ({
-          src: el.getAttribute("src") || "",
-          lang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
-          label:
-            el.getAttribute("label") ||
-            el.getAttribute("srclang") ||
-            "Subtitle",
-          format: (el.getAttribute("data-format") as
-            | "vtt"
-            | "srt"
-            | undefined) || "vtt",
-        }))
-        .filter((t) => t.src);
-    }
+    this._parseChildSubtitleTracks();
 
     // Re-evaluate the poster overlay now that _src may have been populated
     // from <source> children. updatePoster() ran earlier in connectedCallback
