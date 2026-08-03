@@ -20249,7 +20249,17 @@ export class MoviElement extends HTMLElement {
 
     // Show OSD for speed — only when the speed actually changed (see
     // _lastOsdRate: restores and attribute replays re-enter with the same one).
-    if (rateChanged && this.isConnected && !this.isLoading && this.player) {
+    // …but never over the error screen. A recreate re-applies the rate to the
+    // fresh player, and on the failure path that surfaced a "1x" OSD floating
+    // on top of "Can't Play This File" — an announcement about playback speed
+    // for a file that isn't playing.
+    if (
+      rateChanged &&
+      this.isConnected &&
+      !this.isLoading &&
+      !this._isUnsupported &&
+      this.player
+    ) {
       this.showOSD(
         `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path><path d="m12 12 4-4"></path></svg>`,
         `${this._playbackRate}x`,
