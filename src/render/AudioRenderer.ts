@@ -1226,16 +1226,19 @@ export class AudioRenderer {
       }
     }
 
-    // Resume AudioContext on unmute (user gesture) if it was suspended
+    // Resume AudioContext on unmute (user gesture) if it was suspended.
+    // Awaited, so callers can sequence work behind a context that is actually
+    // running: the "running" statechange drops the stale clock anchor (see
+    // contextStateHandler), and anything scheduled before that lands on an
+    // anchor about to be thrown away — audio for those seconds is discarded
+    // as late while the wall clock walks the picture forward without it.
     if (this.audioContext && this.audioContext.state === "suspended") {
-      this.audioContext
-        .resume()
-        .then(() => {
-          Logger.debug(TAG, "AudioContext resumed on unmute");
-        })
-        .catch((err) => {
-          Logger.warn(TAG, "Failed to resume AudioContext on unmute", err);
-        });
+      try {
+        await this.audioContext.resume();
+        Logger.debug(TAG, "AudioContext resumed on unmute");
+      } catch (err) {
+        Logger.warn(TAG, "Failed to resume AudioContext on unmute", err);
+      }
     }
 
     Logger.debug(TAG, "Unmuted");

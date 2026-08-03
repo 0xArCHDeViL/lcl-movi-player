@@ -304,6 +304,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _audioRecoveryInFlight = false;
   private _audioRecoveries = 0;
   private static readonly MAX_AUDIO_RECOVERIES = 3;
+  // How long the unmute re-read waits for AudioContext.resume() to settle.
+  // A gesture-driven resume lands in a few ms; this only bounds the pathological
+  // case where it never resolves, so the corrective seek still happens.
+  private static readonly UNMUTE_RESUME_WAIT_MS = 400;
   // A separate audio source can be timed on its own PTS baseline (e.g. an HLS
   // audio rendition starting at PTS 0 while the video TS starts at ~10s).
   // `_splitAudioStartTime` is that source's own start; `_splitAudioPtsDelta`
@@ -8273,7 +8277,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // else can: on Safari the wake-lock request below consumes the transient
       // activation, and if it ran first the resume would be denied — leaving the
       // shared context suspended and re-showing "tap to unmute" on the next video.
-      this.audioRenderer.unmute().catch((err) => {
+      const unmuted = this.audioRenderer.unmute().catch((err) => {
         Logger.error("MoviPlayer", "Failed to unmute", err);
       });
       // Tap-to-unmute is also a good moment to (re)acquire the screen wake lock,
@@ -8293,12 +8297,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // again, which is a seek — to exactly where we already are, so nothing is
       // lost but the re-read, and the bytes are still in the source's buffer.
       if (wasDroppingAudio && this.stateManager.getState() === "playing") {
-        const at = this.getCurrentTime();
-        Logger.info(
-          TAG,
-          `Unmute: audio was being dropped — re-reading from ${at.toFixed(2)}s so it lands with the picture`,
-        );
-        this.seek(at).catch(() => {});
+        // …but only once the context is RUNNING. Seeking first put the re-read
+        // audio on an anchor that the "running" statechange then discarded,
+        // and every buffer decoded in between was already late against a wall
+        // clock that had walked the picture on: ~2s of silent video, then a
+        // 2036ms drift correction to catch up. Racing a short timeout so a
+        // resume that never settles can't swallow the correction entirely.
+        void Promise.race([
+          unmuted,
+          new Promise((r) => setTimeout(r, MoviPlayer.UNMUTE_RESUME_WAIT_MS)),
+        ]).then(() => {
+          if (this.muted || this.stateManager.getState() !== "playing") return;
+          const at = this.getCurrentTime();
+          Logger.info(
+            TAG,
+            `Unmute: audio was being dropped — re-reading from ${at.toFixed(2)}s so it lands with the picture`,
+          );
+          this.seek(at).catch(() => {});
+        });
       }
     }
   }
