@@ -43,7 +43,11 @@ import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 import { MoviVideoDecoder } from "../decode/VideoDecoder";
 import { MoviAudioDecoder } from "../decode/AudioDecoder";
 import { SubtitleDecoder } from "../decode/SubtitleDecoder";
-import { CanvasRenderer, type VRView } from "../render/CanvasRenderer";
+import {
+  CanvasRenderer,
+  type VRView,
+  type RenderSource,
+} from "../render/CanvasRenderer";
 import { AudioRenderer } from "../render/AudioRenderer";
 import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
 import { loadWasmModuleNew, resetWasmModule } from "../wasm/FFmpegLoader";
@@ -6845,10 +6849,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * The currently-displayed decoded VideoFrame, or null. Fallback capture
-   * source for snapshots when the WebGL canvas reads back blank.
+   * The currently-displayed picture, or null — a decoded VideoFrame, or the
+   * <video> element on the MSE paths. Fallback capture source for snapshots
+   * when the WebGL canvas reads back blank; both are drawImage sources.
    */
-  getCurrentVideoFrame(): VideoFrame | null {
+  getCurrentVideoFrame(): RenderSource | null {
     return this.videoRenderer?.getCurrentFrame() ?? null;
   }
 

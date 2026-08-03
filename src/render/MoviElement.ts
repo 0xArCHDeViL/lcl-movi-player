@@ -27248,8 +27248,11 @@ export class MoviElement extends HTMLElement {
           if (frame) {
             try {
               const c = document.createElement("canvas");
-              c.width = frame.displayWidth;
-              c.height = frame.displayHeight;
+              // Either a decoded VideoFrame or, on the MSE paths, the <video>
+              // element itself — both draw, each reports its size its own way.
+              const isEl = frame instanceof HTMLVideoElement;
+              c.width = isEl ? frame.videoWidth : frame.displayWidth;
+              c.height = isEl ? frame.videoHeight : frame.displayHeight;
               const ctx = c.getContext("2d");
               if (ctx) {
                 ctx.drawImage(frame, 0, 0);

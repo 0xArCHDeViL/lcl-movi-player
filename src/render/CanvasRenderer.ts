@@ -10,6 +10,44 @@ import { KARAOKE_GHOST_DELIM } from "./sanitizeVttHtml";
 const TAG = "CanvasRenderer";
 
 /**
+ * What the renderer can draw. The WebCodecs path hands over decoded
+ * VideoFrames; the MSE wrappers (Shaka/hls.js/DASH) hand over their <video>
+ * element directly.
+ *
+ * They used to wrap it — `new VideoFrame(videoElement)` — and that construction
+ * succeeds on Firefox Android while the upload behind it does not: the element
+ * holds a hardware surface Firefox can't read back for a CPU texture upload, so
+ * every frame arrived as "tex(Sub)Image[23]D: Failed to retrieve source bytes
+ * for CPU upload" and the canvas stayed black through perfectly good playback.
+ * gl.getError() reports NO_ERROR for it, so none of the fallbacks below fire.
+ * Uploading the element itself takes the browser's accelerated video-texture
+ * path instead, which is the one every WebGL video site depends on.
+ */
+export type RenderSource = VideoFrame | HTMLVideoElement;
+
+/** Narrow a RenderSource to the <video>-element case. */
+export function isVideoElementSource(
+  source: RenderSource,
+): source is HTMLVideoElement {
+  return (
+    typeof HTMLVideoElement !== "undefined" &&
+    source instanceof HTMLVideoElement
+  );
+}
+
+/** Presented width of either source, in content pixels. */
+function sourceWidth(source: RenderSource): number {
+  return isVideoElementSource(source) ? source.videoWidth : source.displayWidth;
+}
+
+/** Presented height of either source, in content pixels. */
+function sourceHeight(source: RenderSource): number {
+  return isVideoElementSource(source)
+    ? source.videoHeight
+    : source.displayHeight;
+}
+
+/**
  * A snapshot of the live 360° camera + projection, enough to reproject an
  * equirectangular frame to exactly what the user currently sees. Consumed by
  * the thumbnail/preview renderer so seek-bar previews match the on-screen view.
@@ -313,7 +351,7 @@ export class CanvasRenderer {
    * 2. if paused, frameQueue is likely empty, so we have nothing to redraw
    * 3. we need to redraw the *current* image to restore the view
    */
-  private lastRenderedFrame: VideoFrame | null = null;
+  private lastRenderedFrame: RenderSource | null = null;
 
   constructor(
     canvas: HTMLCanvasElement | OffscreenCanvas,
@@ -1076,7 +1114,7 @@ export class CanvasRenderer {
    * Full 360° wraps horizontally (WRAP_S = REPEAT for a seamless ±180° seam);
    * VR180 covers a single front hemisphere, so it clamps and clips to black.
    */
-  private drawVRFrame(gl: WebGL2RenderingContext, frame: VideoFrame): void {
+  private drawVRFrame(gl: WebGL2RenderingContext, frame: RenderSource): void {
     gl.viewport(0, 0, this.width, this.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -1089,8 +1127,9 @@ export class CanvasRenderer {
       this.vrHalf || this.vrStereographic ? gl.CLAMP_TO_EDGE : gl.REPEAT,
     );
 
-    if (frame.displayHeight > 0) {
-      this.vrTexAspect = frame.displayWidth / frame.displayHeight;
+    const vrH = sourceHeight(frame);
+    if (vrH > 0) {
+      this.vrTexAspect = sourceWidth(frame) / vrH;
     }
     // For side-by-side stereo each eye is half the frame width, so the per-eye
     // aspect (what the projection maps) halves.
@@ -1450,13 +1489,15 @@ export class CanvasRenderer {
   }
 
   /**
-   * The currently-displayed decoded VideoFrame (or null). Used as a fallback
-   * capture source when reading the WebGL canvas back via toDataURL comes out
-   * blank — some GPUs return an all-black buffer for hardware-decoded frames
-   * even with preserveDrawingBuffer. The frame is owned by the renderer and may
-   * be closed on the next present, so consume it synchronously.
+   * The currently-displayed picture (or null) — a decoded VideoFrame, or the
+   * <video> element itself on the MSE paths. Used as a fallback capture source
+   * when reading the WebGL canvas back via toDataURL comes out blank — some
+   * GPUs return an all-black buffer for hardware-decoded frames even with
+   * preserveDrawingBuffer. Both types are valid drawImage sources. A VideoFrame
+   * is owned by the renderer and may be closed on the next present, so consume
+   * it synchronously.
    */
-  getCurrentFrame(): VideoFrame | null {
+  getCurrentFrame(): RenderSource | null {
     return this.lastRenderedFrame;
   }
 
@@ -2142,18 +2183,42 @@ export class CanvasRenderer {
   /**
    * Render a VideoFrame immediately (for simple cases)
    */
-  render(frame: VideoFrame): void {
+  render(frame: RenderSource): void {
     this.drawFrame(frame);
+    // A <video> source is not ours to clone or close — it stays on screen
+    // holding its own current picture, so retain the element itself and let
+    // the paused-redraw paths re-upload from it.
+    if (isVideoElementSource(frame)) {
+      this.releaseRetainedFrame();
+      this.lastRenderedFrame = frame;
+      return;
+    }
     // Retain a clone so paused redraws (resize, fit-mode change via
     // startFitAnimation) have a frame to lerp against. The presentation-
     // loop path stores this on every present; this direct-render path
     // (used by HLSPlayerWrapper) was missing the clone, leaving the
     // fit-mode animation as a hard snap on HLS streams.
-    if (this.lastRenderedFrame) this.lastRenderedFrame.close();
+    this.releaseRetainedFrame();
     try {
       this.lastRenderedFrame = frame.clone();
     } catch {
       this.lastRenderedFrame = null;
+    }
+  }
+
+  /**
+   * Drop the retained frame. Only a VideoFrame is ours to close — a retained
+   * <video> element belongs to the MSE wrapper that owns it.
+   */
+  private releaseRetainedFrame(): void {
+    const retained = this.lastRenderedFrame;
+    this.lastRenderedFrame = null;
+    if (retained && !isVideoElementSource(retained)) {
+      try {
+        retained.close();
+      } catch {
+        /* already closed */
+      }
     }
   }
 
@@ -2288,7 +2353,7 @@ export class CanvasRenderer {
         this.drawFrame(firstFrame);
 
         // Retain for resize redraws
-        if (this.lastRenderedFrame) this.lastRenderedFrame.close();
+        this.releaseRetainedFrame();
         try {
           this.lastRenderedFrame = firstFrame.clone();
         } catch (e) {
@@ -2310,7 +2375,7 @@ export class CanvasRenderer {
       this.drawFrame(frameToPresent);
 
       // Retain for resize redraws
-      if (this.lastRenderedFrame) this.lastRenderedFrame.close();
+      this.releaseRetainedFrame();
       try {
         this.lastRenderedFrame = frameToPresent.clone();
       } catch (e) {
@@ -2602,7 +2667,10 @@ export class CanvasRenderer {
    * RGBA16F for high bit-depth content and falls back to RGBA8 on GL error or
    * exception. Shared by the flat and 360° draw paths.
    */
-  private uploadFrameTexture(gl: WebGL2RenderingContext, frame: VideoFrame): void {
+  private uploadFrameTexture(
+    gl: WebGL2RenderingContext,
+    frame: RenderSource,
+  ): void {
     try {
       if (this.isHighBitDepth) {
         gl.texImage2D(
@@ -2634,24 +2702,27 @@ export class CanvasRenderer {
   /**
    * Draw a frame to the canvas
    */
-  private drawFrame(frame: VideoFrame, force: boolean = false): void {
+  private drawFrame(frame: RenderSource, force: boolean = false): void {
     if (!this.gl || !this.program || !this.texture) return;
     const gl = this.gl;
     const paintStart = this._adaptDprChecked ? 0 : performance.now();
 
     try {
-      // Update current time
-      this.currentTime = frame.timestamp / 1_000_000;
+      // Update current time. A <video> source carries its own playhead;
+      // a VideoFrame carries a microsecond PTS.
+      this.currentTime = isVideoElementSource(frame)
+        ? frame.currentTime
+        : frame.timestamp / 1_000_000;
 
       // Check if frame is valid (width/height > 0)
       // Attempting to draw a closed frame causes "WebGL: INVALID_OPERATION: texImage2D: can't texture a closed VideoFrame"
       // Explicitly check display dimensions which are 0 on closed frames
-      if (frame.displayWidth === 0 || frame.displayHeight === 0) {
+      // (and on a <video> that has no metadata yet).
+      const contentWidth = sourceWidth(frame);
+      const contentHeight = sourceHeight(frame);
+      if (contentWidth === 0 || contentHeight === 0) {
         return; // Silently skip closed/invalid frames (normal at EOF)
       }
-
-      const contentWidth = frame.displayWidth;
-      const contentHeight = frame.displayHeight;
 
       // 360° VR fast-path: bind + upload the frame, then render it as a
       // viewed sphere instead of the flat fit/letterbox quad. Compile the VR
@@ -2773,7 +2844,11 @@ export class CanvasRenderer {
       gl.bindTexture(gl.TEXTURE_2D, this.texture);
 
       // Log frame format once to diagnose high bit-depth rendering issues
-      if (this.isHighBitDepth && !this._loggedFrameFormat) {
+      if (
+        this.isHighBitDepth &&
+        !this._loggedFrameFormat &&
+        !isVideoElementSource(frame)
+      ) {
         this._loggedFrameFormat = true;
         Logger.info(TAG, `VideoFrame format: ${frame.format}, ${frame.codedWidth}x${frame.codedHeight}, colorSpace: ${JSON.stringify(frame.colorSpace)}`);
 
@@ -4209,10 +4284,7 @@ export class CanvasRenderer {
     }
 
     // Clear retained frame on destroy
-    if (this.lastRenderedFrame) {
-      this.lastRenderedFrame.close();
-      this.lastRenderedFrame = null;
-    }
+    this.releaseRetainedFrame();
 
     // …and everything still waiting to be presented. A VideoFrame holds a
     // decoded buffer that only close() gives back; dropping the reference

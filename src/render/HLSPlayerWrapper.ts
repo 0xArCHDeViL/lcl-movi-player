@@ -279,12 +279,14 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     if (!this.canvasRenderer) return;
 
     try {
-      const frame = new VideoFrame(this.videoElement);
-      this.canvasRenderer.render(frame);
-      frame.close();
+      // The element goes to the renderer as-is. Wrapping it in a VideoFrame
+      // first constructs fine on Firefox Android and then uploads nothing —
+      // the hardware surface can't be read back for a CPU texture upload, so
+      // the canvas stayed black under working playback. See RenderSource.
+      this.canvasRenderer.render(this.videoElement);
       this._framesRendered++;
     } catch (e) {
-      Logger.warn(TAG, "Failed to create VideoFrame", e);
+      Logger.warn(TAG, "Failed to render video frame", e);
     }
   }
 

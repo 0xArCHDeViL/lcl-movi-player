@@ -271,12 +271,12 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
     if (!this.canvasRenderer) return;
 
     try {
-      const frame = new VideoFrame(this.videoElement);
-      this.canvasRenderer.render(frame);
-      frame.close();
+      // Element straight to the renderer — a VideoFrame wrapper around it
+      // uploads nothing on Firefox Android (see RenderSource in CanvasRenderer).
+      this.canvasRenderer.render(this.videoElement);
       this._framesRendered++;
     } catch (e) {
-      Logger.warn(TAG, "Failed to create VideoFrame", e);
+      Logger.warn(TAG, "Failed to render video frame", e);
     }
   }
 
