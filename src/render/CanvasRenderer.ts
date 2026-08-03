@@ -141,6 +141,9 @@ export class CanvasRenderer {
   private static readonly PERF_STUCK_WINDOWS = 4;
   private static readonly PERF_WARMUP_FRAMES = 60; // skip startup / post-seek ramp
   private static readonly PERF_MIN_CAP_FPS = 24; // never cap below this
+  // Below this share of the target rate the frame-rate lever cannot close the
+  // gap, so don't spend windows proving it — go straight to the ABR.
+  private static readonly PERF_SEVERE_RATIO = 0.4;
   // Below this achieved rate the pipeline is STUCK (decoder error / recovering /
   // EOF / starved), not merely slow — capping the present rate or dropping
   // frames can't help, and it must not turn on disposable-frame skipping while
@@ -1340,6 +1343,24 @@ export class CanvasRenderer {
   }
 
   private engagePresentCap(achievedFps: number): void {
+    // A SEVERE shortfall skips the frame-rate stage. Capping to half rate is a
+    // fair trade when a rung is a little too heavy — the resolution survives —
+    // but when the pipeline is managing a quarter of the frames, half rate is
+    // still far out of reach, and trying it first costs another four windows
+    // before the ABR is even told. That wait is why coming back down off a rung
+    // the device cannot handle takes so long.
+    const targetFps =
+      this._presentFpsCap > 0
+        ? Math.min(this.videoFrameRate, this._presentFpsCap)
+        : this.videoFrameRate;
+    if (targetFps > 0 && achievedFps < targetFps * CanvasRenderer.PERF_SEVERE_RATIO) {
+      Logger.warn(
+        TAG,
+        `Decode-bound (severe): ~${achievedFps.toFixed(1)}/${targetFps}fps — skipping the frame-rate cap and asking for a lower rung now`,
+      );
+      this.engageDecodeBound(achievedFps);
+      return;
+    }
     const cap = Math.max(
       CanvasRenderer.PERF_MIN_CAP_FPS,
       Math.round(this.videoFrameRate / 2),

@@ -135,6 +135,116 @@ function persistDecodeCeiling(): void {
 
 loadPersistedDecodeCeiling();
 
+
+/**
+ * Ask MediaCapabilities whether this device can actually play each heavy rung,
+ * and record the ones it cannot in the module-level ceiling. Shared by the
+ * player (which knows the codec in play) and the element's opening pick (which
+ * runs before any player exists) — see MoviPlayer.screenLadder.
+ */
+async function screenLadderForDecode(
+  rungs: { height?: number; codec?: string; bandwidth?: number }[],
+  fps: number,
+  activeCodec: string,
+  activeHeight: number,
+  screened: Set<string>,
+): Promise<void> {
+    const caps = (
+      navigator as unknown as {
+        mediaCapabilities?: {
+          decodingInfo?: (c: unknown) => Promise<{
+            supported?: boolean;
+            smooth?: boolean;
+            powerEfficient?: boolean;
+          }>;
+        };
+      }
+    ).mediaCapabilities;
+    if (!caps?.decodingInfo) return;
+
+    for (const r of rungs) {
+      const h = r.height ?? 0;
+      // Screened from 1440p up. The device only ever learns its own ceiling by
+      // climbing into a rung and failing, and that one bad attempt is visible —
+      // so ask about every rung heavy enough to be in doubt, not just the ones
+      // above 4K. Below 1440p a shortfall is rare enough, and software decode
+      // common enough, that asking would cost more quality than it saves.
+      if (h <= 1080) continue;
+      if (deviceDecodeBoundHeights.has(h)) continue;
+      // Judge a rung by ITS OWN codec. A ladder is often mixed — H.264 low,
+      // AV1 high, which is what YouTube-style extractors produce — so asking
+      // about the codec that happens to be PLAYING answers the wrong question.
+      // Caught in throttled testing: from a 480p H.264 rung the screen asked
+      // "8K H.264?", got "software" (true almost everywhere) and barred 8K on
+      // devices whose 8K rung is AV1 and whose GPU handles it.
+      //
+      // Without a declared codec, fall back to the active one only while we
+      // are already in the same size regime (above 4K), where a ladder does
+      // not usually change codec. Otherwise leave it to the reactive path.
+      const declared = r.codec || (activeHeight > 2160 ? activeCodec : "");
+      if (!declared) continue;
+      // A full WebCodecs string ("av01.0.13M.10") can be asked about directly.
+      // A bare family ("av01"), which is all a host usually knows per rung, is
+      // NOT a valid contentType codec — decodingInfo answers `unsupported` to
+      // it, which would bar the rung for the wrong reason. Fill in a real
+      // string: the playing one when the family matches, else a representative.
+      const family = declared.split(".")[0].toLowerCase();
+      const activeFamily = activeCodec.split(".")[0].toLowerCase();
+      const exact = declared.includes(".");
+      const codec = exact
+        ? declared
+        : family === activeFamily && activeCodec
+          ? activeCodec
+          : REPRESENTATIVE_CODECS[family] || "";
+      if (!codec) continue;
+      // Containers the codec strings map to. Getting this wrong makes
+      // decodingInfo reject the query outright, which we treat as "no answer".
+      const container = /^(vp0?[89]|vp8)/i.test(codec) ? "video/webm" : "video/mp4";
+      const key = `${codec}@${h}`;
+      if (screened.has(key)) continue;
+      screened.add(key);
+      try {
+        const info = await caps.decodingInfo({
+          type: "file",
+          video: {
+            contentType: `${container}; codecs="${codec}"`,
+            width: Math.round((h * 16) / 9),
+            height: h,
+            bitrate: r.bandwidth || 0,
+            framerate: fps,
+          },
+        });
+        const verdict =
+          // "unsupported" is only trusted for a codec string the host actually
+          // declared. For one we filled in, it more likely means the guess was
+          // wrong than that the device can't play the rung.
+          info?.supported === false && exact
+            ? "unsupported"
+            : info?.smooth === false
+              ? "not smooth"
+              : // Software decode is a verdict from 4K up. Not just at 8K:
+                // plenty of machines have no hardware path for a 4K codec and
+                // cannot carry it in software either. Below 4K it stays
+                // allowed — 1440p in software is ordinary on a mid laptop, and
+                // barring it would cost quality for no reason.
+                info?.powerEfficient === false && h >= 2160
+                ? "software-decoded"
+                : "";
+        if (verdict) {
+          Logger.info(
+            TAG,
+            `ABR: this device reports ${h}p ${codec} as ${verdict} — barring it before we ever climb into it`,
+          );
+          deviceDecodeBoundHeights.add(h);
+          persistDecodeCeiling();
+        }
+      } catch {
+        /* query rejected (bad contentType, unimplemented) — leave it to the
+           reactive path, which is what used to carry this alone. */
+      }
+    }
+  }
+
 export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // One-shot UA classification: mobile devices get the same conservative
   // decode/render budgets as 4K+ desktop, since mobile GPUs and Chrome's
@@ -243,6 +353,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   static decodeBoundHeights(): number[] {
     return [...deviceDecodeBoundHeights];
+  }
+
+  /**
+   * Ask the device about a ladder before there is a player to ask through.
+   *
+   * The opening rung is picked in the element, off a bandwidth probe, before
+   * any of this class exists — so on a fresh device the FIRST rung it lands on
+   * has never been screened, and a machine that cannot decode it finds out by
+   * playing it badly. That one visible attempt is the whole complaint; every
+   * load after it is covered by the persisted ceiling.
+   *
+   * Callable statically because the ceiling it fills is module-level too.
+   * Rungs need their own codec (a `codec` on <MoviSource> → `data-codec`);
+   * without one there is nothing to ask, and the reactive path still covers it.
+   */
+  static async screenLadder(
+    rungs: { height?: number; codec?: string; bandwidth?: number }[],
+    fps = 30,
+  ): Promise<void> {
+    await screenLadderForDecode(rungs, fps, "", 0, new Set<string>());
   }
   // Adaptive-quality (ABR) state for the demuxer/premuxed in-place switch.
   private _autoQuality: boolean = false;
@@ -2361,93 +2491,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       codec?: string;
     }[],
   ): Promise<void> {
-    const caps = (
-      navigator as unknown as {
-        mediaCapabilities?: {
-          decodingInfo?: (c: unknown) => Promise<{
-            supported?: boolean;
-            smooth?: boolean;
-            powerEfficient?: boolean;
-          }>;
-        };
-      }
-    ).mediaCapabilities;
-    if (!caps?.decodingInfo) return;
-    const activeCodec = this.videoDecoder?.configuredCodec || "";
-    const activeHeight = this.trackManager?.getActiveVideoTrack()?.height || 0;
-    const fps = this.trackManager?.getActiveVideoTrack()?.frameRate || 30;
-
-    for (const r of rungs) {
-      const h = r.height ?? 0;
-      if (h <= 2160) continue;
-      if (deviceDecodeBoundHeights.has(h)) continue;
-      // Judge a rung by ITS OWN codec. A ladder is often mixed — H.264 low,
-      // AV1 high, which is what YouTube-style extractors produce — so asking
-      // about the codec that happens to be PLAYING answers the wrong question.
-      // Caught in throttled testing: from a 480p H.264 rung the screen asked
-      // "8K H.264?", got "software" (true almost everywhere) and barred 8K on
-      // devices whose 8K rung is AV1 and whose GPU handles it.
-      //
-      // Without a declared codec, fall back to the active one only while we
-      // are already in the same size regime (above 4K), where a ladder does
-      // not usually change codec. Otherwise leave it to the reactive path.
-      const declared = r.codec || (activeHeight > 2160 ? activeCodec : "");
-      if (!declared) continue;
-      // A full WebCodecs string ("av01.0.13M.10") can be asked about directly.
-      // A bare family ("av01"), which is all a host usually knows per rung, is
-      // NOT a valid contentType codec — decodingInfo answers `unsupported` to
-      // it, which would bar the rung for the wrong reason. Fill in a real
-      // string: the playing one when the family matches, else a representative.
-      const family = declared.split(".")[0].toLowerCase();
-      const activeFamily = activeCodec.split(".")[0].toLowerCase();
-      const exact = declared.includes(".");
-      const codec = exact
-        ? declared
-        : family === activeFamily && activeCodec
-          ? activeCodec
-          : REPRESENTATIVE_CODECS[family] || "";
-      if (!codec) continue;
-      // Containers the codec strings map to. Getting this wrong makes
-      // decodingInfo reject the query outright, which we treat as "no answer".
-      const container = /^(vp0?[89]|vp8)/i.test(codec) ? "video/webm" : "video/mp4";
-      const key = `${codec}@${h}`;
-      if (this._decodeScreened.has(key)) continue;
-      this._decodeScreened.add(key);
-      try {
-        const info = await caps.decodingInfo({
-          type: "file",
-          video: {
-            contentType: `${container}; codecs="${codec}"`,
-            width: Math.round((h * 16) / 9),
-            height: h,
-            bitrate: r.bandwidth || 0,
-            framerate: fps,
-          },
-        });
-        const verdict =
-          // "unsupported" is only trusted for a codec string the host actually
-          // declared. For one we filled in, it more likely means the guess was
-          // wrong than that the device can't play the rung.
-          info?.supported === false && exact
-            ? "unsupported"
-            : info?.smooth === false
-              ? "not smooth"
-              : info?.powerEfficient === false
-                ? "software-decoded"
-                : "";
-        if (verdict) {
-          Logger.info(
-            TAG,
-            `ABR: this device reports ${h}p ${codec} as ${verdict} — barring it before we ever climb into it`,
-          );
-          deviceDecodeBoundHeights.add(h);
-          persistDecodeCeiling();
-        }
-      } catch {
-        /* query rejected (bad contentType, unimplemented) — leave it to the
-           reactive path, which is what used to carry this alone. */
-      }
-    }
+    await screenLadderForDecode(
+      rungs,
+      this.trackManager?.getActiveVideoTrack()?.frameRate || 30,
+      this.videoDecoder?.configuredCodec || "",
+      this.trackManager?.getActiveVideoTrack()?.height || 0,
+      this._decodeScreened,
+    );
   }
 
   private abrDeviceDownshift(): void {

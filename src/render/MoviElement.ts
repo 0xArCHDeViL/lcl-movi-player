@@ -7785,6 +7785,25 @@ export class MoviElement extends HTMLElement {
     // 55% of the measured rate leaves that room; the ABR ramps UP from here once
     // playback is stable, so a fast link still climbs — it just doesn't OPEN on
     // a rung that chokes the audio.
+    // Ask the device about the ladder BEFORE picking, not after. The rungs
+    // carry their own codec now, so this needs no player — and without it the
+    // opening pick is the one rung nothing has screened, which is why a machine
+    // that cannot decode 4K/8K still landed on it once, visibly, on its first
+    // ever load. Bounded: a device that doesn't answer just falls through to
+    // the old behaviour, and the reactive path still catches it.
+    try {
+      await MoviPlayer.screenLadder(
+        this._videoQualities.map((q) => ({
+          height: q.height,
+          codec: q.codec,
+          bandwidth: q.bandwidth,
+        })),
+        this._videoQualities.find((q) => q.fps)?.fps || 30,
+      );
+    } catch {
+      /* capability query unavailable — carry on */
+    }
+
     const affordableBits = bits * 0.55;
     // A rung this device has already been shown not to decode is not a
     // candidate however fast the link is. The ABR honours the same list, but it
