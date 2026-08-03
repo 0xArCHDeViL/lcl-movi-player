@@ -23451,11 +23451,32 @@ export class MoviElement extends HTMLElement {
     // false) once at the lowest rung or after MAX_DECODE_DOWNSHIFTS, at which
     // point the software fallback below runs (the codec is undecodable at any
     // size). Streams decode via MSE, not our decoder, so they're excluded.
+    // Is a silent software fallback even on offer? (sw="auto", or the viewer
+    // already accepted software for this video, or fallback="native" after
+    // native itself failed.) It decides how much ladder-walking is worth doing
+    // first — see below.
+    const softwareFallbackAvailable =
+      this.getAttribute("sw") === "auto" ||
+      this._userAcceptedSoftwareFallback ||
+      this._fallbackMode() === "native";
+
+    // Dropping a rung is the right first move when only the SIZE is too much —
+    // the GPU that choked on 8K usually decodes 4K fine, and hardware at a
+    // lower resolution beats software at any. But it is the wrong move when the
+    // codec cannot be hardware-decoded at all: then every rung fails, and each
+    // attempt is a full player rebuild. With a software fallback waiting, one
+    // drop is enough to tell those apart — if the next rung fails too it is the
+    // codec, so stop walking and switch decoders. Without a fallback on offer,
+    // keep walking: it is the only remedy there is.
+    const dropBudget = softwareFallbackAvailable
+      ? 1
+      : MoviElement.MAX_DECODE_DOWNSHIFTS;
     if (
       isDecoderError &&
       this._sw !== "software" &&
       !this.player?.isStreamPlayback?.() &&
       this.player?.isAutoQuality?.() &&
+      this._decodeDownshifts < dropBudget &&
       this._recreateAtLowerQuality()
     ) {
       return;
@@ -23465,15 +23486,7 @@ export class MoviElement extends HTMLElement {
     // opted into auto fallback (sw="auto"), or the user already accepted
     // software once for this video, so a later quality that also can't
     // hardware-decode applies it automatically. Skipped if already in software.
-    if (
-      isDecoderError &&
-      this._sw !== "software" &&
-      (this.getAttribute("sw") === "auto" ||
-        this._userAcceptedSoftwareFallback ||
-        // fallback="native": after native has already been tried (and failed) on
-        // a decoder error, auto-apply software silently — never show the prompt.
-        this._fallbackMode() === "native")
-    ) {
+    if (isDecoderError && this._sw !== "software" && softwareFallbackAvailable) {
       Logger.info(
         TAG,
         this._userAcceptedSoftwareFallback
