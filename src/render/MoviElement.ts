@@ -265,6 +265,18 @@ export class MoviElement extends HTMLElement {
   /** Set when pause() lands before playback has started, so the pending
    *  autoplay/queued play doesn't fire once loading finishes. */
   private _startCancelled: boolean = false;
+  /**
+   * Bumped by every load()/initializePlayer(). An init awaits twice — the
+   * pre-play probe and player.load() — and load() clears `isLoading` on its
+   * way through, so a source change landing inside either window starts a
+   * SECOND init while the first is still running. Both then own a player and
+   * a live source: the superseded one kept streaming its rendition in the
+   * background, and when its demux failed it painted "Can't Play This File"
+   * over the load that was about to play fine. Each init captures the
+   * generation it started with and drops itself the moment it no longer
+   * matches — silently, since whoever superseded it owns the screen now.
+   */
+  private _loadGeneration: number = 0;
   // Autoplay was requested while the tab was hidden — deferred until the tab
   // is visible (a backgrounded first-play seek gets throttled and stalls in
   // buffering). _onVisibilityChange starts it when the tab is shown.
@@ -20397,6 +20409,9 @@ export class MoviElement extends HTMLElement {
     }
 
     this.isLoading = true;
+    // This load's identity for the rest of the method. Bumping (rather than
+    // reading) means a later init invalidates this one whatever called it.
+    const gen = ++this._loadGeneration;
 
     // Hide the empty-state ("No Video") and show the loading spinner NOW —
     // before the pre-play probe below, whose await would otherwise leave the
@@ -20419,6 +20434,17 @@ export class MoviElement extends HTMLElement {
     // to even clear the proxy burst in that time IS a slow link, so the timeout
     // falls back to the smallest rung, which is the right answer anyway.
     await this._pickStartRungByProbe();
+    // ~3s of probing is a wide window for the host to swap sources. The load
+    // that replaced us owns `isLoading` and the player now; building a second
+    // one here is what left a rendition streaming with nothing driving it.
+    if (gen !== this._loadGeneration) {
+      Logger.debug(TAG, "Init superseded during the pre-play probe — dropping");
+      return;
+    }
+
+    // Declared out here so the catch can tear down a player this init built
+    // but never got to hand over.
+    let created: MoviPlayer | null = null;
 
     try {
       // Determine source type (URL or File) — skipped entirely when the
@@ -20593,8 +20619,16 @@ export class MoviElement extends HTMLElement {
 
       // Create Player instance
       const mode = playerConfig.drm ? "DRM/Native Video" : "Canvas Renderer";
+      // Config assembly awaits too (decode screening, ladder work). Last check
+      // before we take ownership of `this.player` — past this point a stale
+      // init would be stomping the live one's instance.
+      if (gen !== this._loadGeneration) {
+        Logger.debug(TAG, "Init superseded before player creation — dropping");
+        return;
+      }
       Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
-      this.player = new MoviPlayer(playerConfig);
+      created = new MoviPlayer(playerConfig);
+      this.player = created;
 
       // Re-apply a host subtitle renderer to the fresh player (it's registered on
       // the element, which outlives per-source player recreates).
@@ -20668,6 +20702,21 @@ export class MoviElement extends HTMLElement {
           }
           this.player = null;
           this.isLoading = false;
+          return;
+        }
+        // Same window, different cause: a source change during load() started a
+        // newer init. Tear down what THIS one built — otherwise it keeps its
+        // source streaming (a full 1440p rendition, in the report that found
+        // this) behind a player nothing points at. `this.player` is only
+        // cleared if it's still ours; the newer init may already own the slot.
+        if (gen !== this._loadGeneration) {
+          Logger.debug(TAG, "Init superseded during load — tearing it down");
+          try {
+            created?.destroy();
+          } catch {
+            /* noop */
+          }
+          if (this.player === created) this.player = null;
           return;
         }
         // Apply any `buffersize` attribute set on the element before
@@ -20857,6 +20906,23 @@ export class MoviElement extends HTMLElement {
         return;
       }
 
+      // Not every superseded load fails with an abort. One that had already
+      // committed to a source failed with "File is corrupted or in an
+      // unsupported format" instead — and being a decoder-ish error, it not
+      // only painted the overlay but dragged the LIVE player into a forced
+      // software-decode recreate. A load nobody is watching gets no say in
+      // either; drop it exactly like the abort above.
+      if (gen !== this._loadGeneration) {
+        Logger.debug(TAG, `Init superseded, error not surfaced — ${initMsg}`);
+        try {
+          created?.destroy();
+        } catch {
+          /* noop */
+        }
+        if (this.player === created) this.player = null;
+        return;
+      }
+
       // A recovery reload (onto a lower rendition after a source error) can fail
       // to open on a still-degrading link — retry another rendition instead of
       // dropping straight to the overlay. Only mid-recovery; a first-load failure
@@ -20979,20 +21045,26 @@ export class MoviElement extends HTMLElement {
 
       this.handleUnsupportedVideo(title, message);
     } finally {
-      this.isLoading = false;
-      // Flush any play() calls that were deferred while loading was in flight.
-      if (this._pendingPlay && this.player && !this._isUnsupported) {
-        this._pendingPlay = false;
-        this.player.play().catch(() => {});
-      } else {
-        this._pendingPlay = false;
+      // `finally` runs on the superseded-load returns above too — and clearing
+      // `isLoading` there would declare the CURRENT load finished while it is
+      // still opening, releasing its deferred play() against a half-built
+      // player. The live init owns these; a stale one leaves them alone.
+      if (gen === this._loadGeneration) {
+        this.isLoading = false;
+        // Flush any play() calls deferred while loading was in flight.
+        if (this._pendingPlay && this.player && !this._isUnsupported) {
+          this._pendingPlay = false;
+          this.player.play().catch(() => {});
+        } else {
+          this._pendingPlay = false;
+        }
+        this.updateControlsState();
+        this.updatePlayPauseIcon();
+        // The resume dialog is held in _resumeDialogPending and surfaced on the
+        // first transition to "playing" (see stateChangeHandler), so the prompt
+        // only appears once playback has actually started and the bottom-bar
+        // play icon has flipped to pause — not over disabled/paused chrome.
       }
-      this.updateControlsState();
-      this.updatePlayPauseIcon();
-      // The resume dialog is held in _resumeDialogPending and surfaced on the
-      // first transition to "playing" (see stateChangeHandler), so the prompt
-      // only appears once playback has actually started and the bottom-bar
-      // play icon has flipped to pause — not over disabled/paused chrome.
     }
   }
 
@@ -21557,7 +21629,16 @@ export class MoviElement extends HTMLElement {
       this.player?.off("filerevoked", fileRevokedHandler),
     );
 
+    // The player these handlers were wired to. A player that has been replaced
+    // can still emit — its demux/fetch finishes after the swap — and that
+    // error used to be treated as the live one's: overlay up, and a forced
+    // software-decode recreate of a player that was doing nothing wrong.
+    const owner = this.player;
     const errorHandler = (error: unknown) => {
+      if (this.player !== owner) {
+        Logger.debug(TAG, "Error from a replaced player — ignored");
+        return;
+      }
       const rawMsg = error instanceof Error ? error.message : String(error);
       // Before surfacing a fatal "Playback Error" overlay, try recovering onto a
       // different rendition. A source/network failure often hits just one variant
@@ -21730,6 +21811,10 @@ export class MoviElement extends HTMLElement {
   }
 
   async load(): Promise<void> {
+    // Invalidate any init still in flight BEFORE this one touches `isLoading`
+    // (cleared below) — that clear is what lets a second init in, so the older
+    // one has to be marked stale first or the two race to own the player.
+    this._loadGeneration++;
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
