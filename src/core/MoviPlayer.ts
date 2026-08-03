@@ -324,21 +324,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // frames are downloaded and decode far faster than real time; the renderer
   // drops the ones older than the clock and the picture resumes at once.
   private static readonly RENDITION_SWAP_LOOKBACK_S = 4;
-  // Before SHOWING a new rendition, give it a lead: fetch ahead of the handover
-  // point while the old one is still playing, and only then swap. A switch that
-  // lands with an empty buffer has to serve every frame just in time, and any
-  // hiccup after that is a visible stall — which is what picking a big rung
-  // feels like (measured: 1080p ran 37s ahead, and the moment 8K took over the
-  // buffer sat at 0.0-0.6s for the whole run).
-  //
-  // Expressed in SECONDS but capped in BYTES, because those pull in opposite
-  // directions on a ladder: 20s of a 4 Mbps rung is 10MB and worth waiting for;
-  // 20s of 8K is ~150MB and never arriving. The cap turns the same rule into
-  // "a minute of a light rung, a few seconds of a heavy one" — and a few
-  // seconds of 8K in hand is exactly what makes its handover smooth.
-  private static readonly SWAP_WARM_LEAD_S = 20;
-  private static readonly SWAP_WARM_MAX_BYTES = 24 * 1024 * 1024;
-  private static readonly SWAP_WARM_TIMEOUT_MS = 12_000;
   // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
   // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
   // so a rung the link keeps failing to hold is backed off harder and harder
@@ -1573,42 +1558,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       try { newDemuxer.close(); } catch {}
       try { newSource.close(); } catch {}
       return endSwitch(false);
-    }
-
-    // --- WARM: let the new rendition build a lead BEFORE it goes on screen.
-    // The old one is still playing throughout, so none of this is visible; the
-    // switch simply takes effect a moment later, with a buffer behind it.
-    //
-    // Skipped when moving DOWN the ladder: a downshift is usually a rescue —
-    // the current rung is already failing — and making it wait would hold the
-    // viewer in the stall it is meant to end.
-    const activeBps =
-      this._dashRenditions.find((r) => r.url === this._activeDashRendition)
-        ?.bandwidth || 0;
-    const targetBps =
-      this._dashRenditions.find((r) => r.url === newRenditionUrl)?.bandwidth || 0;
-    const isUpshift = targetBps > 0 && activeBps > 0 && targetBps > activeBps;
-    const bufferedEndOf = (src: unknown): number => {
-      const f = (src as { getBufferedEnd?: () => number } | null)?.getBufferedEnd;
-      return typeof f === "function" ? f.call(src) : -1;
-    };
-    if (isUpshift && bufferedEndOf(newSource) >= 0) {
-      const wantBytes = Math.min(
-        MoviPlayer.SWAP_WARM_MAX_BYTES,
-        (targetBps / 8) * MoviPlayer.SWAP_WARM_LEAD_S,
-      );
-      const from = bufferedEndOf(newSource);
-      const deadline = performance.now() + MoviPlayer.SWAP_WARM_TIMEOUT_MS;
-      let have = 0;
-      while (performance.now() < deadline) {
-        have = bufferedEndOf(newSource) - from;
-        if (have >= wantBytes) break;
-        await new Promise((r) => setTimeout(r, 150));
-      }
-      Logger.info(
-        TAG,
-        `in-place switch: warmed ${(have / 1e6).toFixed(1)}MB of ${(wantBytes / 1e6).toFixed(1)}MB (~${(have / (targetBps / 8)).toFixed(1)}s of lead) before showing it`,
-      );
     }
 
     // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
