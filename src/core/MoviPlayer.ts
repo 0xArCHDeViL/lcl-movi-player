@@ -326,7 +326,7 @@ async function screenLadderForDecode(
             framerate: rungFps,
           },
         });
-        const verdict =
+        let verdict =
           // "unsupported" is only trusted for a codec string the host actually
           // declared. For one we filled in, it more likely means the guess was
           // wrong than that the device can't play the rung.
@@ -344,6 +344,29 @@ async function screenLadderForDecode(
                 : info?.powerEfficient === false
                   ? "software-decoded"
                   : "";
+
+        // Ask the API that actually DECIDES. decodingInfo is an advisory
+        // second opinion, and Safari disagrees with itself: it answered
+        // "supported" for 3840x2026 AV1 that VideoDecoder.isConfigSupported
+        // then refused outright. The rung opened, fell to the WASM decoder at
+        // 4K — hopeless — and the reactive correction dropped it to 450p, when
+        // the ladder had a 1080p H.264 rung with a hardware path all along.
+        //
+        // Only for a rung already OVER budget: below it, "no hardware path"
+        // is not a problem, software carries those every day.
+        if (!verdict && overBudget && exact && typeof VideoDecoder !== "undefined") {
+          try {
+            const hw = await VideoDecoder.isConfigSupported({
+              codec,
+              codedWidth: w,
+              codedHeight: h,
+              hardwareAcceleration: "prefer-hardware",
+            });
+            if (hw?.supported === false) verdict = "no hardware path";
+          } catch {
+            /* the query itself is unsupported here — decodingInfo's answer stands */
+          }
+        }
         if (verdict) {
           Logger.info(
             TAG,
