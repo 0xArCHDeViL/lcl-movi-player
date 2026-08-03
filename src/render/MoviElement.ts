@@ -266,7 +266,9 @@ export class MoviElement extends HTMLElement {
    *  autoplay/queued play doesn't fire once loading finishes. */
   private _startCancelled: boolean = false;
   /**
-   * Bumped by every load()/initializePlayer(). An init awaits twice — the
+   * Bumped by every initializePlayer(), and only there — a load() that bumps
+   * on its own can invalidate a live init without starting one to replace it.
+   * An init awaits twice — the
    * pre-play probe and player.load() — and load() clears `isLoading` on its
    * way through, so a source change landing inside either window starts a
    * SECOND init while the first is still running. Both then own a player and
@@ -21811,10 +21813,13 @@ export class MoviElement extends HTMLElement {
   }
 
   async load(): Promise<void> {
-    // Invalidate any init still in flight BEFORE this one touches `isLoading`
-    // (cleared below) — that clear is what lets a second init in, so the older
-    // one has to be marked stale first or the two race to own the player.
-    this._loadGeneration++;
+    // NOTE: no generation bump here. load() teardown is synchronous and runs
+    // straight into initializePlayer(), whose own bump invalidates anything
+    // still in flight. Bumping here as well invalidated in-flight inits on
+    // behalf of a load that then went nowhere: the init holding the fresh
+    // probe result ("59.6Mbps → opening on 1440p@60") stood down for a
+    // successor that never came, leaving an older, un-probed init to play the
+    // bottom rung at 256x144 while the UI showed the 1440p that was picked.
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
