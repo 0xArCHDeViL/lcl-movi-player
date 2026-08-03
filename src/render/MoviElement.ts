@@ -279,6 +279,9 @@ export class MoviElement extends HTMLElement {
    * matches — silently, since whoever superseded it owns the screen now.
    */
   private _loadGeneration: number = 0;
+  /** The pre-play probe currently running, so a concurrent init awaits its
+   *  result instead of opening the seed rung. Null when none is in flight. */
+  private _startProbeInFlight: Promise<void> | null = null;
   // Autoplay was requested while the tab was hidden — deferred until the tab
   // is visible (a backgrounded first-play seek gets throttled and stalls in
   // buffering). _onVisibilityChange starts it when the tab is shown.
@@ -7748,6 +7751,24 @@ export class MoviElement extends HTMLElement {
     // wrappers do it on every render) puts the low seed rung back there; with
     // the probe latched, nothing re-chose from the measurement and the player
     // opened at 144p while the UI still showed the 1440p that had been picked.
+    // …and if that earlier probe is STILL RUNNING, wait for it. The latch is
+    // set before the measurement lands, so a second init used to sail straight
+    // past it with nothing measured yet and open the seed rung — and by the
+    // time the prober had its answer it was the older init, so it dropped
+    // itself as superseded. 144p (itag 160) playing under a 1440p label, every
+    // load. There are three initializePlayer entries on a normal React mount;
+    // whichever reaches the source LAST must still open on the right rung.
+    if (this._startProbeInFlight) {
+      try {
+        await this._startProbeInFlight;
+      } catch {
+        /* the prober logs its own failure */
+      }
+      if (this._measuredStartBps > 0) {
+        await this._applyProbePick(this._measuredStartBps, true);
+      }
+      return;
+    }
     if (this._startProbeDone) {
       if (this._measuredStartBps > 0) {
         await this._applyProbePick(this._measuredStartBps, true);
@@ -7755,6 +7776,21 @@ export class MoviElement extends HTMLElement {
       return;
     }
     this._startProbeDone = true;
+    const run = this._runStartProbe();
+    this._startProbeInFlight = run;
+    try {
+      await run;
+    } finally {
+      this._startProbeInFlight = null;
+    }
+  }
+
+  /**
+   * The measurement itself. Split out so concurrent inits can await the one
+   * that is already running instead of starting their own — see
+   * `_startProbeInFlight`.
+   */
+  private async _runStartProbe(): Promise<void> {
     const byBitrate = [...this._videoQualities].sort(
       (a, b) =>
         (a.bandwidth || this._estimateBitrate(a.height)) -
