@@ -25,9 +25,21 @@ const MAX_STREAM_BUFFER_SIZE = 250 * 1024 * 1024; // Match max buffer — stream
 // 2.0s, and 12MB+ delivered 377KB in 12s — parked at ~30 KB/s. Asking for the
 // whole file (which a small one did, since it fits the buffer) therefore made
 // the demuxer's open wait ~18s for bytes it should have had in under a second;
-// that was the entire startup delay on a split-audio YouTube source. 4MB sits
-// comfortably under the cliff and costs one extra request per chunk.
-const MAX_RANGE_CHUNK_SIZE = 4 * 1024 * 1024;
+// that was the entire startup delay on a split-audio YouTube source.
+//
+// Two sizes, because the two chunks are asked for different reasons:
+//
+//   OPEN — the first one. Small, so the demuxer's first read is answered in a
+//   fraction of a second. That is the case above.
+//
+//   FILL — every one after it. Those exist to build a buffer, and 4MB is the
+//   wrong size for that on a heavy rung: at 8K (~60 Mbps) it is barely half a
+//   second of video per request, so the stream spends its time paying TTFB
+//   (measured 30-500ms each) instead of filling. The buffer then never gets
+//   ahead, which is what a switch to a high rung feels like. 8MB is the
+//   largest the CDN still served whole in the measurement above, so take it.
+const FIRST_RANGE_CHUNK_SIZE = 4 * 1024 * 1024;
+const MAX_RANGE_CHUNK_SIZE = 8 * 1024 * 1024;
 const CORS_DETECTION_THRESHOLD = 3; // Only treat "Failed to fetch" as CORS after N consecutive failures while online
 // IMPORTANT: Header size increased to 6 Int32 values (24 bytes) to support 64-bit buffer start offsets
 const HEADER_SIZE = 24; // Header bytes for atomics (6 Int32 values)
@@ -965,7 +977,10 @@ export class HttpSource implements SourceAdapter {
         // MAX_RANGE_CHUNK_SIZE. The loop below continues from where the chunk
         // ended, so the window still fills; it just fills at link speed
         // instead of whatever pace the CDN puts a long range on.
-        const maxDownload = Math.min(windowLimit, MAX_RANGE_CHUNK_SIZE);
+        const maxDownload = Math.min(
+          windowLimit,
+          windowInitialized ? MAX_RANGE_CHUNK_SIZE : FIRST_RANGE_CHUNK_SIZE,
+        );
         const rangeEnd = this.size > 0
           ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
           : resumeOffset + maxDownload - 1;
