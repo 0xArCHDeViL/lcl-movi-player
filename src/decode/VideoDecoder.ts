@@ -744,7 +744,23 @@ export class MoviVideoDecoder {
     if (this.useSoftware && this.swDecoder) {
       // RESURRECTION LOGIC: Periodically try to switch back to hardware only on a TRUE IDR keyframe
       // DISABLED if software is explicitly forced or content needs software (4:2:2/4:4:4)
-      if (keyframe && !this.forceSoftware && !this.requiresSoftware && this.shouldRetryHardware(data)) {
+      // …and never where there is no hardware path to return to. A browser
+      // without WebCodecs cannot resurrect anything, but the attempt still
+      // flipped `useSoftware` to false — so isSoftware() reported hardware,
+      // the ABR believed it, and climbed straight through the software
+      // ceiling: "ABR upshift 720p → 1080p" on a Firefox with no VideoDecoder,
+      // then a stall and "software decode can't hold 1080p — correcting to
+      // 480p". The ladder cap can only hold if the decoder tells the truth.
+      const webCodecsAvailable =
+        typeof (globalThis as { VideoDecoder?: unknown }).VideoDecoder !==
+        "undefined";
+      if (
+        keyframe &&
+        webCodecsAvailable &&
+        !this.forceSoftware &&
+        !this.requiresSoftware &&
+        this.shouldRetryHardware(data)
+      ) {
         Logger.info(
           TAG,
           `Found a sync frame! Attempting hardware resurrection (Attempt ${this.hardwareRetryCount + 1})...`,
