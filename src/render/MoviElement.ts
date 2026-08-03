@@ -7889,14 +7889,26 @@ export class MoviElement extends HTMLElement {
     // modern codecs cost several times as much per pixel (480p). Applied to the
     // OPENING pick too, so a software session never starts above what it can
     // hold and then has to climb back down in front of the viewer.
-    const swCeiling =
-      this._sw === "software"
-        ? /^(avc1|h264|avc)/i.test(
-            (this._videoQualities.find((q) => q.codec)?.codec || "").split(".")[0],
-          )
+    //
+    // Software isn't only what `sw="software"` asks for — it is also what a
+    // browser WITHOUT WebCodecs gets, whatever the attribute says. A Firefox
+    // with no VideoDecoder opened 1440p AV1 on a 13.3Mbps link, produced no
+    // decodable frame through three black-frame recoveries, and only then came
+    // down: "ABR: software decode can't hold 1440p — correcting to 480p". The
+    // ceiling knew the answer before the first byte; it just wasn't asked.
+    const softwareCertain =
+      this._sw === "software" ||
+      typeof (globalThis as { VideoDecoder?: unknown }).VideoDecoder ===
+        "undefined";
+    // Judged per rung by ITS OWN codec, not by the first rung that declares
+    // one. A mixed ladder is the normal case (H.264 low, AV1 high), and the
+    // cheap codec down at 240p was answering for the expensive one at 1440p.
+    const swCeilingFor = (codec?: string): number =>
+      !softwareCertain
+        ? Infinity
+        : /^(avc1|h264|avc)/i.test((codec || "").split(".")[0])
           ? 720
-          : 480
-        : Infinity;
+          : 480;
     // A rung this device has already been shown not to decode is not a
     // candidate however fast the link is. The ABR honours the same list, but it
     // only gets to speak after playback starts — so without this the machine
@@ -7905,7 +7917,7 @@ export class MoviElement extends HTMLElement {
     let pick = smallest;
     for (const q of byBitrate) {
       if (barred.has(q.height)) continue;
-      if (q.height > swCeiling) continue;
+      if (q.height > swCeilingFor(q.codec)) continue;
       const b = q.bandwidth || this._estimateBitrate(q.height);
       if (b <= affordableBits) pick = q;
       else break;
@@ -7914,7 +7926,7 @@ export class MoviElement extends HTMLElement {
     this._src = pick.src;
     Logger.info(
       TAG,
-      `Pre-play speed test: ${(bits / 1e6).toFixed(1)}Mbps → opening on ${pick.label || pick.height + "p"}${reapplied ? " (re-applied — the src was rewritten)" : ""}`,
+      `Pre-play speed test: ${(bits / 1e6).toFixed(1)}Mbps → opening on ${pick.label || pick.height + "p"}${softwareCertain ? " (software decode — ladder capped)" : ""}${reapplied ? " (re-applied — the src was rewritten)" : ""}`,
     );
   }
 
