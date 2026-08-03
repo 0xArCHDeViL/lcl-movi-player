@@ -7726,7 +7726,6 @@ export class MoviElement extends HTMLElement {
    * the smallest rung `_parseChildSources` already chose stands.
    */
   private async _pickStartRungByProbe(): Promise<void> {
-    if (this._startProbeDone) return;
     // Every bail is logged. When this doesn't run, the player opens on the
     // smallest rung and the viewer sees 144p — the single most-reported startup
     // complaint — and until now a log that simply lacked the "Pre-play speed
@@ -7741,6 +7740,18 @@ export class MoviElement extends HTMLElement {
     }
     if (typeof this._src !== "string") {
       Logger.info(TAG, "Pre-play speed test: skipped — source is not a URL");
+      return;
+    }
+    // A measurement taken moments ago by an earlier init on this element still
+    // describes the same link — don't re-probe. But DO re-apply the pick. The
+    // pick lives in `_src`, and a host that rewrites the `src` attribute (React
+    // wrappers do it on every render) puts the low seed rung back there; with
+    // the probe latched, nothing re-chose from the measurement and the player
+    // opened at 144p while the UI still showed the 1440p that had been picked.
+    if (this._startProbeDone) {
+      if (this._measuredStartBps > 0) {
+        await this._applyProbePick(this._measuredStartBps, true);
+      }
       return;
     }
     this._startProbeDone = true;
@@ -7789,6 +7800,24 @@ export class MoviElement extends HTMLElement {
       return;
     }
     this._measuredStartBps = bits;
+    await this._applyProbePick(bits, false);
+  }
+
+  /**
+   * Choose the opening rung from a measured link rate and put it in `_src`.
+   *
+   * Split out from the probe so a later init can re-apply the same decision
+   * without re-measuring — see the `_startProbeDone` branch above.
+   * `reapplied` only changes the log wording.
+   */
+  private async _applyProbePick(bits: number, reapplied: boolean): Promise<void> {
+    const byBitrate = [...this._videoQualities].sort(
+      (a, b) =>
+        (a.bandwidth || this._estimateBitrate(a.height)) -
+        (b.bandwidth || this._estimateBitrate(b.height)),
+    );
+    const smallest = byBitrate[0];
+    if (!smallest?.src) return;
     // Pick the OPENING rung conservatively. Two reasons to leave a wide margin:
     //  1) The probe measures through a burst-prone proxy, so it can read a bit
     //     high — opening a rung the link can't actually sustain then saturates
@@ -7845,10 +7874,11 @@ export class MoviElement extends HTMLElement {
       if (b <= affordableBits) pick = q;
       else break;
     }
+    if (reapplied && this._src === pick.src) return; // nothing overwrote it
     this._src = pick.src;
     Logger.info(
       TAG,
-      `Pre-play speed test: ${(bits / 1e6).toFixed(1)}Mbps → opening on ${pick.label || pick.height + "p"}`,
+      `Pre-play speed test: ${(bits / 1e6).toFixed(1)}Mbps → opening on ${pick.label || pick.height + "p"}${reapplied ? " (re-applied — the src was rewritten)" : ""}`,
     );
   }
 
