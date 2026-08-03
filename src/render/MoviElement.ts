@@ -7903,12 +7903,11 @@ export class MoviElement extends HTMLElement {
     // Judged per rung by ITS OWN codec, not by the first rung that declares
     // one. A mixed ladder is the normal case (H.264 low, AV1 high), and the
     // cheap codec down at 240p was answering for the expensive one at 1440p.
-    const swCeilingFor = (codec?: string): number =>
-      !softwareCertain
-        ? Infinity
-        : /^(avc1|h264|avc)/i.test((codec || "").split(".")[0])
-          ? 720
-          : 480;
+    // 480p for every codec, H.264 included — see softwareDecodeCeiling. Opening
+    // at 720p H.264 held, then the first upshift stalled and the correction
+    // dropped it to 480p regardless: a climb, a stall and a drop to arrive
+    // where it should have started.
+    const swCeilingFor = (): number => (softwareCertain ? 480 : Infinity);
     // A rung this device has already been shown not to decode is not a
     // candidate however fast the link is. The ABR honours the same list, but it
     // only gets to speak after playback starts — so without this the machine
@@ -7917,7 +7916,7 @@ export class MoviElement extends HTMLElement {
     let pick = smallest;
     for (const q of byBitrate) {
       if (barred.has(q.height)) continue;
-      if (q.height > swCeilingFor(q.codec)) continue;
+      if (q.height > swCeilingFor()) continue;
       const b = q.bandwidth || this._estimateBitrate(q.height);
       if (b <= affordableBits) pick = q;
       else break;

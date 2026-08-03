@@ -112,17 +112,33 @@ const REPRESENTATIVE_CODECS: Record<string, string> = {
   hevc: "hvc1.1.6.L153.90",
 };
 
-// What software decode can actually sustain, by codec family. Once the video is
-// being decoded in software, resolution is the only lever left, and Auto must
-// not climb past what the CPU can hold: 1440p in software is not playback on
-// any ordinary machine, whatever the link can carry. H.264 is the cheap one and
-// gets 720p; the modern codecs cost several times as much per pixel, so they
-// get 480p. Only applies while software is actually in use — a hardware path
-// keeps the full ladder.
-function softwareDecodeCeiling(codec: string): number {
-  const family = (codec || "").split(".")[0].toLowerCase();
-  if (/^(avc1|h264|avc)/.test(family)) return 720;
+// What software decode can actually sustain. Once the video is being decoded in
+// software, resolution is the only lever left, and Auto must not climb past what
+// the CPU can hold — whatever the link can carry.
+//
+// 480p for every codec, H.264 included. H.264 used to get 720p as "the cheap
+// one", and on a phone it isn't: opening at 720p H.264 held, but the moment Auto
+// stepped to 1080p the picture stalled and the correction dropped it to 480p
+// anyway — a climb, a stall and a drop, every load, to arrive where it should
+// have started. Software decode is not the place to find the limit by hitting
+// it. Only applies while software is in use; a hardware path keeps the full
+// ladder.
+function softwareDecodeCeiling(_codec: string): number {
   return 480;
+}
+
+/**
+ * True when the browser has no WebCodecs at all, so software decode is a
+ * certainty rather than a state to be discovered. `isSoftwareDecoding()` only
+ * becomes true once the decoder has configured and fallen back — and the ABR
+ * can reach a decision before that, which is how an upshift to 1080p slipped
+ * past the ceiling on a browser that never had a hardware path.
+ */
+function webCodecsUnavailable(): boolean {
+  return (
+    typeof (globalThis as { VideoDecoder?: unknown }).VideoDecoder ===
+    "undefined"
+  );
 }
 
 const DECODE_CEILING_KEY = "movi:decode-ceiling";
@@ -2046,7 +2062,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // past what the CPU can hold, but a session that is already sitting above
     // it — the hardware path failed and the fallback reloaded at the rung that
     // was playing — would just stay there and stutter. Come down at once.
-    if (activeIdx >= 0 && this.isSoftwareDecoding() && sinceSwitch > 3000) {
+    if (activeIdx >= 0 && (this.isSoftwareDecoding() || webCodecsUnavailable()) && sinceSwitch > 3000) {
       const ceilingH = softwareDecodeCeiling(
         this.videoDecoder?.configuredCodec || "",
       );
@@ -2319,7 +2335,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // bandwidth ceiling here (higher resolution ⇒ higher bandwidth on any sane
     // ladder, so this also excludes anything above them).
     // Software decode caps the ladder on its own — see softwareDecodeCeiling.
-    if (this.isSoftwareDecoding()) {
+    if (this.isSoftwareDecoding() || webCodecsUnavailable()) {
       const ceilingH = softwareDecodeCeiling(
         this.videoDecoder?.configuredCodec || "",
       );
