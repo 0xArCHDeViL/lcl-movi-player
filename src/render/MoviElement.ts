@@ -7872,8 +7872,14 @@ export class MoviElement extends HTMLElement {
     // the old behaviour, and the reactive path still catches it.
     try {
       await MoviPlayer.screenLadder(
+        // Per-rung fps, not one shared number — a 60fps rung costs twice what
+        // the same frame at 30 does, and the screen now prices that in. Width
+        // isn't carried on a `<source>` rung, so the screen falls back to a
+        // 16:9 guess for it; the ladders that don't fit that (scope, portrait)
+        // are still judged on the wrong frame.
         this._videoQualities.map((q) => ({
           height: q.height,
+          fps: q.fps,
           codec: q.codec,
           bandwidth: q.bandwidth,
         })),

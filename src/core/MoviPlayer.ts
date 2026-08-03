@@ -123,8 +123,17 @@ const REPRESENTATIVE_CODECS: Record<string, string> = {
 // have started. Software decode is not the place to find the limit by hitting
 // it. Only applies while software is in use; a hardware path keeps the full
 // ladder.
-function softwareDecodeCeiling(_codec: string): number {
-  return 480;
+function softwareDecodeCeiling(viaWebCodecs: boolean): number {
+  // Two very different CPUs are doing the work depending on how we got here.
+  //
+  // Our WASM decoder is single-threaded and pays an Asyncify tax: 480p, and
+  // even 720p H.264 only held until the first upshift stalled it.
+  //
+  // A WebCodecs decoder that merely lost `prefer-hardware` is the browser's own
+  // — multithreaded, SIMD, years of tuning — and it carries 1080p on hardware
+  // this modest. Capping it at 480 too took a 1080p AV1 that was playing and
+  // dropped it three rungs for no reason anyone could see.
+  return viaWebCodecs ? 1080 : 480;
 }
 
 /**
@@ -188,8 +197,53 @@ loadPersistedDecodeCeiling();
  * player (which knows the codec in play) and the element's opening pick (which
  * runs before any player exists) — see MoviPlayer.screenLadder.
  */
+/**
+ * What a rung costs to decode in software, in H.264-equivalent pixels per
+ * second: `width × height × fps × codec factor`. The factors are rough — a
+ * modern codec buys its bitrate with per-pixel work, and AV1/HEVC land around
+ * 3× H.264 while VP9 sits near 2×.
+ *
+ * This replaced a plain `height >= 1440` test, which is a proxy that breaks in
+ * both directions the moment a rung isn't 16:9. A 2.39:1 film's "1440p" rung is
+ * 2560×1072 — under the height cut, never screened, though it is heavier than
+ * ordinary 1080p. A portrait 1080×1920 is over the cut and would be barred,
+ * though it is exactly as many pixels as the 1080p that passes. Both fall out
+ * correctly once the real frame is measured instead of one of its sides.
+ */
+function softwareDecodeCost(
+  width: number,
+  height: number,
+  fps: number,
+  codec: string,
+): number {
+  const family = (codec || "").split(".")[0].toLowerCase();
+  const factor = /^(av01|av1|hvc1|hev1|hevc|h265)/.test(family)
+    ? 3
+    : /^(vp0?9|vp9)/.test(family)
+      ? 2
+      : 1;
+  return width * height * Math.max(1, fps) * factor;
+}
+
+/**
+ * Cost above which a rung with NO hardware path is refused. Calibrated to the
+ * old height thresholds at a nominal 30fps — mobile's 2560×1440×30 ≈ 110M,
+ * desktop's headroom several times that — then rounded to numbers that hold up
+ * against what was actually observed: a phone that could not produce one frame
+ * of 1440p AV1 (332M), and the 1080p30 H.264 (62M) it plays without complaint.
+ * Two constants, one place to tune.
+ */
+const SOFTWARE_DECODE_BUDGET_MOBILE = 100_000_000;
+const SOFTWARE_DECODE_BUDGET_DESKTOP = 400_000_000;
+
 async function screenLadderForDecode(
-  rungs: { height?: number; codec?: string; bandwidth?: number }[],
+  rungs: {
+    height?: number;
+    width?: number;
+    fps?: number;
+    codec?: string;
+    bandwidth?: number;
+  }[],
   fps: number,
   activeCodec: string,
   activeHeight: number,
@@ -211,13 +265,13 @@ async function screenLadderForDecode(
 
     for (const r of rungs) {
       const h = r.height ?? 0;
-      // Screened from 1440p up. The device only ever learns its own ceiling by
-      // climbing into a rung and failing, and that one bad attempt is visible —
-      // so ask about every rung heavy enough to be in doubt, not just the ones
-      // above 4K. Below 1440p a shortfall is rare enough, and software decode
-      // common enough, that asking would cost more quality than it saves.
-      if (h <= 1080) continue;
+      if (h <= 0) continue;
       if (deviceDecodeBoundHeights.has(h)) continue;
+      // The rung's real frame. Only fall back to a 16:9 guess when the ladder
+      // didn't declare a width — asking decodingInfo about dimensions the
+      // content doesn't have gets an answer about a video nobody is playing.
+      const w = r.width && r.width > 0 ? r.width : Math.round((h * 16) / 9);
+      const rungFps = r.fps && r.fps > 0 ? r.fps : fps;
       // Judge a rung by ITS OWN codec. A ladder is often mixed — H.264 low,
       // AV1 high, which is what YouTube-style extractors produce — so asking
       // about the codec that happens to be PLAYING answers the wrong question.
@@ -247,7 +301,18 @@ async function screenLadderForDecode(
       // Containers the codec strings map to. Getting this wrong makes
       // decodingInfo reject the query outright, which we treat as "no answer".
       const container = /^(vp0?[89]|vp8)/i.test(codec) ? "video/webm" : "video/mp4";
-      const key = `${codec}@${h}`;
+      // What this rung would cost the CPU, and whether that is more than this
+      // class of machine can carry. Only rungs OVER the budget can be barred
+      // for lacking a hardware path — under it, software decode is ordinary and
+      // barring would cost quality for nothing. A hard `unsupported` still
+      // counts at any size; that one isn't a judgement call.
+      const cost = softwareDecodeCost(w, h, rungFps, codec);
+      const overBudget =
+        cost >
+        (mobile
+          ? SOFTWARE_DECODE_BUDGET_MOBILE
+          : SOFTWARE_DECODE_BUDGET_DESKTOP);
+      const key = `${codec}@${w}x${h}@${Math.round(rungFps)}`;
       if (screened.has(key)) continue;
       screened.add(key);
       try {
@@ -255,10 +320,10 @@ async function screenLadderForDecode(
           type: "file",
           video: {
             contentType: `${container}; codecs="${codec}"`,
-            width: Math.round((h * 16) / 9),
+            width: w,
             height: h,
             bitrate: r.bandwidth || 0,
-            framerate: fps,
+            framerate: rungFps,
           },
         });
         const verdict =
@@ -267,28 +332,22 @@ async function screenLadderForDecode(
           // wrong than that the device can't play the rung.
           info?.supported === false && exact
             ? "unsupported"
-            : info?.smooth === false
-              ? "not smooth"
-              : // Software decode is a verdict from 4K up on a desktop: plenty
-                // of machines have no hardware path for a 4K codec and cannot
-                // carry it in software either, while 1440p in software is
-                // ordinary on a mid laptop and barring it would cost quality
-                // for no reason.
-                //
-                // On a PHONE it is a verdict from 1440p. `powerEfficient:
-                // false` is exactly the case where configure() drops
-                // prefer-hardware and Chrome decodes AV1 1440p on the CPU —
-                // which on this hardware means a decode queue that fills, no
-                // frames out, and the spinner up for as long as you care to
-                // watch. The rung was screened, passed, and could never play.
-                info?.powerEfficient === false &&
-                h >= (mobile ? 1440 : 2160)
-                ? "software-decoded"
-                : "";
+            : // The two soft verdicts are judgements about cost, so they only
+              // count for a rung that IS costly. `smooth: false` and
+              // `powerEfficient: false` are both routine on cheap rungs — a
+              // 480p H.264 that plays anywhere can answer either way — and
+              // acting on them there would bar quality for nothing.
+              !overBudget
+              ? ""
+              : info?.smooth === false
+                ? "not smooth"
+                : info?.powerEfficient === false
+                  ? "software-decoded"
+                  : "";
         if (verdict) {
           Logger.info(
             TAG,
-            `ABR: this device reports ${h}p ${codec} as ${verdict} — barring it before we ever climb into it`,
+            `ABR: this device reports ${w}x${h}@${Math.round(rungFps)} ${codec} as ${verdict} (${Math.round(cost / 1e6)}M) — barring it before we ever climb into it`,
           );
           deviceDecodeBoundHeights.add(h);
           persistDecodeCeiling();
@@ -2080,7 +2139,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // was playing — would just stay there and stutter. Come down at once.
     if (activeIdx >= 0 && this.decodingOnCpu() && sinceSwitch > 3000) {
       const ceilingH = softwareDecodeCeiling(
-        this.videoDecoder?.configuredCodec || "",
+        !!this.videoDecoder && !this.videoDecoder.isSoftware,
       );
       const active = rungs[activeIdx];
       if ((active.height ?? 0) > ceilingH) {
@@ -2353,7 +2412,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Software decode caps the ladder on its own — see softwareDecodeCeiling.
     if (this.decodingOnCpu()) {
       const ceilingH = softwareDecodeCeiling(
-        this.videoDecoder?.configuredCodec || "",
+        !!this.videoDecoder && !this.videoDecoder.isSoftware,
       );
       let swCapBits = Number.POSITIVE_INFINITY;
       for (const r of rungs) {
