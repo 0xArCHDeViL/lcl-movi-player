@@ -20817,6 +20817,22 @@ export class MoviElement extends HTMLElement {
       this._emitLoadedData(true);
     } catch (error) {
       const initMsg = error instanceof Error ? error.message : String(error);
+
+      // An ABORT is not a failure — it is this load being superseded. A quality
+      // switch, a source change, or a disconnect cancels the init in flight,
+      // and its fetch rejects with "signal is aborted without reason" /
+      // AbortError. Reported as fatal, that put "Can't Play This File" on the
+      // screen while the load that replaced it went on to play perfectly:
+      // overlay stuck on, video running underneath it. Nothing to tell the
+      // viewer here — whoever superseded this load owns what happens next.
+      const aborted =
+        (error as { name?: string } | null)?.name === "AbortError" ||
+        /\baborted\b/i.test(initMsg);
+      if (aborted) {
+        Logger.debug(TAG, `Init aborted (superseded) — ${initMsg}`);
+        return;
+      }
+
       // A recovery reload (onto a lower rendition after a source error) can fail
       // to open on a still-degrading link — retry another rendition instead of
       // dropping straight to the overlay. Only mid-recovery; a first-load failure
