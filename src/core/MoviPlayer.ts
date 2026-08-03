@@ -139,11 +139,24 @@ function loadPersistedDecodeCeiling(): void {
   }
 }
 
+/**
+ * Heights barred for THIS SESSION only — learned while software-decoding, so
+ * they describe the CPU's limit, not the device's. Excluded from what gets
+ * written down, and excluded even when a later, unrelated persist runs: the
+ * write serialises the whole set, so without this a software-session bar
+ * hitched a ride on the next hardware verdict.
+ */
+const sessionOnlyDecodeBoundHeights = new Set<number>();
+
 function persistDecodeCeiling(): void {
   try {
     localStorage.setItem(
       DECODE_CEILING_KEY,
-      JSON.stringify([...deviceDecodeBoundHeights]),
+      JSON.stringify(
+        [...deviceDecodeBoundHeights].filter(
+          (h) => !sessionOnlyDecodeBoundHeights.has(h),
+        ),
+      ),
     );
   } catch {
     /* storage unavailable — the in-memory set still holds for this session */
@@ -2585,7 +2598,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const capped = failH > 0;
     if (capped) {
       deviceDecodeBoundHeights.add(failH);
-      persistDecodeCeiling();
+      // …but only WRITE IT DOWN if the hardware path was the one that failed.
+      // A software-decoding session cannot hold 720p on a phone and says
+      // nothing about what the GPU can do — yet this was persisted all the
+      // same, and every later session (hardware, WebCodecs, prefer-hardware)
+      // read it back and barred those rungs. Auto then sat at 480p on a link
+      // measuring 29.7Mbps, permanently, with no way back short of clearing
+      // storage. The in-memory bar still stands for THIS session, which is
+      // what stops the re-climb-and-restutter loop.
+      if (!this.isSoftwareDecoding()) {
+        persistDecodeCeiling();
+      } else {
+        sessionOnlyDecodeBoundHeights.add(failH);
+        Logger.info(
+          TAG,
+          `ABR: ${failH}p barred for this session only — software decode failing says nothing about the hardware path`,
+        );
+      }
     }
     this._abrPenaltyUntil = Math.max(
       this._abrPenaltyUntil,
