@@ -17,6 +17,9 @@ export class MoviVideoDecoder {
   private bindings: WasmBindings | null = null;
   private useSoftware: boolean = false;
   private _configuredCodecString: string = "";
+  /** Set when configure() had to drop `prefer-hardware` to get a supported
+   *  config — WebCodecs is decoding, but on the CPU. See isSoftwareBacked. */
+  private hardwareUnavailable: boolean = false;
 
 
   private pendingFrames: VideoFrame[] = [];
@@ -186,6 +189,10 @@ export class MoviVideoDecoder {
       );
     }
 
+    // Re-decided per configure: a different rendition (or codec) may well have
+    // a hardware path where this one didn't.
+    this.hardwareUnavailable = false;
+
     // const codecString = this.mapCodecToWebCodecs(track.codec, track.width, track.height, track.profile, track.level);
     if (!codecString) {
       Logger.error(TAG, `Unsupported codec: ${track.codec}`);
@@ -274,6 +281,13 @@ export class MoviVideoDecoder {
           Logger.info(TAG, `Hardware decode unavailable for ${config.codec}; using no-preference.`);
           delete config.hardwareAcceleration;
           support = supportNoHw;
+          // WebCodecs accepted it, but only by dropping to whatever the browser
+          // has — which here is the CPU. The decode is software; only the API
+          // in front of it is not. Recorded so the ABR's ceiling can see it:
+          // without this, an AV1 1440p rung with no hardware path sat at
+          // "Backpressure during sync: videoDecoder=61, videoBuffered=0" with
+          // the spinner up and no downshift, because isSoftware was false.
+          this.hardwareUnavailable = true;
         }
       }
 
@@ -1576,6 +1590,17 @@ export class MoviVideoDecoder {
    */
   get isSoftware(): boolean {
     return this.useSoftware;
+  }
+
+  /**
+   * True when the pixels are coming off the CPU — the WASM decoder OR a
+   * WebCodecs decoder configured with no hardware path available. The ABR's
+   * resolution ceiling asks this rather than isSoftware: "WebCodecs succeeded"
+   * is not the same as "hardware decoded", and treating them as the same left
+   * a 1440p AV1 rung stuck with a full decode queue and no downshift.
+   */
+  get isSoftwareBacked(): boolean {
+    return this.useSoftware || this.hardwareUnavailable;
   }
 
   get isWaitingForKeyframe(): boolean {

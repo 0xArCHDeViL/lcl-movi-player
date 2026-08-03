@@ -2062,7 +2062,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // past what the CPU can hold, but a session that is already sitting above
     // it — the hardware path failed and the fallback reloaded at the rung that
     // was playing — would just stay there and stutter. Come down at once.
-    if (activeIdx >= 0 && (this.isSoftwareDecoding() || webCodecsUnavailable()) && sinceSwitch > 3000) {
+    if (activeIdx >= 0 && this.decodingOnCpu() && sinceSwitch > 3000) {
       const ceilingH = softwareDecodeCeiling(
         this.videoDecoder?.configuredCodec || "",
       );
@@ -2335,7 +2335,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // bandwidth ceiling here (higher resolution ⇒ higher bandwidth on any sane
     // ladder, so this also excludes anything above them).
     // Software decode caps the ladder on its own — see softwareDecodeCeiling.
-    if (this.isSoftwareDecoding() || webCodecsUnavailable()) {
+    if (this.decodingOnCpu()) {
       const ceilingH = softwareDecodeCeiling(
         this.videoDecoder?.configuredCodec || "",
       );
@@ -9415,6 +9415,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   isSoftwareDecoding(): boolean {
     return this.videoDecoder ? this.videoDecoder.isSoftware : false;
+  }
+
+  /**
+   * Is the CPU carrying the decode? True for the WASM decoder, for a browser
+   * with no WebCodecs at all, and — the case that hid for a while — for a
+   * WebCodecs decoder that had to drop `prefer-hardware` because the rung has
+   * no hardware path. Chrome accepts AV1 1440p that way and decodes it on the
+   * CPU; the ladder ceiling has to treat all three the same, or the rung sits
+   * there with a full decode queue and the spinner up, never stepping down.
+   */
+  private decodingOnCpu(): boolean {
+    if (webCodecsUnavailable()) return true;
+    return this.videoDecoder ? this.videoDecoder.isSoftwareBacked : false;
   }
 
   /**
