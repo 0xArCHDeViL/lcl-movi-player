@@ -7805,6 +7805,19 @@ export class MoviElement extends HTMLElement {
     }
 
     const affordableBits = bits * 0.55;
+    // Software decode caps the ladder however fast the link is: at 1440p it is
+    // not playback on an ordinary machine. H.264 is the cheap one (720p); the
+    // modern codecs cost several times as much per pixel (480p). Applied to the
+    // OPENING pick too, so a software session never starts above what it can
+    // hold and then has to climb back down in front of the viewer.
+    const swCeiling =
+      this._sw === "software"
+        ? /^(avc1|h264|avc)/i.test(
+            (this._videoQualities.find((q) => q.codec)?.codec || "").split(".")[0],
+          )
+          ? 720
+          : 480
+        : Infinity;
     // A rung this device has already been shown not to decode is not a
     // candidate however fast the link is. The ABR honours the same list, but it
     // only gets to speak after playback starts — so without this the machine
@@ -7813,6 +7826,7 @@ export class MoviElement extends HTMLElement {
     let pick = smallest;
     for (const q of byBitrate) {
       if (barred.has(q.height)) continue;
+      if (q.height > swCeiling) continue;
       const b = q.bandwidth || this._estimateBitrate(q.height);
       if (b <= affordableBits) pick = q;
       else break;

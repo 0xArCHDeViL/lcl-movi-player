@@ -108,6 +108,19 @@ const REPRESENTATIVE_CODECS: Record<string, string> = {
   hevc: "hvc1.1.6.L153.90",
 };
 
+// What software decode can actually sustain, by codec family. Once the video is
+// being decoded in software, resolution is the only lever left, and Auto must
+// not climb past what the CPU can hold: 1440p in software is not playback on
+// any ordinary machine, whatever the link can carry. H.264 is the cheap one and
+// gets 720p; the modern codecs cost several times as much per pixel, so they
+// get 480p. Only applies while software is actually in use — a hardware path
+// keeps the full ladder.
+function softwareDecodeCeiling(codec: string): number {
+  const family = (codec || "").split(".")[0].toLowerCase();
+  if (/^(avc1|h264|avc)/.test(family)) return 720;
+  return 480;
+}
+
 const DECODE_CEILING_KEY = "movi:decode-ceiling";
 
 function loadPersistedDecodeCeiling(): void {
@@ -2008,6 +2021,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
 
+    // Same correction for SOFTWARE decode. The cap below stops Auto climbing
+    // past what the CPU can hold, but a session that is already sitting above
+    // it — the hardware path failed and the fallback reloaded at the rung that
+    // was playing — would just stay there and stutter. Come down at once.
+    if (activeIdx >= 0 && this.isSoftwareDecoding() && sinceSwitch > 3000) {
+      const ceilingH = softwareDecodeCeiling(
+        this.videoDecoder?.configuredCodec || "",
+      );
+      const active = rungs[activeIdx];
+      if ((active.height ?? 0) > ceilingH) {
+        const ok = rungs.find((r) => (r.height ?? 0) <= ceilingH);
+        if (ok && ok.url !== this._activeDashRendition) {
+          Logger.info(
+            TAG,
+            `ABR: software decode can't hold ${active.height}p — correcting to ${ok.label || ok.height + "p"}`,
+          );
+          await this.abrCommit(ok.url, now);
+          return;
+        }
+      }
+    }
+
     // How many seconds of video are buffered ahead of the playhead, and whether
     // that number is shrinking — the GROUND TRUTH for whether the current rung is
     // sustainable, independent of the throughput estimate. That estimate LAGS on
@@ -2262,6 +2297,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // holds across every video this session — convert the capped heights to a
     // bandwidth ceiling here (higher resolution ⇒ higher bandwidth on any sane
     // ladder, so this also excludes anything above them).
+    // Software decode caps the ladder on its own — see softwareDecodeCeiling.
+    if (this.isSoftwareDecoding()) {
+      const ceilingH = softwareDecodeCeiling(
+        this.videoDecoder?.configuredCodec || "",
+      );
+      let swCapBits = Number.POSITIVE_INFINITY;
+      for (const r of rungs) {
+        if ((r.height ?? 0) > ceilingH) {
+          swCapBits = Math.min(swCapBits, r.bandwidth || Number.POSITIVE_INFINITY);
+        }
+      }
+      if (swCapBits < Number.POSITIVE_INFINITY) {
+        affordableBits = Math.min(affordableBits, swCapBits - 1);
+      }
+    }
+
     if (deviceDecodeBoundHeights.size > 0) {
       let heightCapBits = Number.POSITIVE_INFINITY;
       for (const r of rungs) {
