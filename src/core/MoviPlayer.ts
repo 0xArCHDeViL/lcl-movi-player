@@ -194,6 +194,7 @@ async function screenLadderForDecode(
   activeCodec: string,
   activeHeight: number,
   screened: Set<string>,
+  mobile: boolean,
 ): Promise<void> {
     const caps = (
       navigator as unknown as {
@@ -268,12 +269,20 @@ async function screenLadderForDecode(
             ? "unsupported"
             : info?.smooth === false
               ? "not smooth"
-              : // Software decode is a verdict from 4K up. Not just at 8K:
-                // plenty of machines have no hardware path for a 4K codec and
-                // cannot carry it in software either. Below 4K it stays
-                // allowed — 1440p in software is ordinary on a mid laptop, and
-                // barring it would cost quality for no reason.
-                info?.powerEfficient === false && h >= 2160
+              : // Software decode is a verdict from 4K up on a desktop: plenty
+                // of machines have no hardware path for a 4K codec and cannot
+                // carry it in software either, while 1440p in software is
+                // ordinary on a mid laptop and barring it would cost quality
+                // for no reason.
+                //
+                // On a PHONE it is a verdict from 1440p. `powerEfficient:
+                // false` is exactly the case where configure() drops
+                // prefer-hardware and Chrome decodes AV1 1440p on the CPU —
+                // which on this hardware means a decode queue that fills, no
+                // frames out, and the spinner up for as long as you care to
+                // watch. The rung was screened, passed, and could never play.
+                info?.powerEfficient === false &&
+                h >= (mobile ? 1440 : 2160)
                 ? "software-decoded"
                 : "";
         if (verdict) {
@@ -422,7 +431,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     rungs: { height?: number; codec?: string; bandwidth?: number }[],
     fps = 30,
   ): Promise<void> {
-    await screenLadderForDecode(rungs, fps, "", 0, new Set<string>());
+    await screenLadderForDecode(
+      rungs,
+      fps,
+      "",
+      0,
+      new Set<string>(),
+      MoviPlayer._isMobileDevice,
+    );
   }
   // Adaptive-quality (ABR) state for the demuxer/premuxed in-place switch.
   private _autoQuality: boolean = false;
@@ -2585,6 +2601,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.videoDecoder?.configuredCodec || "",
       this.trackManager?.getActiveVideoTrack()?.height || 0,
       this._decodeScreened,
+      MoviPlayer._isMobileDevice,
     );
   }
 
