@@ -2530,6 +2530,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
           return;
         }
+        // Last word before committing: a rung the CPU cannot hold is not a
+        // candidate however fast the link is. The sizing cap earlier in this
+        // tick works through BANDWIDTH, which is a proxy — a rung whose
+        // bandwidth is missing or understated slips straight past it, and that
+        // is how "ABR upshift 480p → 720p: 65.8Mbps" happened on a browser with
+        // no WebCodecs, three seconds before "software decode can't hold 720p —
+        // correcting to 480p" took it back. This reads the height itself.
+        if (this.decodingOnCpu()) {
+          const ceilingH = softwareDecodeCeiling(
+            !!this.videoDecoder && !this.videoDecoder.isSoftware,
+          );
+          if ((up.height ?? 0) > ceilingH) {
+            this._abrUpCandidate = "";
+            this._abrUpConfirms = 0;
+            Logger.info(
+              TAG,
+              `ABR upshift to ${up.height}p refused — the CPU is decoding and can't hold past ${ceilingH}p`,
+            );
+            return;
+          }
+        }
         Logger.info(
           TAG,
           `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps sustained+probed, bufferAhead=${bufferAhead.toFixed(1)}s`,
