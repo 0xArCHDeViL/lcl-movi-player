@@ -220,7 +220,16 @@ export class AudioRenderer {
       // source/video switches — see sharedAudioContext above. Only mint a new
       // one on first use or if a prior one somehow ended up closed.
       if (!sharedAudioContext || sharedAudioContext.state === "closed") {
-        sharedAudioContext = new AudioContext({
+        // Open at the SOURCE's sample rate when we know it. Every decoded
+        // packet becomes its own AudioBufferSourceNode, and a buffer whose rate
+        // differs from the context's is resampled PER NODE — each one resampled
+        // in isolation, so every buffer boundary carries a small discontinuity.
+        // At 1024 frames / 44.1kHz that is a click roughly 43 times a second:
+        // the "pit pit" heard on a Chrome/Android whose output runs at 48kHz,
+        // and silent on devices that happen to run at 44.1kHz, where no
+        // resampling took place. Matching the rate here moves the conversion to
+        // the output mix, where it is one continuous stream.
+        const opts: AudioContextOptions = {
           // "interactive" gives Chromium's audio thread a shorter read-ahead
           // (~30–50ms vs ~150ms with "playback"). Without this, Chromium starves
           // when setPlaybackRate stops active sources and resets scheduledTime
@@ -229,9 +238,29 @@ export class AudioRenderer {
           // main-thread spikes; the audio decoder + Stable Audio gap-fill
           // already handle that case.
           latencyHint: "interactive",
-        });
+        };
+        if (this._sourceSampleRate > 0) opts.sampleRate = this._sourceSampleRate;
+        try {
+          sharedAudioContext = new AudioContext(opts);
+        } catch {
+          // Some devices refuse a rate outright — the browser's own is fine,
+          // it just costs the per-buffer resampling described above.
+          sharedAudioContext = new AudioContext({ latencyHint: "interactive" });
+        }
       }
       this.audioContext = sharedAudioContext;
+      // A shared context minted for an earlier source keeps its rate. Worth
+      // knowing when a "pit pit" report comes back: this line says the
+      // per-buffer resampling is still in play for this source.
+      if (
+        this._sourceSampleRate > 0 &&
+        this.audioContext.sampleRate !== this._sourceSampleRate
+      ) {
+        Logger.debug(
+          TAG,
+          `Context runs at ${this.audioContext.sampleRate}Hz, source is ${this._sourceSampleRate}Hz — buffers will be resampled per node`,
+        );
+      }
       // Inheriting an already-running shared context (a prior player kept it
       // alive) is itself proof audio is unlocked — latch it so the next
       // pause-suspended switch can wake without a gesture, even if the monitor
@@ -349,7 +378,13 @@ export class AudioRenderer {
   /**
    * Configure audio format (logs only, format is taken from AudioData)
    */
+  /** Decoded source sample rate, from configure(). 0 until the decoder reports. */
+  private _sourceSampleRate = 0;
+
   configure(sampleRate: number, channels: number): void {
+    // Remembered for init(): opening the context at the SOURCE's rate is what
+    // keeps Web Audio from resampling every buffer separately. See init().
+    if (sampleRate > 0) this._sourceSampleRate = sampleRate;
     Logger.info(TAG, `Configured: ${sampleRate}Hz, ${channels}ch`);
   }
 
