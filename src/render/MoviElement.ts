@@ -7997,6 +7997,26 @@ export class MoviElement extends HTMLElement {
     );
   }
 
+  /**
+   * The next rung DOWN from `src` in the ladder, or null when there isn't one.
+   *
+   * Ordered by height rather than bitrate here: this is answering "what else
+   * could this browser decode", and on a mixed ladder the codec changes with
+   * resolution — dropping a step in height is what crosses from AV1 back to
+   * H.264, which is the whole point.
+   */
+  private _lowerRungThan(
+    src: string | File | null,
+  ): { src: string; height: number; label: string } | null {
+    if (typeof src !== "string" || this._videoQualities.length < 2) return null;
+    const byHeight = [...this._videoQualities].sort(
+      (a, b) => (b.height || 0) - (a.height || 0),
+    );
+    const idx = byHeight.findIndex((q) => q.src === src);
+    if (idx < 0 || idx >= byHeight.length - 1) return null;
+    return byHeight[idx + 1];
+  }
+
   private _estimateBitrate(height: number): number {
     if (height <= 0) return 0;
     const tiers: [number, number][] = [
@@ -20892,9 +20912,26 @@ export class MoviElement extends HTMLElement {
         this.getAttribute("sw") !== "auto" && // Silent fallback for explicit "auto"
         !this._userAcceptedSoftwareFallback // ...or once accepted for this video: keep the auto software fallback silent
       ) {
+        // Before giving the viewer a dead end: the ladder usually holds a rung
+        // this browser CAN decode. Safari has no AV1 path at all, and a
+        // YouTube-style ladder is AV1 above 1080p and H.264 at or below — so
+        // "this codec won't decode" is an argument for a different RUNG, not
+        // for an error screen. Step down and try; the overlay is what's left
+        // when the ladder runs out.
+        const lower = this._lowerRungThan(this._src);
+        if (lower) {
+          Logger.warn(
+            TAG,
+            `Hardware decoding not supported for this rung — stepping down to ${lower.label || lower.height + "p"} instead of failing`,
+          );
+          this._src = lower.src;
+          this.isLoading = false;
+          void this.load();
+          return;
+        }
         Logger.warn(
           TAG,
-          "Hardware decoding not supported, falling back to software. Showing broken icon as per user request.",
+          "Hardware decoding not supported and no lower rung to fall to. Showing broken icon as per user request.",
         );
         this.handleUnsupportedVideo(
           "Format Unsupported",
