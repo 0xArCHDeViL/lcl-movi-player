@@ -7837,6 +7837,68 @@ export class MoviElement extends HTMLElement {
     }
     this._measuredStartBps = bits;
     await this._applyProbePick(bits, false);
+    await this._confirmStartPick();
+  }
+
+  /**
+   * Re-measure on the rung we actually chose, and step down while it doesn't
+   * fit.
+   *
+   * The first probe reads ONE mid rung and that number sizes the whole ladder —
+   * but googlevideo paces each stream to its own bitrate, so a mid rung's rate
+   * is not what the 8K rung will deliver. Getting it wrong doesn't cost the
+   * second this spends: it costs a stall, an in-place rendition switch, and the
+   * viewer watching the quality fall in front of them. One more probe is the
+   * cheaper side of that trade.
+   *
+   * Bounded to two extra probes, and only ever steps DOWN — a confirmation
+   * can't talk the opening pick up.
+   */
+  private async _confirmStartPick(): Promise<void> {
+    if (typeof this._src !== "string") return;
+    const byBitrate = [...this._videoQualities].sort(
+      (a, b) =>
+        (a.bandwidth || this._estimateBitrate(a.height)) -
+        (b.bandwidth || this._estimateBitrate(b.height)),
+    );
+    let idx = byBitrate.findIndex((q) => q.src === this._src);
+    // Already on the cheapest rung (or the pick isn't in the ladder) — there is
+    // nothing a confirmation could change.
+    if (idx <= 0) return;
+
+    for (let attempt = 0; attempt < 2 && idx > 0; attempt++) {
+      const q = byBitrate[idx];
+      const needs = q.bandwidth || this._estimateBitrate(q.height);
+      const bits = await probeLinkBandwidth(q.src, {
+        headers: this._headers || undefined,
+        skipBytes: 2_000_000,
+        measureBytes: 900_000,
+        timeoutMs: 6000,
+      });
+      // Unmeasurable says nothing either way — keep what the ladder-wide
+      // measurement chose rather than punishing the rung for a failed probe.
+      if (bits <= 0) {
+        Logger.info(
+          TAG,
+          `Opening rung ${q.label || q.height + "p"} unconfirmed — probe returned nothing, keeping it`,
+        );
+        return;
+      }
+      this._measuredStartBps = bits;
+      if (bits * 0.55 >= needs) {
+        Logger.info(
+          TAG,
+          `Opening rung ${q.label || q.height + "p"} confirmed on its own stream: ${(bits / 1e6).toFixed(1)}Mbps for a ${(needs / 1e6).toFixed(1)}Mbps rung`,
+        );
+        return;
+      }
+      idx--;
+      this._src = byBitrate[idx].src;
+      Logger.info(
+        TAG,
+        `Opening rung ${q.label || q.height + "p"} needs ${(needs / 1e6).toFixed(1)}Mbps but its own stream measured ${(bits / 1e6).toFixed(1)}Mbps — stepping down to ${byBitrate[idx].label || byBitrate[idx].height + "p"}`,
+      );
+    }
   }
 
   /**
