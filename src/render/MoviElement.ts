@@ -8798,7 +8798,16 @@ export class MoviElement extends HTMLElement {
     // (display-capped); sustained < 60% of that means the decoder is dropping a
     // lot of frames. Profile-agnostic: works for any heavy source (4K/8K,
     // high-bitrate, software decode) that can't keep up above 1x.
-    const expected = Math.min(60, h.sourceFps * this._playbackRate);
+    // …measured against what the renderer is actually TRYING to present. Once
+    // it caps itself ("Adaptive FPS: sustained ~27/60fps — capping presentation
+    // to 30fps"), 30 is the target and 27 of them is healthy — but this went on
+    // dividing by the source's 60 and read 27/60 as judder, so the spinner sat
+    // there over playback that was fine and deliberate.
+    const capFps = this.pictureRenderer()?.presentFpsCap || 0;
+    const expected =
+      capFps > 0
+        ? capFps
+        : Math.min(60, h.sourceFps * this._playbackRate);
 
     // Say so while the picture is JUDDERING. Presenting 25 of 60 frames a
     // second is not playback the viewer asked for — it is the pipeline failing
@@ -24216,11 +24225,14 @@ export class MoviElement extends HTMLElement {
    */
   /** The canvas renderer, when there is one — it owns the shader-side cut. */
   private pictureRenderer():
-    | { setCornerRadius?: (px: number) => void }
+    | { setCornerRadius?: (px: number) => void; presentFpsCap?: number }
     | undefined {
     return (
       this.player as unknown as {
-        videoRenderer?: { setCornerRadius?: (px: number) => void };
+        videoRenderer?: {
+          setCornerRadius?: (px: number) => void;
+          presentFpsCap?: number;
+        };
       } | null
     )?.videoRenderer;
   }

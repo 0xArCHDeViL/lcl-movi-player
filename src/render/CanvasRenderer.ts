@@ -1497,6 +1497,15 @@ export class CanvasRenderer {
    * is owned by the renderer and may be closed on the next present, so consume
    * it synchronously.
    */
+  /**
+   * Presentation rate the renderer has deliberately capped itself to, or 0 when
+   * uncapped. A cap is a DECISION, not a failure — the source's own fps stops
+   * being the number to judge against the moment one is set.
+   */
+  get presentFpsCap(): number {
+    return this._presentFpsCap || 0;
+  }
+
   getCurrentFrame(): RenderSource | null {
     return this.lastRenderedFrame;
   }
