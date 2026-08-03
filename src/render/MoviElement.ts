@@ -8607,8 +8607,18 @@ export class MoviElement extends HTMLElement {
    * seconds legitimately present few frames. Sampling ignores them until the
    * grace passes, giving the pipeline headroom to settle before we judge it.
    */
+  private static readonly JUDDER_RATIO = 0.6; // < 60% of the expected frames
+  private static readonly JUDDER_SECONDS = 2; // consecutive bad seconds
+  private _judderSeconds = 0;
+  private _juddering = false;
+
   private resetStutterHint(): void {
     this._stutterSeconds = 0;
+    this._judderSeconds = 0;
+    if (this._juddering) {
+      this._juddering = false;
+      this.updateLoadingIndicator();
+    }
     this._stutterCooldown = false;
     this._stutterGraceUntil = performance.now() + MoviElement.STUTTER_GRACE_MS;
     if (this._stutterCooldownTimer !== null) {
@@ -8659,6 +8669,24 @@ export class MoviElement extends HTMLElement {
     // lot of frames. Profile-agnostic: works for any heavy source (4K/8K,
     // high-bitrate, software decode) that can't keep up above 1x.
     const expected = Math.min(60, h.sourceFps * this._playbackRate);
+
+    // Say so while the picture is JUDDERING. Presenting 25 of 60 frames a
+    // second is not playback the viewer asked for — it is the pipeline failing
+    // to keep up, and showing it silently reads as the player being broken.
+    // The spinner is the honest signal: the same one every other interruption
+    // uses. Two bad seconds before it appears (one slow window is a hiccup, not
+    // a state) and it goes the moment a good second lands.
+    if (presented < expected * MoviElement.JUDDER_RATIO) {
+      this._judderSeconds++;
+    } else {
+      this._judderSeconds = 0;
+    }
+    const juddering = this._judderSeconds >= MoviElement.JUDDER_SECONDS;
+    if (juddering !== this._juddering) {
+      this._juddering = juddering;
+      this.updateLoadingIndicator();
+    }
+
     if (this._playbackRate > 1 && presented < expected * 0.6) {
       this._stutterSeconds++;
     } else {
@@ -23018,6 +23046,12 @@ export class MoviElement extends HTMLElement {
     // and the clock run right through it — so none of the states above catch
     // it, and the picture just sits there while the new rendition opens.
     if (this._renditionSwitching) {
+      shouldShow = true;
+    }
+
+    // …and while the picture is juddering: the state stays "playing" — frames
+    // ARE arriving — but too few of them to be playback. See sampleStutter.
+    if (this._juddering && currentState === "playing") {
       shouldShow = true;
     }
 
