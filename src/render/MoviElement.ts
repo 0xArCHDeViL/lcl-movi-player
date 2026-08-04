@@ -37,6 +37,48 @@ import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 const TAG = "MoviElement";
 
 /**
+ * Last measured link rate, so the opening pick doesn't have to buy the same
+ * number twice.
+ *
+ * The pre-play probe used to spend a request and ~3MB measuring a rung it
+ * often wasn't going to play. A rate measured minutes ago describes the same
+ * link, and the confirm pass — which reads the head of the rung we DO open and
+ * keeps those bytes — re-measures it for free on every load. Stale entries are
+ * ignored rather than trusted: a link changes (wifi → cellular), and the first
+ * load after that should measure again.
+ */
+const LINK_BPS_KEY = "movi:link-bps";
+const LINK_BPS_TTL_MS = 6 * 60 * 60 * 1000;
+let sessionLinkBps = 0;
+let sessionLinkBpsAt = 0;
+
+function loadPersistedLinkBps(): number {
+  if (sessionLinkBps > 0 && Date.now() - sessionLinkBpsAt < LINK_BPS_TTL_MS) {
+    return sessionLinkBps;
+  }
+  try {
+    const raw = localStorage.getItem(LINK_BPS_KEY);
+    if (!raw) return 0;
+    const { bps, ts } = JSON.parse(raw) as { bps: number; ts: number };
+    if (!(bps > 0) || Date.now() - ts > LINK_BPS_TTL_MS) return 0;
+    return bps;
+  } catch {
+    return 0; // private mode / bad JSON — measure instead
+  }
+}
+
+function persistLinkBps(bps: number): void {
+  if (!(bps > 0)) return;
+  sessionLinkBps = bps;
+  sessionLinkBpsAt = Date.now();
+  try {
+    localStorage.setItem(LINK_BPS_KEY, JSON.stringify({ bps, ts: Date.now() }));
+  } catch {
+    /* storage unavailable — the session value still holds */
+  }
+}
+
+/**
  * The engines that can play a source, in the order the `engine` attribute may
  * name them: Movi's own WASM demuxer + WebCodecs pipeline, the three MSE stream
  * engines, and the browser's own `<video>`.
@@ -7800,6 +7842,27 @@ export class MoviElement extends HTMLElement {
     const smallest = byBitrate[0];
     if (!smallest?.src) return;
 
+    // A link rate measured moments ago — this session, or the last one — is a
+    // better starting point than another 3MB spent measuring. Seed the pick
+    // from it and go straight to the confirm pass, which probes the rung we
+    // actually intend to open, keeps its bytes as the opening buffer, and
+    // steps down if the rate has fallen since. The measurement that used to
+    // cost its own request now comes from bytes we needed anyway.
+    const seed = loadPersistedLinkBps();
+    if (seed > 0) {
+      Logger.info(
+        TAG,
+        `Pre-play: seeding from the last measured link (${(seed / 1e6).toFixed(1)}Mbps) — no separate probe`,
+      );
+      this._measuredStartBps = seed;
+      await this._applyProbePick(seed, false);
+      // The confirm pass is what makes this safe: it reads the head of the
+      // rung the seed chose, re-measures the link from those bytes, hands them
+      // over as the opening buffer, and steps down if the link has fallen.
+      await this._confirmStartPick();
+      return;
+    }
+
     // Probe a MID rung, not the smallest. The smallest rung's whole file can be
     // just a couple of MB (a 144p clip of a short video), too small to skip the
     // proxy burst AND time a tail — the probe hit EOF and returned nothing, so
@@ -7837,6 +7900,7 @@ export class MoviElement extends HTMLElement {
       return;
     }
     this._measuredStartBps = bits;
+    persistLinkBps(bits);
     await this._applyProbePick(bits, false);
     await this._confirmStartPick();
   }
@@ -7881,6 +7945,7 @@ export class MoviElement extends HTMLElement {
         return;
       }
       this._measuredStartBps = bits;
+      persistLinkBps(bits);
       if (bits * 0.55 >= needs) {
         Logger.info(
           TAG,
