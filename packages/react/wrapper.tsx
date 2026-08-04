@@ -56,6 +56,14 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
 
     // Reflect declarative attributes onto the element every render. Booleans
     // become presence/absence; everything else becomes a string attribute.
+    //
+    // Written ONLY when the value actually differs. This effect has no
+    // dependency array — it runs on every render of the host, including ones
+    // that have nothing to do with the player (expanding a description,
+    // opening a menu). Re-setting an attribute to the value it already has
+    // still fires attributeChangedCallback, and for a source-affecting
+    // attribute that means a reload: clicking "Show more" restarted playback
+    // from 30s back to 0.
     React.useEffect(() => {
       const el = elRef.current;
       if (!el) return;
@@ -63,10 +71,13 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
         if (EVENT_PROPS.has(key) || value === undefined || value === null) continue;
         const attr = key.toLowerCase();
         if (typeof value === "boolean") {
+          if (value === el.hasAttribute(attr)) continue;
           if (value) el.setAttribute(attr, "");
           else el.removeAttribute(attr);
         } else {
-          el.setAttribute(attr, String(value));
+          const next = String(value);
+          if (el.getAttribute(attr) === next) continue;
+          el.setAttribute(attr, next);
         }
       }
     });

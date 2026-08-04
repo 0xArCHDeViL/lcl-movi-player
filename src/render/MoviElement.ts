@@ -19626,6 +19626,14 @@ export class MoviElement extends HTMLElement {
     _oldValue: string | null,
     newValue: string | null,
   ) {
+    // A write that changes nothing is not a change. Hosts re-set attributes on
+    // renders that have nothing to do with the player — a React wrapper
+    // reflecting props in an effect with no dependency array does it on every
+    // one — and for a source-affecting attribute that used to mean a full
+    // reload: expanding a description restarted playback from 30s back to 0.
+    // The wrapper no longer writes no-ops either; this is the guard for every
+    // other host that might.
+    if (_oldValue === newValue) return;
     switch (name) {
       case "wasmurl":
         // Also handled here, not just in connectedCallback: a framework wrapper
