@@ -2657,6 +2657,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
           return;
         }
+        // Another probe already running is not a measurement of anything —
+        // wait for the next tick rather than let the fallback decide. The
+        // candidate and its confirmations stand.
+        if (this._abrProbeInFlight) return;
         const rawProbeBits = await this.probeRungThroughput(up.url);
         // A rung gets probed again every time it comes up as a candidate, and
         // committing on the first reading that clears the bar is choosing the
@@ -2670,14 +2674,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // one decides: two independent reads must agree before the ladder moves
         // into it. A link that genuinely improved says so on its next probe and
         // the climb costs one extra cycle; a spike says it once and is outvoted.
-        const probeBits =
-          rawProbeBits > 0 && prior && priorAge < MoviPlayer.ABR_PROBE_FRESH_MS
-            ? Math.min(rawProbeBits, prior.bits)
-            : rawProbeBits;
+        const priorFresh =
+          prior && priorAge < MoviPlayer.ABR_PROBE_FRESH_MS ? prior : null;
+        let probeBits: number;
         if (rawProbeBits > 0) {
+          probeBits = priorFresh
+            ? Math.min(rawProbeBits, priorFresh.bits)
+            : rawProbeBits;
           this._rungProbeBits.set(up.url, { bits: rawProbeBits, at: now });
           this._lastProbeBits = probeBits;
           this._lastProbeAt = now;
+        } else if (priorFresh) {
+          // A probe that returns nothing is "don't know", and don't-know must
+          // not become yes. It used to: the fallback below hands the decision
+          // to the sustained estimate, which is measured on the rung being
+          // LEFT and, on a paused player, is stale on top of that. This rung
+          // had been read twice at 24.7Mbps against a 25.9Mbps need and
+          // refused both times; one unmeasurable probe later, a 52.3Mbps
+          // number about another stream put 8K on screen. The readings we
+          // already have are better evidence than a number about a different
+          // file, and they stand until they go stale.
+          probeBits = priorFresh.bits;
+        } else {
+          probeBits = rawProbeBits; // nothing known — the sustained estimate decides
         }
         // MIN normally: with a shallow buffer the sustained number is a real
         // ceiling and the probe must not talk the estimate up past it.
@@ -2744,7 +2763,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
         Logger.info(
           TAG,
-          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps ${probeBits > 0 ? (paced ? "probed on the target rung" : "sustained∧probed") : "sustained"}, bufferAhead=${bufferAhead.toFixed(1)}s`,
+          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps ${probeBits <= 0 ? "sustained" : rawProbeBits <= 0 ? "last reading of the target rung" : paced ? "probed on the target rung" : "sustained∧probed"}, bufferAhead=${bufferAhead.toFixed(1)}s`,
         );
         await this.abrCommit(up.url, now);
       }
@@ -2808,7 +2827,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         headers: { Range: `bytes=0-${PROBE_BYTES - 1}`, ...(this.config.headers || {}) },
         signal: ctl.signal,
       });
-      if ((!res.ok && res.status !== 206) || !res.body) return -1;
+      if ((!res.ok && res.status !== 206) || !res.body) {
+        Logger.debug(TAG, `Rung probe: no body (HTTP ${res.status})`);
+        return -1;
+      }
 
       let total = 0;
       let timedBytes = 0;
@@ -2827,17 +2849,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const totalSecs = (performance.now() - startedAt) / 1000;
       // A body that arrived faster than any link could deliver it came from a
       // cache, not the network — no measurement beats a fictional one.
-      if (totalSecs < 0.03 || total < 262144) return -1;
+      if (totalSecs < 0.03 || total < 262144) {
+        Logger.debug(
+          TAG,
+          `Rung probe: ${(total / 1024) | 0}KB in ${(totalSecs * 1000) | 0}ms — cache or short read, not the link`,
+        );
+        return -1;
+      }
       // The chunk that starts the clock isn't counted, so a body that arrived
       // in one piece past the burst leaves nothing to time. Fall back to the
       // whole slice — burst-inflated, but the alternative is no number at all.
       if (timedBytes === 0) {
-        return totalSecs >= 0.15 ? (total / totalSecs) * 8 : -1;
+        if (totalSecs >= 0.15) return (total / totalSecs) * 8;
+        Logger.debug(TAG, `Rung probe: whole slice in ${(totalSecs * 1000) | 0}ms — too quick to time`);
+        return -1;
       }
       const timedSecs = (performance.now() - timingStart) / 1000;
-      if (timedSecs < 0.05) return -1;
+      if (timedSecs < 0.05) {
+        Logger.debug(TAG, `Rung probe: only ${(timedSecs * 1000) | 0}ms past the burst — too short to time`);
+        return -1;
+      }
       return (timedBytes / timedSecs) * 8;
-    } catch {
+    } catch (e) {
+      Logger.debug(TAG, `Rung probe failed: ${(e as Error)?.name || e}`);
       return -1;
     } finally {
       clearTimeout(timer);
