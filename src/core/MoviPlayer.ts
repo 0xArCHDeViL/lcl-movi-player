@@ -2635,8 +2635,47 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // fast link reads fast on BOTH; a slow link stays gated by whichever is
         // lower. So the probe only ever catches a stale-high estimate, it can't
         // inflate a real one.
-        const probeBits = await this.probeRungThroughput(up.url);
-        if (probeBits > 0) {
+        // A candidate that keeps confirming gets probed every couple of ticks,
+        // and each probe is 2.4MB of real download. When the last reading of
+        // this rung is recent AND was short of what the rung needs, it already
+        // has its answer — re-measuring can only spend bytes to hear it again,
+        // and on a paused player it was doing so on repeat. Reused only in the
+        // direction that REFUSES; a reading that would authorise a climb is
+        // always re-taken, because that is the one the vote below exists for.
+        const prior = this._rungProbeBits.get(up.url);
+        const priorAge = prior ? now - prior.at : Number.POSITIVE_INFINITY;
+        if (
+          prior &&
+          priorAge < MoviPlayer.ABR_PROBE_MIN_GAP_MS &&
+          prior.bits * 0.85 < (up.bandwidth || 0)
+        ) {
+          this._abrUpCandidate = "";
+          this._abrUpConfirms = 0;
+          Logger.debug(
+            TAG,
+            `ABR upshift to ${up.label || up.bandwidth} held — ${(prior.bits / 1e6).toFixed(1)}Mbps measured ${((priorAge / 1000) | 0)}s ago still stands`,
+          );
+          return;
+        }
+        const rawProbeBits = await this.probeRungThroughput(up.url);
+        // A rung gets probed again every time it comes up as a candidate, and
+        // committing on the first reading that clears the bar is choosing the
+        // best of N tries — which, with a variable link, is a near-certainty
+        // given enough tries. This rung was read at 18.3, then 21.4, then
+        // 30.6Mbps against a 25.9Mbps need, and the third reading — clearing by
+        // 0.4% — is what put an 8K stream on screen that the link then could
+        // not feed. The honest summary of those three numbers is "about 20".
+        //
+        // So a fresh earlier reading of the SAME rung has a vote, and the lower
+        // one decides: two independent reads must agree before the ladder moves
+        // into it. A link that genuinely improved says so on its next probe and
+        // the climb costs one extra cycle; a spike says it once and is outvoted.
+        const probeBits =
+          rawProbeBits > 0 && prior && priorAge < MoviPlayer.ABR_PROBE_FRESH_MS
+            ? Math.min(rawProbeBits, prior.bits)
+            : rawProbeBits;
+        if (rawProbeBits > 0) {
+          this._rungProbeBits.set(up.url, { bits: rawProbeBits, at: now });
           this._lastProbeBits = probeBits;
           this._lastProbeAt = now;
         }
@@ -2735,8 +2774,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  abrTick. */
   private _lastProbeBits = 0;
   private _lastProbeAt = 0;
+  /** Last probe reading per rung URL — the second opinion an upshift needs
+   *  before the ladder moves into that rung. See the vote in abrTick. */
+  private _rungProbeBits = new Map<string, { bits: number; at: number }>();
   /** How long a probe reading stays fresh enough to size a candidate from. */
   private static readonly ABR_PROBE_FRESH_MS = 60_000;
+  /** How long a rung's own refusal stands before it is worth spending another
+   *  2.4MB to re-ask. Two ABR ticks and a little. */
+  private static readonly ABR_PROBE_MIN_GAP_MS = 10_000;
 
   private async probeRungThroughput(url: string): Promise<number> {
     if (this._abrProbeInFlight || this._destroyed) return -1;
