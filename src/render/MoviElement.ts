@@ -8145,6 +8145,7 @@ export class MoviElement extends HTMLElement {
     const HEAD_BYTES = 3_000_000; // enough for moov + the first GOP
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 6000);
+    const startedAt = performance.now();
     try {
       const res = await fetch(url, {
         headers: {
@@ -8171,6 +8172,17 @@ export class MoviElement extends HTMLElement {
           if (timingStart === 0) timingStart = performance.now();
           else timedBytes += value.byteLength;
         }
+      }
+      // The chunk that STARTS the clock is deliberately not counted, which is
+      // right — but if the rest of the body arrived as that single chunk there
+      // is nothing left to count, and the probe reported "nothing measured" on
+      // a download that plainly worked. Seen on Safari: 2.9MB fetched, warmed,
+      // and still "probe returned nothing", so the seed was never re-checked
+      // and the pick never got its chance to move up. Fall back to timing the
+      // whole body — a burst-inflated number beats no number.
+      if (timedBytes === 0 && total > 0) {
+        timingStart = timingStart || startedAt;
+        timedBytes = total;
       }
 
       const head = new Uint8Array(total);
