@@ -2165,6 +2165,19 @@ export class HttpSource implements SourceAdapter {
     const currentBufferEnd = this.bufferEnd;
     const bufferStart = this.atomicGetBufferStart();
 
+    // Reading inside the head cache. Those bytes are buffered — they are just
+    // not in the STREAMING window, which is still at zero because nothing has
+    // been fetched yet. Without this the clamp below returns `position`, so
+    // forward = end - position = 0, and callers conclude nothing is buffered:
+    // the freeze watchdog took a healthy 1080p down to 720p on that reading
+    // ("ABR emergency downshift (starved 0.0s at 5.0s)") while every read was
+    // being served from this very cache.
+    const headEnd = this.headBuffer?.length ?? 0;
+    if (headEnd > this.position) {
+      const end = Math.max(headEnd, currentBufferEnd);
+      return this.size > 0 ? Math.min(end, this.size) : end;
+    }
+
     // If the current read position is outside the buffer window, the buffer
     // doesn't cover us — there is nothing forward-buffered at the new spot
     // yet. Report position itself so "forward = bufferedEnd - position = 0".
