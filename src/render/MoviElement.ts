@@ -17319,7 +17319,11 @@ export class MoviElement extends HTMLElement {
          belongs to the things that carry the state. */
       .movi-context-menu-item.movi-context-menu-active {
         background-color: color-mix(in srgb, var(--movi-primary) 13%, transparent);
-        box-shadow: 0 4px 16px color-mix(in srgb, var(--movi-primary) 14%, transparent);
+        /* The bloom takes the SECONDARY colour, so the card reads as two tones
+           rather than one flat wash: primary in the fill, its partner in the
+           light around it. Falls back to primary where no secondary is set, so
+           a single-colour theme looks exactly as it did. */
+        box-shadow: 0 4px 16px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 14%, transparent);
       }
 
       /* The rail: small, rounded, tucked inside the card's left edge. */
