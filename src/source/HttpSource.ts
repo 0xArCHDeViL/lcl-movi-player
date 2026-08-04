@@ -76,6 +76,25 @@ export class HttpSource implements SourceAdapter {
   // Persistent Cache
   private headBuffer: Uint8Array | null = null;
 
+  /**
+   * Opening bytes handed over by whoever fetched them first, keyed by URL.
+   *
+   * The pre-play probe used to download ~3MB purely to time the link and throw
+   * every byte away — then this source downloaded the same opening bytes again.
+   * Now the probe reads the head of the rung it is measuring and leaves it
+   * here; `read()` already checks headBuffer before touching the network, so
+   * the demuxer's first reads are served without a request.
+   *
+   * One entry, replaced on each offer: only the rung about to open matters.
+   */
+  private static warmHead: { url: string; bytes: Uint8Array } | null = null;
+
+  /** Hand over opening bytes for a URL that is about to be opened. */
+  static offerWarmHead(url: string, bytes: Uint8Array): void {
+    if (!url || bytes.byteLength === 0) return;
+    HttpSource.warmHead = { url, bytes };
+  }
+
   // Metadata LRU (see top-of-file comment). Keyed by absolute file offset
   // → the cached bytes. JS Map preserves insertion order; on hit we
   // delete+re-insert to bump to most-recent. Only small reads enter.
@@ -201,6 +220,18 @@ export class HttpSource implements SourceAdapter {
     this.url = url;
     this.headers = headers;
     this.maxBufferSizeMB = maxBufferSizeMB ?? DEFAULT_MAX_BUFFER_SIZE_MB;
+    // Claim the opening bytes if the probe fetched this exact URL. Consumed
+    // (not just read) so a later source for a different rung can't inherit
+    // another rung's head — that would hand the demuxer the wrong file.
+    const warm = HttpSource.warmHead;
+    if (warm && warm.url === url) {
+      this.headBuffer = warm.bytes;
+      HttpSource.warmHead = null;
+      Logger.info(
+        TAG,
+        `Opening ${(warm.bytes.byteLength / 1024 / 1024).toFixed(1)}MB served from the pre-play probe — no re-fetch`,
+      );
+    }
     this.initBuffer();
   }
 

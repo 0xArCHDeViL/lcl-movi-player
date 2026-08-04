@@ -24,6 +24,7 @@ import type {
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 import type { SourceAdapter } from "../source/SourceAdapter";
+import { HttpSource } from "../source/HttpSource";
 import { isOpenableScheme } from "../source/adapterRegistry";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
@@ -7869,12 +7870,7 @@ export class MoviElement extends HTMLElement {
     for (let attempt = 0; attempt < 2 && idx > 0; attempt++) {
       const q = byBitrate[idx];
       const needs = q.bandwidth || this._estimateBitrate(q.height);
-      const bits = await probeLinkBandwidth(q.src, {
-        headers: this._headers || undefined,
-        skipBytes: 2_000_000,
-        measureBytes: 900_000,
-        timeoutMs: 6000,
-      });
+      const bits = await this._probeHeadAndWarm(q.src);
       // Unmeasurable says nothing either way — keep what the ladder-wide
       // measurement chose rather than punishing the rung for a failed probe.
       if (bits <= 0) {
@@ -7995,6 +7991,70 @@ export class MoviElement extends HTMLElement {
       TAG,
       `Pre-play speed test: ${(bits / 1e6).toFixed(1)}Mbps → opening on ${pick.label || pick.height + "p"}${softwareCertain ? " (software decode — ladder capped)" : ""}${reapplied ? " (re-applied — the src was rewritten)" : ""}`,
     );
+  }
+
+  /**
+   * Read the head of a rung, keep the bytes, and time the part of the download
+   * that means something.
+   *
+   * The old probe skipped 2MB to get past the CDN's opening burst and then
+   * timed 900KB — ~3MB downloaded and every byte discarded, after which the
+   * source fetched the same opening bytes over again. This keeps both halves:
+   * everything read is handed to HttpSource as the opening buffer, and only
+   * what arrives AFTER the burst window is timed, so the number is still a
+   * measurement of the link rather than of the cache in front of it.
+   */
+  private async _probeHeadAndWarm(url: string): Promise<number> {
+    const BURST_BYTES = 1_000_000; // ignored for timing — this is the burst
+    const HEAD_BYTES = 3_000_000; // enough for moov + the first GOP
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          ...(this._headers || {}),
+          Range: `bytes=0-${HEAD_BYTES - 1}`,
+        },
+        signal: ctl.signal,
+      });
+      if (!res.ok || !res.body) return 0;
+
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let timedBytes = 0;
+      let timingStart = 0;
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        chunks.push(value);
+        total += value.byteLength;
+        if (total > BURST_BYTES) {
+          // First chunk past the burst starts the clock; everything after it
+          // is what the link actually sustains.
+          if (timingStart === 0) timingStart = performance.now();
+          else timedBytes += value.byteLength;
+        }
+      }
+
+      const head = new Uint8Array(total);
+      let at = 0;
+      for (const c of chunks) {
+        head.set(c, at);
+        at += c.byteLength;
+      }
+      // Even a probe that couldn't be timed leaves its bytes behind — the
+      // download already happened, and the source would only repeat it.
+      HttpSource.offerWarmHead(url, head);
+
+      const secs = timingStart > 0 ? (performance.now() - timingStart) / 1000 : 0;
+      if (secs <= 0 || timedBytes <= 0) return 0;
+      return (timedBytes * 8) / secs;
+    } catch {
+      return 0; // aborted / network error — the ladder-wide number stands
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
