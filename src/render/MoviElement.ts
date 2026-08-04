@@ -107,7 +107,8 @@ function loadPersistedLinkBps(): number {
       ts: number;
       sig?: string;
     };
-    if (!(bps > 0) || Date.now() - ts > LINK_BPS_TTL_MS) return 0;
+    if (!(bps > 0) || bps > LINK_BPS_SANE_MAX) return 0;
+    if (Date.now() - ts > LINK_BPS_TTL_MS) return 0;
     // A signature we can read and that disagrees means a different network.
     // An absent one (either side) just falls back to the TTL.
     if (sig && storedSig && storedSig !== sig) return 0;
@@ -119,8 +120,13 @@ function loadPersistedLinkBps(): number {
 
 let sessionLinkSig = "";
 
+// No home link delivers this. Anything above it is a measurement artefact —
+// a cache hit, a clock that barely moved — and remembering it would seed the
+// next load's pick with a number nothing can live up to.
+const LINK_BPS_SANE_MAX = 2_000_000_000;
+
 function persistLinkBps(bps: number): void {
-  if (!(bps > 0)) return;
+  if (!(bps > 0) || bps > LINK_BPS_SANE_MAX) return;
   sessionLinkBps = bps;
   sessionLinkBpsAt = Date.now();
   sessionLinkSig = connectionSignature();
@@ -8183,6 +8189,20 @@ export class MoviElement extends HTMLElement {
       if (timedBytes === 0 && total > 0) {
         timingStart = timingStart || startedAt;
         timedBytes = total;
+      }
+
+      // A body that arrived faster than any link could deliver it didn't come
+      // over the link — it came from the browser's cache, and it says nothing
+      // about the network. Reported as a measurement it produced "24000.0Mbps"
+      // and, worse, that number was remembered and seeded the NEXT load's pick.
+      // Better to have no measurement than a fictional one.
+      const totalSecs = (performance.now() - startedAt) / 1000;
+      if (totalSecs < 0.03) {
+        Logger.info(
+          TAG,
+          `Head probe served from cache in ${(totalSecs * 1000).toFixed(0)}ms — link not measured`,
+        );
+        return 0;
       }
 
       const head = new Uint8Array(total);
