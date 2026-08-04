@@ -48,31 +48,87 @@ const TAG = "MoviElement";
  * load after that should measure again.
  */
 const LINK_BPS_KEY = "movi:link-bps";
-const LINK_BPS_TTL_MS = 6 * 60 * 60 * 1000;
+// Generous, because a clock is the WEAK test here: an estimate goes stale when
+// the network changes, not when time passes. On the same wifi a day-old number
+// is still true; one minute after switching to cellular it is a lie. The
+// connection signature below is the real check; this is the fallback for
+// browsers that don't expose one (Safari, Firefox).
+const LINK_BPS_TTL_MS = 24 * 60 * 60 * 1000;
 let sessionLinkBps = 0;
 let sessionLinkBpsAt = 0;
 
+type NetInfo = {
+  effectiveType?: string;
+  downlink?: number;
+  addEventListener?: (t: string, fn: () => void) => void;
+};
+
+function netInfo(): NetInfo | undefined {
+  return (navigator as unknown as { connection?: NetInfo }).connection;
+}
+
+/** What the link looks like right now — "4g/10" — or "" where unavailable. */
+function connectionSignature(): string {
+  const c = netInfo();
+  if (!c) return "";
+  const dl = typeof c.downlink === "number" ? Math.round(c.downlink) : "";
+  return `${c.effectiveType || ""}/${dl}`;
+}
+
+// Switching networks mid-session invalidates the estimate immediately — no
+// waiting for a TTL that was never measuring the right thing.
+if (typeof navigator !== "undefined") {
+  netInfo()?.addEventListener?.("change", () => {
+    sessionLinkBps = 0;
+    sessionLinkBpsAt = 0;
+    try {
+      localStorage.removeItem(LINK_BPS_KEY);
+    } catch {
+      /* nothing to clear */
+    }
+    Logger.info(TAG, "Connection changed — dropping the remembered link rate");
+  });
+}
+
 function loadPersistedLinkBps(): number {
-  if (sessionLinkBps > 0 && Date.now() - sessionLinkBpsAt < LINK_BPS_TTL_MS) {
+  const sig = connectionSignature();
+  if (
+    sessionLinkBps > 0 &&
+    Date.now() - sessionLinkBpsAt < LINK_BPS_TTL_MS &&
+    sessionLinkSig === sig
+  ) {
     return sessionLinkBps;
   }
   try {
     const raw = localStorage.getItem(LINK_BPS_KEY);
     if (!raw) return 0;
-    const { bps, ts } = JSON.parse(raw) as { bps: number; ts: number };
+    const { bps, ts, sig: storedSig } = JSON.parse(raw) as {
+      bps: number;
+      ts: number;
+      sig?: string;
+    };
     if (!(bps > 0) || Date.now() - ts > LINK_BPS_TTL_MS) return 0;
+    // A signature we can read and that disagrees means a different network.
+    // An absent one (either side) just falls back to the TTL.
+    if (sig && storedSig && storedSig !== sig) return 0;
     return bps;
   } catch {
     return 0; // private mode / bad JSON — measure instead
   }
 }
 
+let sessionLinkSig = "";
+
 function persistLinkBps(bps: number): void {
   if (!(bps > 0)) return;
   sessionLinkBps = bps;
   sessionLinkBpsAt = Date.now();
+  sessionLinkSig = connectionSignature();
   try {
-    localStorage.setItem(LINK_BPS_KEY, JSON.stringify({ bps, ts: Date.now() }));
+    localStorage.setItem(
+      LINK_BPS_KEY,
+      JSON.stringify({ bps, ts: Date.now(), sig: sessionLinkSig }),
+    );
   } catch {
     /* storage unavailable — the session value still holds */
   }
@@ -7931,7 +7987,9 @@ export class MoviElement extends HTMLElement {
     // nothing a confirmation could change.
     if (idx <= 0) return;
 
-    for (let attempt = 0; attempt < 2 && idx > 0; attempt++) {
+    // `idx > 0` was the down-only guard; the loop can move up now, so the
+    // only bound left is the attempt count — at most two head reads.
+    for (let attempt = 0; attempt < 2 && idx >= 0; attempt++) {
       const q = byBitrate[idx];
       const needs = q.bandwidth || this._estimateBitrate(q.height);
       const bits = await this._probeHeadAndWarm(q.src);
@@ -7946,19 +8004,32 @@ export class MoviElement extends HTMLElement {
       }
       this._measuredStartBps = bits;
       persistLinkBps(bits);
-      if (bits * 0.55 >= needs) {
+
+      // Re-pick from what was just measured. This goes BOTH ways on purpose.
+      // The seed can be stale in either direction, and only one of those
+      // self-corrects: too high and this steps down, too low and nothing would
+      // ever have lifted it — the viewer would just watch a worse picture than
+      // the link can carry until the ABR slowly climbed. Re-picking uses the
+      // same guards as the opening pick (barred heights, software ceiling), so
+      // "up" can only mean a rung that was allowed all along.
+      const before: string | File | null = this._src;
+      await this._applyProbePick(bits, true);
+      if (this._src === before) {
         Logger.info(
           TAG,
           `Opening rung ${q.label || q.height + "p"} confirmed on its own stream: ${(bits / 1e6).toFixed(1)}Mbps for a ${(needs / 1e6).toFixed(1)}Mbps rung`,
         );
         return;
       }
-      idx--;
-      this._src = byBitrate[idx].src;
+      const moved = this._videoQualities.find((r) => r.src === this._src);
       Logger.info(
         TAG,
-        `Opening rung ${q.label || q.height + "p"} needs ${(needs / 1e6).toFixed(1)}Mbps but its own stream measured ${(bits / 1e6).toFixed(1)}Mbps — stepping down to ${byBitrate[idx].label || byBitrate[idx].height + "p"}`,
+        `Opening rung ${q.label || q.height + "p"} measured ${(bits / 1e6).toFixed(1)}Mbps on its own stream — moving to ${moved?.label || (moved?.height ?? 0) + "p"}`,
       );
+      idx = byBitrate.findIndex((r) => r.src === this._src);
+      if (idx < 0) return;
+      // …and loop, so the rung we actually land on gets its head read too and
+      // opens from the warm buffer rather than a fresh request.
     }
   }
 
