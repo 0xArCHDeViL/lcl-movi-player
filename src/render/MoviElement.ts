@@ -17312,25 +17312,14 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
-      /* An active row is drawn as a card: the accent tint that was always meant
-         to be here (the old value, color-mix(… 0.12), had no percentage in it
-         and so rendered nothing) over a soft bloom of the same colour. No
-         outline — the fill is the shape. The label stays white; the accent
-         belongs to the things that carry the state. */
+      /* An active row is drawn as a flat card — a tint of the theme's SECOND
+         colour, no outline and no bloom. The glow that used to sit under it
+         spread past the row and, on a light secondary, haloed the rows either
+         side of it. The fill is the shape; the rail, the icon and the state
+         word carry the accent. Falls back to primary where no secondary is
+         set, so a single-colour theme is unaffected. */
       .movi-context-menu-item.movi-context-menu-active {
-        /* Both the fill and the bloom take the SECONDARY colour, so the card
-           belongs entirely to the theme's second half and the accent is left
-           to the rail, the icon and the state word.
-
-           Weighted for what a secondary usually IS — often a dark or neutral
-           partner rather than a second accent (the reference theme pairs a red
-           with black). A dark secondary makes this a shadowed recess rather
-           than a tinted card: the fill nearly meets the menu behind it and the
-           rail carries the row. A coloured one reads as a tinted card with a
-           glow, as before. Falls back to primary where no secondary is set, so
-           a single-colour theme is unaffected. */
         background-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 13%, transparent);
-        box-shadow: 0 6px 20px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent);
       }
 
       /* The rail: small, rounded, tucked inside the card's left edge. */
@@ -19856,7 +19845,18 @@ export class MoviElement extends HTMLElement {
           this._startProbeDone = false;
           this._measuredStartBps = 0;
           this._forcedDashRendition = null;
-          if (newValue !== oldSrc) {
+          // A quality switch on a premuxed ladder DOES come through here — each
+          // rung is its own URL, so it sets the src attribute (only the DASH
+          // path calls load() directly). The url differs, but the CONTENT is the
+          // one already playing, so this must not read as a new source: clearing
+          // the flag makes the poster eligible again, and the switch then paints
+          // the static thumbnail over a video that never stopped playing. That
+          // is what the last-frame snapshot is meant to cover, but the snapshot
+          // is best-effort (a tainted or already-wiped canvas gives nothing back)
+          // — which is exactly why the cover appeared only sometimes.
+          const isRebuild =
+            this._qualitySwitchInProgress || this._fullRecreateInFlight;
+          if (newValue !== oldSrc && !isRebuild) {
             this._hasEverPlayed = false;
           }
 
@@ -26778,7 +26778,16 @@ export class MoviElement extends HTMLElement {
     // poster mechanism owns the overlay (it's pinned to the last canvas frame).
     // Bail so we don't overwrite it with the static thumbnail — otherwise the
     // recreate flashes the poster + 00:00 before playback re-primes.
-    if (this._snapshotPosterActive) {
+    // The flags, not just the snapshot, decide this. _snapshotPosterActive is
+    // only true when the freeze-frame capture SUCCEEDED; when it fails there is
+    // nothing owning the overlay and the static thumbnail took the surface mid-
+    // switch. A rebuild never wants the poster back either way — the completion
+    // path hides the overlay itself once the resume seek lands.
+    if (
+      this._snapshotPosterActive ||
+      this._qualitySwitchInProgress ||
+      this._fullRecreateInFlight
+    ) {
       return;
     }
     // Once playback has started, the poster stays gone — the canvas owns the
