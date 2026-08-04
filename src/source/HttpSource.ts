@@ -241,6 +241,13 @@ export class HttpSource implements SourceAdapter {
     if (warm && warm.url === url) {
       this.headBuffer = warm.bytes;
       HttpSource.warmHead = null;
+      // These bytes ARE buffered — count them. read() serves them without ever
+      // touching the stream, so the source's own bookkeeping stayed at zero
+      // and getBufferedTime() reported nothing buffered. The freeze watchdog
+      // reads that as starvation and bailed out a perfectly healthy 1080p to
+      // 720p six seconds in ("ABR emergency downshift (starved 0.0s at 6.1s)")
+      // — on a 40Mbps link carrying a 1.8Mbps rung.
+      this.maxBufferedEnd = warm.bytes.byteLength;
       Logger.info(
         TAG,
         `Opening ${(warm.bytes.byteLength / 1024 / 1024).toFixed(1)}MB served from the pre-play probe — no re-fetch`,
@@ -965,7 +972,11 @@ export class HttpSource implements SourceAdapter {
     // of where the old value sat. Preserving it caused the seek-bar to
     // flash a phantom "already buffered ahead" region immediately after
     // seek, before any bytes had streamed in.
-    this.maxBufferedEnd = fromOffset;
+    // …except for the head cache, which is not part of the streaming window at
+    // all and stays valid across restarts. Collapsing past it would hand the
+    // freeze watchdog a "nothing buffered" reading for bytes we are holding.
+    const headEnd = this.headBuffer?.length ?? 0;
+    this.maxBufferedEnd = fromOffset === 0 ? Math.max(headEnd, 0) : fromOffset;
 
     this.abortController = new AbortController();
 
