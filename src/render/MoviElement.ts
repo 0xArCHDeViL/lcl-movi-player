@@ -8118,10 +8118,12 @@ export class MoviElement extends HTMLElement {
     // candidate however fast the link is. The ABR honours the same list, but it
     // only gets to speak after playback starts — so without this the machine
     // opened on 8K and stepped down in full view, every load.
-    const barred = new Set(MoviPlayer.decodeBoundHeights());
+    // Asked per rung with ITS codec: a height that failed as AV1 says nothing
+    // about the H.264 or VP9 rung of the same size, and barring by height alone
+    // refused 4K on a browser that decodes 4K H.264 perfectly well.
     let pick = smallest;
     for (const q of byBitrate) {
-      if (barred.has(q.height)) continue;
+      if (MoviPlayer.isDecodeBound(q.codec, q.height)) continue;
       if (q.height > swCeilingFor()) continue;
       const b = q.bandwidth || this._estimateBitrate(q.height);
       if (b <= affordableBits) pick = q;

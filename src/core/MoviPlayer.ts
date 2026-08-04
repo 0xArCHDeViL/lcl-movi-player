@@ -73,7 +73,7 @@ const TAG = "MoviPlayer";
 // A height lands here the FIRST time it goes decode-bound — which, because the
 // renderer tries an FPS cap first, means "can't sustain even at half rate": a
 // device limit, not a transient. Cleared only on a full page reload.
-const deviceDecodeBoundHeights = new Set<number>();
+const deviceDecodeBoundHeights = new Set<string>();
 // …and the same lesson, kept across reloads. A device that cannot sustain 8K
 // today cannot sustain it after F5 either, but the in-memory set above is
 // cleared by the reload, so every fresh visit paid the same stutter to
@@ -150,14 +150,33 @@ function webCodecsUnavailable(): boolean {
   );
 }
 
-const DECODE_CEILING_KEY = "movi:decode-ceiling";
+/**
+ * A rung this device has been shown not to decode, keyed by CODEC FAMILY AND
+ * HEIGHT — not height alone.
+ *
+ * Height alone was codec-blind, and it barred by association: one video's 2160p
+ * AV1 failing on a Safari with no AV1 path wrote down "2160", and from then on
+ * every 2160p rung was refused — including the H.264 and VP9 ones that browser
+ * decodes perfectly. The quality menu still listed 4K; Auto simply never chose
+ * it, on any video, forever.
+ *
+ * The key is bumped to :v2 so the old height-only entries are dropped rather
+ * than misread — a device carrying a poisoned ceiling heals on next load.
+ */
+const DECODE_CEILING_KEY = "movi:decode-ceiling:v2";
+
+/** `av01@2160` — what actually failed, not just how tall it was. */
+function decodeBoundKey(codec: string, height: number): string {
+  const family = (codec || "").split(".")[0].toLowerCase() || "unknown";
+  return `${family}@${height}`;
+}
 
 function loadPersistedDecodeCeiling(): void {
   try {
     const raw = localStorage.getItem(DECODE_CEILING_KEY);
     if (!raw) return;
-    for (const h of JSON.parse(raw) as number[]) {
-      if (typeof h === "number" && h > 0) deviceDecodeBoundHeights.add(h);
+    for (const k of JSON.parse(raw) as string[]) {
+      if (typeof k === "string" && k.includes("@")) deviceDecodeBoundHeights.add(k);
     }
   } catch {
     /* private mode / bad JSON — the session just re-learns */
@@ -171,7 +190,7 @@ function loadPersistedDecodeCeiling(): void {
  * write serialises the whole set, so without this a software-session bar
  * hitched a ride on the next hardware verdict.
  */
-const sessionOnlyDecodeBoundHeights = new Set<number>();
+const sessionOnlyDecodeBoundHeights = new Set<string>();
 
 function persistDecodeCeiling(): void {
   try {
@@ -179,7 +198,7 @@ function persistDecodeCeiling(): void {
       DECODE_CEILING_KEY,
       JSON.stringify(
         [...deviceDecodeBoundHeights].filter(
-          (h) => !sessionOnlyDecodeBoundHeights.has(h),
+          (k) => !sessionOnlyDecodeBoundHeights.has(k),
         ),
       ),
     );
@@ -266,7 +285,9 @@ async function screenLadderForDecode(
     for (const r of rungs) {
       const h = r.height ?? 0;
       if (h <= 0) continue;
-      if (deviceDecodeBoundHeights.has(h)) continue;
+      // Skip only a rung ALREADY judged for this codec — a different codec at
+      // the same height is a different question.
+      if (deviceDecodeBoundHeights.has(decodeBoundKey(r.codec || "", h))) continue;
       // The rung's real frame. Only fall back to a 16:9 guess when the ladder
       // didn't declare a width — asking decodingInfo about dimensions the
       // content doesn't have gets an answer about a video nobody is playing.
@@ -372,7 +393,7 @@ async function screenLadderForDecode(
             TAG,
             `ABR: this device reports ${w}x${h}@${Math.round(rungFps)} ${codec} as ${verdict} (${Math.round(cost / 1e6)}M) — barring it before we ever climb into it`,
           );
-          deviceDecodeBoundHeights.add(h);
+          deviceDecodeBoundHeights.add(decodeBoundKey(codec, h));
           persistDecodeCeiling();
         }
       } catch {
@@ -496,8 +517,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * alone, so without this a machine that cannot decode 8K still opened on it
    * and stepped down a moment later, in full view.
    */
-  static decodeBoundHeights(): number[] {
+  static decodeBoundHeights(): string[] {
     return [...deviceDecodeBoundHeights];
+  }
+
+  /** Has THIS codec at THIS height been shown not to decode here? */
+  static isDecodeBound(codec: string | undefined, height: number): boolean {
+    if (!(height > 0)) return false;
+    return deviceDecodeBoundHeights.has(decodeBoundKey(codec || "", height));
   }
 
   /**
@@ -2159,9 +2186,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // whole decode-bound dance again.
     if (activeIdx >= 0 && deviceDecodeBoundHeights.size > 0 && now - this._lastAbrSwitchAt > 3000) {
       const active = rungs[activeIdx];
-      if (active.height != null && deviceDecodeBoundHeights.has(active.height)) {
+      if (active.height != null && MoviPlayer.isDecodeBound(active.codec, active.height)) {
         const ok = rungs.find(
-          (r) => r.height == null || !deviceDecodeBoundHeights.has(r.height),
+          (r) => r.height == null || !MoviPlayer.isDecodeBound(r.codec, r.height),
         );
         if (ok && ok.url !== this._activeDashRendition) {
           Logger.info(
@@ -2469,7 +2496,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (deviceDecodeBoundHeights.size > 0) {
       let heightCapBits = Number.POSITIVE_INFINITY;
       for (const r of rungs) {
-        if (r.height != null && deviceDecodeBoundHeights.has(r.height)) {
+        if (r.height != null && MoviPlayer.isDecodeBound(r.codec, r.height)) {
           heightCapBits = Math.min(
             heightCapBits,
             r.bandwidth || Number.POSITIVE_INFINITY,
@@ -2751,7 +2778,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const failH = failing.height ?? 0;
     const capped = failH > 0;
     if (capped) {
-      deviceDecodeBoundHeights.add(failH);
+      const failKey = decodeBoundKey(
+        this.videoDecoder?.configuredCodec || failing.codec || "",
+        failH,
+      );
+      deviceDecodeBoundHeights.add(failKey);
       // …but only WRITE IT DOWN if the hardware path was the one that failed.
       // A software-decoding session cannot hold 720p on a phone and says
       // nothing about what the GPU can do — yet this was persisted all the
@@ -2763,7 +2794,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (!this.isSoftwareDecoding()) {
         persistDecodeCeiling();
       } else {
-        sessionOnlyDecodeBoundHeights.add(failH);
+        sessionOnlyDecodeBoundHeights.add(failKey);
         Logger.info(
           TAG,
           `ABR: ${failH}p barred for this session only — software decode failing says nothing about the hardware path`,
