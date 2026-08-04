@@ -112,6 +112,27 @@ const REPRESENTATIVE_CODECS: Record<string, string> = {
   hevc: "hvc1.1.6.L153.90",
 };
 
+// One name per codec, whichever spelling reached us. A ladder writes what its
+// extractor happened to emit ("av1", "h264") and a WebCodecs string carries the
+// registered fourcc ("av01.0.12M.08", "avc1.640033"); comparing the two raw
+// makes the same codec look like two, which is exactly the mistake that makes a
+// codec-aware rule silently fall back to the codec-blind one.
+const CODEC_FAMILY_ALIASES: Record<string, string> = {
+  av1: "av01",
+  h264: "avc1",
+  avc3: "avc1",
+  h265: "hvc1",
+  hevc: "hvc1",
+  hev1: "hvc1",
+  vp9: "vp09",
+  vp8: "vp08",
+};
+
+function codecFamily(codec?: string): string {
+  const raw = (codec || "").split(".")[0].toLowerCase();
+  return CODEC_FAMILY_ALIASES[raw] || raw;
+}
+
 // What software decode can actually sustain. Once the video is being decoded in
 // software, resolution is the only lever left, and Auto must not climb past what
 // the CPU can hold — whatever the link can carry.
@@ -2229,12 +2250,38 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         !!this.videoDecoder && !this.videoDecoder.isSoftware,
       );
       const active = rungs[activeIdx];
-      if ((active.height ?? 0) > ceilingH) {
-        const ok = rungs.find((r) => (r.height ?? 0) <= ceilingH);
+      if (
+        (active.height ?? 0) > ceilingH &&
+        this.softwareCeilingApplies(active.codec)
+      ) {
+        // The landing rung is chosen by the same per-codec rule, so a ladder
+        // that changes codec on the way down lands on the highest rung this
+        // machine can actually decode — not the highest one under a ceiling
+        // that belongs to the codec being left behind.
+        const ok = rungs.find(
+          (r) =>
+            (r.height ?? 0) <= ceilingH || !this.softwareCeilingApplies(r.codec),
+        );
         if (ok && ok.url !== this._activeDashRendition) {
+          // Write down what just happened, or the correction can undo itself.
+          // Landing on a hardware rung clears decodingOnCpu, and with nothing
+          // recorded the throughput path is free to climb straight back into
+          // the rung that had no hardware path — fall to the CPU, correct,
+          // climb, forever. Session-only and for this rung alone: a codec
+          // without a hardware path at one height may well have one lower
+          // down, and that is the next rung's question to answer, not this
+          // one's to prejudge.
+          const leavingKey = decodeBoundKey(
+            this.videoDecoder?.configuredCodec || active.codec || "",
+            active.height ?? 0,
+          );
+          if (active.height) {
+            deviceDecodeBoundHeights.add(leavingKey);
+            sessionOnlyDecodeBoundHeights.add(leavingKey);
+          }
           Logger.info(
             TAG,
-            `ABR: software decode can't hold ${active.height}p — correcting to ${ok.label || ok.height + "p"}`,
+            `ABR: software decode can't hold ${active.height}p ${codecFamily(active.codec) || "video"} — correcting to ${ok.label || ok.height + "p"}${codecFamily(ok.codec) !== codecFamily(active.codec) ? ` (${codecFamily(ok.codec)}, which has a hardware path)` : ""}`,
           );
           await this.abrCommit(ok.url, now);
           return;
@@ -2503,7 +2550,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
       let swCapBits = Number.POSITIVE_INFINITY;
       for (const r of rungs) {
-        if ((r.height ?? 0) > ceilingH) {
+        if ((r.height ?? 0) > ceilingH && this.softwareCeilingApplies(r.codec)) {
           swCapBits = Math.min(swCapBits, r.bandwidth || Number.POSITIVE_INFINITY);
         }
       }
@@ -2628,7 +2675,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           const ceilingH = softwareDecodeCeiling(
             !!this.videoDecoder && !this.videoDecoder.isSoftware,
           );
-          if ((up.height ?? 0) > ceilingH) {
+          if (
+            (up.height ?? 0) > ceilingH &&
+            this.softwareCeilingApplies(up.codec)
+          ) {
             this._abrUpCandidate = "";
             this._abrUpConfirms = 0;
             Logger.info(
@@ -9643,6 +9693,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private decodingOnCpu(): boolean {
     if (webCodecsUnavailable()) return true;
     return this.videoDecoder ? this.videoDecoder.isSoftwareBacked : false;
+  }
+
+  /**
+   * Does the software-decode ceiling apply to THIS rung?
+   *
+   * The ceiling exists because the CPU is carrying the decode — but a decoder is
+   * chosen per CODEC, and a ladder is usually mixed. Applied to the whole ladder
+   * it punished rungs that were never the problem: a 2160p AV1 with no hardware
+   * path fell to the WASM decoder, and the correction took the whole ladder down
+   * to 480p — past the 1080p H.264 rung sitting right there, which this machine
+   * decodes in hardware without noticing. A rung of a different family is an
+   * open question, and the decode-bound screen is what answers it; this cap has
+   * nothing to say about it.
+   *
+   * Two cases keep the ceiling ladder-wide: no WebCodecs at all (then every
+   * codec is our WASM decoder, family is irrelevant), and a rung whose codec the
+   * ladder never declared (nothing to compare — stay conservative).
+   */
+  private softwareCeilingApplies(rungCodec?: string): boolean {
+    if (webCodecsUnavailable()) return true;
+    const family = codecFamily(rungCodec);
+    const active = codecFamily(this.videoDecoder?.configuredCodec);
+    if (!family || !active) return true;
+    return family === active;
   }
 
   /**
