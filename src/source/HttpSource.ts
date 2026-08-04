@@ -95,6 +95,20 @@ export class HttpSource implements SourceAdapter {
     HttpSource.warmHead = { url, bytes };
   }
 
+  /**
+   * Size of the FIRST range request, overridable per source.
+   *
+   * 4MB is right for video — it covers the moov and the opening GOP. For a
+   * separate audio stream it is four minutes of AAC nobody needs yet, and it
+   * is fetched during startup where it costs seconds directly. The split-audio
+   * path asks for a smaller opening; the streaming loop after it is unchanged.
+   */
+  private firstRangeBytes = FIRST_RANGE_CHUNK_SIZE;
+
+  setFirstRangeBytes(bytes: number): void {
+    if (bytes > 0) this.firstRangeBytes = bytes;
+  }
+
   // Metadata LRU (see top-of-file comment). Keyed by absolute file offset
   // → the cached bytes. JS Map preserves insertion order; on hit we
   // delete+re-insert to bump to most-recent. Only small reads enter.
@@ -1010,7 +1024,7 @@ export class HttpSource implements SourceAdapter {
         // instead of whatever pace the CDN puts a long range on.
         const maxDownload = Math.min(
           windowLimit,
-          windowInitialized ? MAX_RANGE_CHUNK_SIZE : FIRST_RANGE_CHUNK_SIZE,
+          windowInitialized ? MAX_RANGE_CHUNK_SIZE : this.firstRangeBytes,
         );
         const rangeEnd = this.size > 0
           ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)

@@ -425,6 +425,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // Bounded automatic recovery from a decoder that started rejecting every
   // packet (see recoverBrokenAudio). Counted per source, so a genuinely
   // undecodable stream ends in silence instead of a seek loop.
+  /** Resolves once the video demuxer has produced mediaInfo — the only thing
+   *  the parallel split-audio open has to wait for. */
+  private _videoInfoReady: Promise<void> | null = null;
+  private _resolveVideoInfoReady: (() => void) | null = null;
   private _audioRecoveryInFlight = false;
   private _audioRecoveries = 0;
   private static readonly MAX_AUDIO_RECOVERIES = 3;
@@ -1529,11 +1533,47 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         throw new Error("Either config.source or config.sourceAdapter is required");
       }
 
+      // Which separate audio source to open, decided from config alone so the
+      // decision can be made BEFORE the video demuxer opens — see below.
+      let audioUrl: string | null = null;
+      let audioAdapter: SourceAdapter | undefined;
+      if (this.config.audioTracks && this.config.audioTracks.length > 0) {
+        this._audioTracks = [...this.config.audioTracks];
+        this._activeAudioLang = this._audioTracks[0].lang;
+        audioUrl = this._audioTracks[0].url;
+        audioAdapter = this._audioTracks[0].adapter;
+        Logger.info(TAG, `Multi-language audio: ${this._audioTracks.length} tracks, default=${this._activeAudioLang}`);
+      } else if (this.config.audioSource?.type === "url" && this.config.audioSource.url) {
+        audioUrl = this.config.audioSource.url;
+      }
+      this._splitAudioRetries = 0; // fresh source → fresh retry budget
+
       // Create demuxer (getSize will be called lazily in bindings.open())
       this.demuxer = new Demuxer(this.source, this.config.wasmBinary);
 
-      // Open and get media info
-      this.mediaInfo = await this.demuxer.open();
+      // The split-audio demuxer is a separate WASM instance reading a separate
+      // file — none of it needs the video to be open first. Run it alongside:
+      // measured, audio started 5.6s in and took another 2.8s, all of it after
+      // the video demux had finished waiting on its own network. The one thing
+      // it genuinely needs is the video's PTS baseline, and it waits for just
+      // that (see _videoInfoReady in setupSplitAudio).
+      this._videoInfoReady = new Promise<void>((resolve) => {
+        this._resolveVideoInfoReady = resolve;
+      });
+      const splitAudioJob = audioAdapter
+        ? this.setupSplitAudio(audioAdapter)
+        : audioUrl
+          ? this.setupSplitAudio(audioUrl)
+          : null;
+
+      // Open and get media info. Released in `finally` so a FAILED open still
+      // frees the parallel audio job — otherwise it waits on a baseline that
+      // is never coming and the promise never settles.
+      try {
+        this.mediaInfo = await this.demuxer.open();
+      } finally {
+        this._resolveVideoInfoReady?.();
+      }
       // Destroyed by a rapid source switch during the (WASM + network) open —
       // bail before standing up the split-audio demuxer and decoders.
       if (this._destroyed) return;
@@ -1550,31 +1590,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      // Separate audio source: use native <audio> element (zero WASM overhead)
-      // Supports single audioSource or multi-language audioTracks
-      let audioUrl: string | null = null;
-      // Pre-built adapter (e.g. an HLS audio rendition's segment stream) — used
-      // instead of opening a URL when the track carries one.
-      let audioAdapter: SourceAdapter | undefined;
-
-      if (this.config.audioTracks && this.config.audioTracks.length > 0) {
-        // Multi-language mode — store all tracks, pick first as default
-        this._audioTracks = [...this.config.audioTracks];
-        this._activeAudioLang = this._audioTracks[0].lang;
-        audioUrl = this._audioTracks[0].url;
-        audioAdapter = this._audioTracks[0].adapter;
-        Logger.info(TAG, `Multi-language audio: ${this._audioTracks.length} tracks, default=${this._activeAudioLang}`);
-      } else if (this.config.audioSource?.type === "url" && this.config.audioSource.url) {
-        // Single separate audio source
-        audioUrl = this.config.audioSource.url;
-      }
-
-      this._splitAudioRetries = 0; // fresh source → fresh retry budget
-      if (audioAdapter) {
-        await this.setupSplitAudio(audioAdapter);
-      } else if (audioUrl) {
-        await this.setupSplitAudio(audioUrl);
-      }
+      // Started before the video open (see above) — collect it here, where the
+      // old serial call used to be, so everything downstream is unchanged.
+      if (splitAudioJob) await splitAudioJob;
       // A rapid source switch may have destroyed this instance while the second
       // (split-audio) WASM demuxer was loading — bail so we don't configure
       // decoders / render onto the successor's canvas (black-frame flash).
@@ -7294,6 +7312,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           url: source,
           headers: this.config.headers,
         });
+        // A smaller opening request for audio. 4MB of AAC is four minutes
+        // nobody needs yet, and it is fetched during startup where the wait is
+        // the viewer's — measured at 2.8s on an ordinary link. The streaming
+        // loop after the first range is unchanged, so nothing under-buffers.
+        (
+          this.audioSource as unknown as {
+            setFirstRangeBytes?: (n: number) => void;
+          }
+        )?.setFirstRangeBytes?.(1_000_000);
       } else {
         // Pre-built adapter (e.g. an HLS audio rendition's segment stream).
         Logger.info(TAG, `Split audio (WASM) setup: ${source.getKey()}`);
@@ -7316,6 +7343,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return;
       }
       this._splitAudioTrackId = aTrack.id;
+      // Everything above ran alongside the video demuxer. THIS is the one line
+      // that needs it — the video's PTS baseline — so wait for it here rather
+      // than making the whole audio open wait.
+      if (this._videoInfoReady) await this._videoInfoReady;
+      if (this._destroyed) return;
       // Align this source's PTS baseline with the video's. Use mediaInfo.startTime
       // (already resolved) rather than this.startTime, which isn't set yet on the
       // initial-load call path.
