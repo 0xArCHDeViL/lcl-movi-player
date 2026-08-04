@@ -2640,22 +2640,37 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this._lastProbeBits = probeBits;
           this._lastProbeAt = now;
         }
-        // MIN normally: through a caching proxy the probe can read at cache
-        // speed, so it must not be able to talk the estimate UP past what
-        // playback actually sustains. MAX when paced: there the sustained
-        // number is not a ceiling at all (see above), it is just how fast the
-        // server chose to feed a healthy buffer, and holding the decision down
-        // to it is what pinned quality at the bottom of the ladder.
+        // MIN normally: with a shallow buffer the sustained number is a real
+        // ceiling and the probe must not talk the estimate up past it.
+        //
+        // When paced, the probe DECIDES — it is no longer maxed against the
+        // sustained rate. The sustained rate is measured on the rung being
+        // LEFT, and on a CDN that paces each stream separately that is a fact
+        // about a different file: the 2160p stream was feeding at 47Mbps while
+        // the 8K stream it climbed into fed at 20, and the max let the first
+        // number authorise the second. What the max was really for is the
+        // paced under-read — a healthy buffer means the server feeds only as
+        // fast as it needs to, so sustained is a floor and not a limit — and
+        // the probe answers that directly now that it skips the opening burst.
+        // Its verdict is about the rung being entered, which is the only rung
+        // the question is about.
         const effectiveBits =
           probeBits > 0
             ? paced
-              ? Math.max(throughputBits, probeBits)
+              ? probeBits
               : Math.min(throughputBits, probeBits)
             : throughputBits;
         if (effectiveBits * 0.85 < (up.bandwidth || 0)) {
           // Can't sustain the higher rung — fold the tighter number into the
           // estimate and hold; the next tick re-decides on the truer value.
-          this._lastThroughputBps = effectiveBits / 8;
+          //
+          // Not in the paced case: there the number is a measurement of the
+          // TARGET rung's stream, and writing it into the estimate that judges
+          // the rung we are STAYING on would have one file's pacing argue for
+          // downshifting another. The refusal above is the whole use for it.
+          if (!(paced && probeBits > 0)) {
+            this._lastThroughputBps = effectiveBits / 8;
+          }
           this._abrUpCandidate = "";
           this._abrUpConfirms = 0;
           Logger.info(
@@ -2690,7 +2705,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
         Logger.info(
           TAG,
-          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps sustained+probed, bufferAhead=${bufferAhead.toFixed(1)}s`,
+          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps ${probeBits > 0 ? (paced ? "probed on the target rung" : "sustained∧probed") : "sustained"}, bufferAhead=${bufferAhead.toFixed(1)}s`,
         );
         await this.abrCommit(up.url, now);
       }
@@ -2726,22 +2741,61 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private async probeRungThroughput(url: string): Promise<number> {
     if (this._abrProbeInFlight || this._destroyed) return -1;
     this._abrProbeInFlight = true;
-    const PROBE_BYTES = 1_200_000;
+    // Time only what arrives AFTER the opening burst, the way the pre-play
+    // probe does.
+    //
+    // Timing the whole slice measured the burst, and a CDN that paces a stream
+    // to its own bitrate gives every stream the same generous opening — so the
+    // probe answered "how fast does this server start?" and not "how fast does
+    // it feed?". The two numbers were 2x apart on the same file, minutes apart:
+    // the pre-play probe read the 8K rung at 22.3Mbps and passed it over as
+    // unaffordable; this one read the identical URL at 41.8Mbps, climbed into
+    // it, and the stream then fed at ~20Mbps until the buffer starved and the
+    // rung was abandoned 13 seconds later. The pre-play number was right, and
+    // it was right because of how it was measured.
+    const BURST_BYTES = 1_000_000; // the opening gift — not the link
+    const PROBE_BYTES = 2_400_000; // leaves ~1.4MB of honest measurement
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 6000);
     try {
-      const t0 = performance.now();
+      const startedAt = performance.now();
       const res = await fetch(url, {
         headers: { Range: `bytes=0-${PROBE_BYTES - 1}`, ...(this.config.headers || {}) },
+        signal: ctl.signal,
       });
-      if (!res.ok && res.status !== 206) return -1;
-      const buf = await res.arrayBuffer();
-      const seconds = (performance.now() - t0) / 1000;
-      // Need a meaningful sample: a tiny/instant read is a cache hit or a warm
-      // proxy buffer, not the link — don't trust it.
-      if (this._destroyed || seconds < 0.15 || buf.byteLength < 262144) return -1;
-      return (buf.byteLength / seconds) * 8;
+      if ((!res.ok && res.status !== 206) || !res.body) return -1;
+
+      let total = 0;
+      let timedBytes = 0;
+      let timingStart = 0;
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        total += value.byteLength;
+        if (total > BURST_BYTES) {
+          if (timingStart === 0) timingStart = performance.now();
+          else timedBytes += value.byteLength;
+        }
+      }
+      if (this._destroyed) return -1;
+      const totalSecs = (performance.now() - startedAt) / 1000;
+      // A body that arrived faster than any link could deliver it came from a
+      // cache, not the network — no measurement beats a fictional one.
+      if (totalSecs < 0.03 || total < 262144) return -1;
+      // The chunk that starts the clock isn't counted, so a body that arrived
+      // in one piece past the burst leaves nothing to time. Fall back to the
+      // whole slice — burst-inflated, but the alternative is no number at all.
+      if (timedBytes === 0) {
+        return totalSecs >= 0.15 ? (total / totalSecs) * 8 : -1;
+      }
+      const timedSecs = (performance.now() - timingStart) / 1000;
+      if (timedSecs < 0.05) return -1;
+      return (timedBytes / timedSecs) * 8;
     } catch {
       return -1;
     } finally {
+      clearTimeout(timer);
       this._abrProbeInFlight = false;
     }
   }
