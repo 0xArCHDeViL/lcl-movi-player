@@ -17320,10 +17320,15 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu-item.movi-context-menu-active {
         background-color: color-mix(in srgb, var(--movi-primary) 13%, transparent);
         /* The bloom takes the SECONDARY colour, so the card reads as two tones
-           rather than one flat wash: primary in the fill, its partner in the
-           light around it. Falls back to primary where no secondary is set, so
-           a single-colour theme looks exactly as it did. */
-        box-shadow: 0 4px 16px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 14%, transparent);
+           rather than one flat wash: primary in the fill, its partner around
+           it. Weighted for what a secondary usually IS — often a dark or
+           neutral partner rather than a second accent (the reference theme
+           pairs a red with black). At 14% a black secondary was invisible on
+           dark chrome and the row looked unchanged; at 30% with a longer
+           throw it reads as depth under the card. A coloured secondary reads
+           as a glow at the same value. Falls back to primary where none is
+           set, so a single-colour theme is unaffected. */
+        box-shadow: 0 6px 20px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent);
       }
 
       /* The rail: small, rounded, tucked inside the card's left edge. */
