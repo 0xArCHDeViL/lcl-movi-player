@@ -389,12 +389,31 @@ async function screenLadderForDecode(
           }
         }
         if (verdict) {
+          const key = decodeBoundKey(codec, h);
+          deviceDecodeBoundHeights.add(key);
+          // Facts are written down; judgements are not.
+          //
+          // "unsupported" and "no hardware path" come from
+          // VideoDecoder.isConfigSupported — the API that decides, answering
+          // about this codec on this machine. Those hold, so they persist.
+          //
+          // "not smooth" and "software-decoded" are decodingInfo's OPINION,
+          // and it is a conservative one: it called 8K AV1 unsmooth on a
+          // machine whose 4K AV1 runs on hardware without complaint. Persisted,
+          // one cautious answer retired that rung for good — the rung would
+          // never be tried again to find out whether the opinion was right.
+          // Session-scoped, the next load gets to ask again, and if it really
+          // can't hold it the reactive path pulls it down in a few seconds.
+          const isFact = verdict === "unsupported" || verdict === "no hardware path";
+          if (isFact) {
+            persistDecodeCeiling();
+          } else {
+            sessionOnlyDecodeBoundHeights.add(key);
+          }
           Logger.info(
             TAG,
-            `ABR: this device reports ${w}x${h}@${Math.round(rungFps)} ${codec} as ${verdict} (${Math.round(cost / 1e6)}M) — barring it before we ever climb into it`,
+            `ABR: this device reports ${w}x${h}@${Math.round(rungFps)} ${codec} as ${verdict} (${Math.round(cost / 1e6)}M) — barring it ${isFact ? "for good" : "for this session"}`,
           );
-          deviceDecodeBoundHeights.add(decodeBoundKey(codec, h));
-          persistDecodeCeiling();
         }
       } catch {
         /* query rejected (bad contentType, unimplemented) — leave it to the
