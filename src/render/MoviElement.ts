@@ -8122,13 +8122,32 @@ export class MoviElement extends HTMLElement {
     // about the H.264 or VP9 rung of the same size, and barring by height alone
     // refused 4K on a browser that decodes 4K H.264 perfectly well.
     let pick = smallest;
+    // Why each rung above the pick was passed over. A pick that looks too low
+    // has exactly four possible causes — barred, software-capped, priced out,
+    // or simply absent from the ladder — and from the outside they are
+    // indistinguishable. Guessing between them has cost several rounds.
+    const rejected: string[] = [];
     for (const q of byBitrate) {
-      if (MoviPlayer.isDecodeBound(q.codec, q.height)) continue;
-      if (q.height > swCeilingFor()) continue;
       const b = q.bandwidth || this._estimateBitrate(q.height);
-      if (b <= affordableBits) pick = q;
-      else break;
+      if (MoviPlayer.isDecodeBound(q.codec, q.height)) {
+        rejected.push(`${q.height}p:decode-bound`);
+        continue;
+      }
+      if (q.height > swCeilingFor()) {
+        rejected.push(`${q.height}p:sw-ceiling`);
+        continue;
+      }
+      if (b <= affordableBits) {
+        pick = q;
+        continue;
+      }
+      rejected.push(`${q.height}p:needs ${(b / 1e6).toFixed(1)}M`);
+      break;
     }
+    Logger.info(
+      TAG,
+      `Pre-play ladder: ${byBitrate.map((q) => q.height + "p/" + (q.codec || "?").split(".")[0]).join(" ")} | affordable ${(affordableBits / 1e6).toFixed(1)}M | skipped ${rejected.join(" ") || "none"}`,
+    );
     if (reapplied && this._src === pick.src) return; // nothing overwrote it
     this._src = pick.src;
     Logger.info(
