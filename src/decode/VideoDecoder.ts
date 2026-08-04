@@ -1413,11 +1413,23 @@ export class MoviVideoDecoder {
     }
 
     try {
-      // Timeout flush — WebCodecs flush() can hang on slow devices
+      // Timeout flush — WebCodecs flush() can hang on slow devices.
+      //
+      // Scaled by what it actually has to do. flush() drains the queue and
+      // emits every frame in it, so a decoder holding 60 queued chunks needs
+      // longer than one holding two — and a flat second called the normal
+      // drain a hang on every auto quality switch in Brave, resetting and
+      // reconfiguring a decoder that was working through its backlog exactly
+      // as asked. The ceiling still catches a genuine hang.
+      const pending = this.decoder.decodeQueueSize || 0;
+      const flushBudgetMs = Math.min(5000, Math.max(1000, pending * 60));
       await Promise.race([
         this.decoder.flush(),
         new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error("flush timeout")), 1000)
+          setTimeout(
+            () => reject(new Error(`flush timeout after ${flushBudgetMs}ms with ${pending} queued`)),
+            flushBudgetMs,
+          )
         ),
       ]);
     } catch (error) {
