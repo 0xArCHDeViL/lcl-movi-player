@@ -8467,6 +8467,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // again, which is a seek — to exactly where we already are, so nothing is
       // lost but the re-read, and the bytes are still in the source's buffer.
       if (wasDroppingAudio && this.stateManager.getState() === "playing") {
+        // Hold the output silent across the re-read. The resume has to ride the
+        // tap, but what it makes audible is the decoder's position, not the
+        // picture's — so the viewer got a second of the wrong moment, then a
+        // seek, then the right one. Silent through the correction, audible when
+        // it lands: one transition instead of three.
+        this.audioRenderer.silenceForResync();
         // …but only once the context is RUNNING. Seeking first put the re-read
         // audio on an anchor that the "running" statechange then discarded,
         // and every buffer decoded in between was already late against a wall
@@ -8477,13 +8483,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           unmuted,
           new Promise((r) => setTimeout(r, MoviPlayer.UNMUTE_RESUME_WAIT_MS)),
         ]).then(() => {
-          if (this.muted || this.stateManager.getState() !== "playing") return;
+          if (this.muted || this.stateManager.getState() !== "playing") {
+            this.audioRenderer.releaseResyncSilence();
+            return;
+          }
           const at = this.getCurrentTime();
           Logger.info(
             TAG,
             `Unmute: audio was being dropped — re-reading from ${at.toFixed(2)}s so it lands with the picture`,
           );
-          this.seek(at).catch(() => {});
+          this.seek(at)
+            // Whatever happens — landed, failed, superseded — the hold has to
+            // come off, or tap-to-unmute ends in permanent silence.
+            .catch(() => {})
+            .finally(() => this.audioRenderer.releaseResyncSilence());
         });
       }
     }

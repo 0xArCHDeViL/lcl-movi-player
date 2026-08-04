@@ -66,6 +66,8 @@ export class AudioRenderer {
   // back in only once packets have flowed cleanly again. The player's buffering
   // spinner covers the same window, so the silence is explained on screen.
   private _ducked: boolean = false;
+  /** Output held silent across the unmute re-read — see silenceForResync. */
+  private _resyncSilenced: boolean = false;
   private static readonly DUCK_FADE_OUT = 0.01; // 10ms: beats the glitch, still too slow to click
   private static readonly DUCK_FADE_IN = 0.04; // 40ms: audibly smooth on the way back
   // Hold the silence until this long without a fresh underrun. Must stay well
@@ -1619,7 +1621,56 @@ export class AudioRenderer {
    * Fade back in, but only once no underrun has landed for DUCK_CLEAR_MS.
    * Called on every scheduled buffer, so recovery needs no external signal.
    */
+  /**
+   * Hold the output silent WITHOUT touching the mute flag.
+   *
+   * Tap-to-unmute has to resume the AudioContext inside the tap — the browser
+   * won't allow it a task later — but the audio that resume makes audible is
+   * whatever the decoder holds, which is not where the picture is. So the
+   * viewer heard a second of the wrong moment, then a seek, then the right one.
+   * Resuming stays on the tap; this keeps it inaudible until the re-read lands.
+   *
+   * Same gain node the underrun duck uses, its own flag, and the duck can't
+   * lift it — see unduckIfClean.
+   */
+  silenceForResync(): void {
+    if (this._resyncSilenced || !this.inputNode || !this.audioContext) return;
+    this._resyncSilenced = true;
+    try {
+      const param = this.inputNode.gain;
+      const now = this.audioContext.currentTime;
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(param.value, now);
+      param.linearRampToValueAtTime(0, now + AudioRenderer.DUCK_FADE_OUT);
+      Logger.debug(TAG, "Silenced for resync");
+    } catch {
+      /* ignore ramp errors */
+    }
+  }
+
+  /** Fade back in once the re-read has landed. Safe to call unconditionally. */
+  releaseResyncSilence(): void {
+    if (!this._resyncSilenced) return;
+    this._resyncSilenced = false;
+    // An underrun duck may legitimately be holding the output down as well;
+    // leave that one alone and let its own recovery release it.
+    if (this._ducked || !this.inputNode || !this.audioContext) return;
+    try {
+      const param = this.inputNode.gain;
+      const now = this.audioContext.currentTime;
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(param.value, now);
+      param.linearRampToValueAtTime(1, now + AudioRenderer.DUCK_FADE_IN);
+      Logger.debug(TAG, "Resync silence released");
+    } catch {
+      /* ignore ramp errors */
+    }
+  }
+
   private unduckIfClean(): void {
+    // The resync hold outranks the duck: letting this ramp back to 1 would
+    // make the pre-seek audio audible, which is the whole thing being avoided.
+    if (this._resyncSilenced) return;
     if (!this._ducked || !this.inputNode || !this.audioContext) return;
     if (this.isUnderrunning(AudioRenderer.DUCK_CLEAR_MS)) return;
     this._ducked = false;
