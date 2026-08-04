@@ -17318,16 +17318,18 @@ export class MoviElement extends HTMLElement {
          outline — the fill is the shape. The label stays white; the accent
          belongs to the things that carry the state. */
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: color-mix(in srgb, var(--movi-primary) 13%, transparent);
-        /* The bloom takes the SECONDARY colour, so the card reads as two tones
-           rather than one flat wash: primary in the fill, its partner around
-           it. Weighted for what a secondary usually IS — often a dark or
-           neutral partner rather than a second accent (the reference theme
-           pairs a red with black). At 14% a black secondary was invisible on
-           dark chrome and the row looked unchanged; at 30% with a longer
-           throw it reads as depth under the card. A coloured secondary reads
-           as a glow at the same value. Falls back to primary where none is
-           set, so a single-colour theme is unaffected. */
+        /* Both the fill and the bloom take the SECONDARY colour, so the card
+           belongs entirely to the theme's second half and the accent is left
+           to the rail, the icon and the state word.
+
+           Weighted for what a secondary usually IS — often a dark or neutral
+           partner rather than a second accent (the reference theme pairs a red
+           with black). A dark secondary makes this a shadowed recess rather
+           than a tinted card: the fill nearly meets the menu behind it and the
+           rail carries the row. A coloured one reads as a tinted card with a
+           glow, as before. Falls back to primary where no secondary is set, so
+           a single-colour theme is unaffected. */
+        background-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 13%, transparent);
         box-shadow: 0 6px 20px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent);
       }
 
