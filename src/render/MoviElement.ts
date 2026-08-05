@@ -25976,11 +25976,22 @@ export class MoviElement extends HTMLElement {
   /**
    * Turn a host's icon into a node.
    *
-   * Markup goes through DOMParser rather than innerHTML: the string comes from
-   * the host page, which is the same trust level as the call itself, but
-   * parsing it as a document and importing the root keeps script elements and
-   * inline handlers from being executed on the way in — and keeps this off the
-   * one path in the element that has to be audited for injection.
+   * Parsed as HTML, not as SVG. Parsing "image/svg+xml" is the obvious choice
+   * and it is the wrong one: XML has no default namespace, so markup written
+   * the way inline SVG is always written — no xmlns, because in an HTML
+   * document none is needed — comes back as an element merely NAMED svg, in no
+   * namespace at all. It lands in the DOM, it takes up its 24px, and it paints
+   * nothing, because fill and stroke on a non-SVG element are just attributes.
+   * A button with an invisible icon is a hole in the bar with no error to
+   * explain it. The HTML parser puts svg into its own namespace by itself,
+   * which is the whole reason inline SVG works without xmlns in the first
+   * place.
+   *
+   * DOMParser rather than innerHTML either way: the string is the host's own
+   * code, at the same trust level as the call, but an inert document executes
+   * nothing on the way in, and scripts and on* handlers are stripped before
+   * the node is adopted. This stays off the paths that have to be audited for
+   * injection.
    */
   private buildCustomIcon(icon?: string | Element): Element | null {
     if (!icon) return null;
@@ -25988,11 +25999,18 @@ export class MoviElement extends HTMLElement {
     const trimmed = icon.trim();
     if (!trimmed.startsWith("<")) return null;
     try {
-      const doc = new DOMParser().parseFromString(trimmed, "image/svg+xml");
-      const root = doc.documentElement;
-      if (!root || root.nodeName === "parsererror") return null;
-      root.querySelectorAll("script").forEach((n) => n.remove());
-      return document.importNode(root, true);
+      const doc = new DOMParser().parseFromString(
+        `<body>${trimmed}</body>`,
+        "text/html",
+      );
+      doc.body.querySelectorAll("script").forEach((n) => n.remove());
+      doc.body.querySelectorAll("*").forEach((n) => {
+        for (const attr of Array.from(n.attributes)) {
+          if (/^on/i.test(attr.name)) n.removeAttribute(attr.name);
+        }
+      });
+      const first = doc.body.firstElementChild;
+      return first ? (document.importNode(first, true) as Element) : null;
     } catch {
       return null;
     }
