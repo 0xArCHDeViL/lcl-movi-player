@@ -225,6 +225,11 @@ export interface MoviControlSpec {
   /** Right-hand text on the menu row for a non-toggle. Defaults to the hotkey
    *  when one is set, which is what the built-in rows show. */
   shortcutHint?: string;
+  /** Set false to stay silent when the control is used by its HOTKEY. On by
+   *  default: a key press has no other feedback, which is why every built-in
+   *  shortcut flashes the OSD. A click never flashes — the button itself is
+   *  the feedback. */
+  osd?: boolean;
   /** Called on every use, with the state AFTER the toggle flipped. Also
    *  emitted as a "movi-control" event for hosts that prefer listeners. */
   // NOTE for icon authors: while a toggle is on, BOTH of its faces carry the
@@ -4666,7 +4671,10 @@ export class MoviElement extends HTMLElement {
           e.preventDefault();
           {
             const panel = this.shadowRoot?.querySelector(".movi-shortcuts-panel") as HTMLElement;
-            if (panel) panel.style.display = panel.style.display === "none" ? "flex" : "none";
+            if (panel) {
+              this.syncShortcutsPanel();
+              panel.style.display = panel.style.display === "none" ? "flex" : "none";
+            }
           }
           break;
         case "0":
@@ -4714,7 +4722,7 @@ export class MoviElement extends HTMLElement {
           const id = this.customHotkeyFor(e);
           if (id) {
             e.preventDefault();
-            this.triggerCustomControl(id);
+            this.triggerCustomControl(id, true);
             this.showControls();
           }
           break;
@@ -5611,6 +5619,7 @@ export class MoviElement extends HTMLElement {
           ".movi-shortcuts-panel",
         ) as HTMLElement;
         if (panel) {
+          this.syncShortcutsPanel();
           panel.style.display = panel.style.display === "none" ? "flex" : "none";
         }
         hideContextMenu();
@@ -25951,7 +25960,8 @@ export class MoviElement extends HTMLElement {
    *  checked after them, so one of these can only ever be dead — said out loud
    *  at registration rather than left to be discovered. */
   private static readonly RESERVED_HOTKEYS = new Set([
-    " ", "k", "j", "l", "f", "m", "c", "v", "a", "p", "r", "g", "s", "t", "h", "i",
+    " ", "k", "j", "l", "f", "m", "c", "v", "b", "u", "z", "x",
+    "a", "p", "r", "g", "s", "t", "h", "i", "?", "+", "-", "=",
     "arrowleft", "arrowright", "arrowup", "arrowdown", "escape", "home", "end",
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ",", ".", "<", ">",
   ]);
@@ -26002,6 +26012,22 @@ export class MoviElement extends HTMLElement {
         `addControl("${spec.id}"): the player already uses "${spec.hotkey}" — the built-in shortcut wins and this hotkey will never fire`,
       );
     }
+    // …and against the host's OWN other controls. First registered wins, which
+    // is deterministic but invisible: the second control simply never responds
+    // to a key its author believes it owns.
+    if (spec.hotkey) {
+      const mine = this.normaliseHotkey(spec.hotkey);
+      for (const [otherId, other] of this._customControls) {
+        if (otherId === spec.id) continue;
+        if (other.spec.hotkey && this.normaliseHotkey(other.spec.hotkey) === mine) {
+          Logger.warn(
+            TAG,
+            `addControl("${spec.id}"): "${spec.hotkey}" is already taken by "${otherId}", which keeps it`,
+          );
+          break;
+        }
+      }
+    }
     this._customControls.set(spec.id, {
       spec,
       // A replacement keeps the state it had: re-registering the same toggle
@@ -26025,10 +26051,61 @@ export class MoviElement extends HTMLElement {
     this.renderCustomControl(id);
   }
 
+  /**
+   * Put the host's hotkeys in the Keyboard Shortcuts panel, beside the
+   * player's own.
+   *
+   * The panel is a static list, and it was the player's list — a host could
+   * register a hotkey and the one screen a viewer opens to find out what the
+   * keys ARE would not mention it. Rebuilt on open rather than on add, so a
+   * control that comes and goes with the source never leaves a row behind for
+   * a key that no longer does anything.
+   */
+  private syncShortcutsPanel(): void {
+    const panel = this.shadowRoot?.querySelector(".movi-shortcuts-panel");
+    const body = panel?.querySelector(".movi-shortcuts-body");
+    if (!body) return;
+    body.querySelectorAll(".movi-shortcut-row.movi-custom-shortcut").forEach((n) =>
+      n.remove(),
+    );
+    const cols = body.querySelectorAll(".movi-shortcuts-col");
+    const target = (cols[cols.length - 1] ?? body) as HTMLElement;
+    for (const [, entry] of this._customControls) {
+      const key = this.formatHotkey(entry.spec.hotkey);
+      if (!key) continue;
+      const row = document.createElement("div");
+      row.className = "movi-shortcut-row movi-custom-shortcut";
+      const kbd = document.createElement("kbd");
+      kbd.textContent = key;
+      const label = document.createElement("span");
+      label.textContent = entry.spec.label;
+      row.append(kbd, label);
+      target.appendChild(row);
+    }
+  }
+
   /** Take a custom control back down. Unknown ids are ignored. */
   removeControl(id: string): void {
     this.teardownCustomControl(id);
     this._customControls.delete(id);
+  }
+
+  /**
+   * "a+shift" and "shift+a" → "shift+a": modifiers in a fixed order, the key
+   * last, which is the shape a keydown is reduced to. Sorting the parts instead
+   * put the KEY first — indexOf returns -1 for anything that is not a modifier
+   * — and nothing ever matched. Empty when there is no single key.
+   */
+  private normaliseHotkey(hotkey: string): string {
+    const parts = hotkey
+      .split("+")
+      .map((p) => p.trim().toLowerCase())
+      .filter(Boolean);
+    const order = ["ctrl", "meta", "alt", "shift"];
+    const mods = order.filter((m) => parts.includes(m));
+    const keys = parts.filter((p) => !order.includes(p));
+    if (keys.length !== 1) return "";
+    return [...mods, keys[0]].join("+");
   }
 
   /** "shift+a" → "Shift+A", for the menu row. Empty for no hotkey. */
@@ -26067,19 +26144,7 @@ export class MoviElement extends HTMLElement {
     for (const [id, entry] of this._customControls) {
       const want = entry.spec.hotkey;
       if (!want) continue;
-      // Modifiers in a fixed order, the key last — the same shape `pressed` is
-      // built in, so "shift+a" and "a+shift" are one hotkey. Sorting the parts
-      // instead put the KEY first, because indexOf returns -1 for anything that
-      // is not a modifier, and nothing ever matched.
-      const parts = want
-        .split("+")
-        .map((p) => p.trim().toLowerCase())
-        .filter(Boolean);
-      const order = ["ctrl", "meta", "alt", "shift"];
-      const mods = order.filter((m) => parts.includes(m));
-      const keys = parts.filter((p) => !order.includes(p));
-      if (keys.length !== 1) continue; // no key, or more than one — not a hotkey
-      if ([...mods, keys[0]].join("+") === pressed) return id;
+      if (this.normaliseHotkey(want) === pressed) return id;
     }
     return null;
   }
@@ -26271,12 +26336,29 @@ export class MoviElement extends HTMLElement {
     parent.appendChild(node);
   }
 
-  /** A custom control was used — flip a toggle, tell the host, resync both UIs. */
-  private triggerCustomControl(id: string): void {
+  /**
+   * A custom control was used — flip a toggle, tell the host, resync both UIs.
+   *
+   * `viaHotkey` decides whether an OSD flashes. A click has its own feedback:
+   * the thing under the pointer changed. A key press has none — the control may
+   * be off screen, or in the menu, or the bar may be hidden entirely — which is
+   * why every built-in shortcut flashes one, and a host's should too.
+   */
+  private triggerCustomControl(id: string, viaHotkey = false): void {
     const entry = this._customControls.get(id);
     if (!entry) return;
     if (entry.spec.toggle) entry.active = !entry.active;
     this.syncCustomControl(id);
+    if (viaHotkey && entry.spec.osd !== false) {
+      const state = entry.spec.toggle ? (entry.active ? "On" : "Off") : "";
+      this.showOSD(
+        // The control's own icon when it has one, so the flash is recognisably
+        // ITS flash. Stripped of any <style> the host shipped with it: those
+        // rules key off a state class that is on the control, not on the OSD.
+        this.osdIconMarkup(entry.spec.icon),
+        state ? `${entry.spec.label} ${state}` : entry.spec.label,
+      );
+    }
     try {
       entry.spec.onSelect?.(entry.active, this);
     } catch (e) {
@@ -26291,6 +26373,24 @@ export class MoviElement extends HTMLElement {
         composed: true,
       }),
     );
+  }
+
+  /** A custom icon reduced to something the OSD can show: markup without the
+   *  host's stylesheet, which was written for the control and not for this. */
+  private osdIconMarkup(icon?: string | Element): string {
+    const node = this.buildCustomIcon(icon);
+    if (!node) return "";
+    node.querySelectorAll("style").forEach((n) => n.remove());
+    return node.outerHTML;
+  }
+
+  /**
+   * Flash the player's on-screen display — the same capsule the built-in
+   * shortcuts use. Public so a host's own control can say what it just did in
+   * the place a viewer already looks for that.
+   */
+  showOsd(text: string, icon?: string | Element): void {
+    this.showOSD(this.osdIconMarkup(icon), text);
   }
 
   /** Push a control's state onto whichever of its two faces exist. */
