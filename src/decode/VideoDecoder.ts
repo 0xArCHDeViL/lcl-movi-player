@@ -179,8 +179,14 @@ export class MoviVideoDecoder {
 
     // const codecString = this.mapCodecToWebCodecs(track.codec, track.width, track.height, track.profile, track.level);
     if (!codecString) {
-      Logger.error(TAG, `Unsupported codec: ${track.codec}`);
-      return false;
+      // WebCodecs has no registered codec string for several FFmpeg-supported
+      // legacy codecs (notably Motion JPEG in AVI). Falling back here keeps those
+      // files playable instead of silently leaving the renderer black.
+      Logger.info(
+        TAG,
+        `No WebCodecs codec string for ${track.codec}; using software decoder.`,
+      );
+      return this.initSoftwareDecoder();
     }
 
 
