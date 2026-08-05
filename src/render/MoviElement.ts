@@ -2296,15 +2296,24 @@ export class MoviElement extends HTMLElement {
         if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
       }
 
-      // Position Tooltip
-      let leftPos = offsetX;
-      const tooltipWidth = this._thumb ? 160 : 60;
-      if (leftPos < tooltipWidth / 2) leftPos = tooltipWidth / 2;
-      if (leftPos > rect.width - tooltipWidth / 2)
-        leftPos = rect.width - tooltipWidth / 2;
+      // Position Tooltip. Laid out FIRST so the clamp below can measure what it
+      // is clamping: the card's real width depends on the frame inside it and
+      // on whether a chapter title is showing, and the 160px it used to assume
+      // was narrower than every one of those cases — so at either end of the
+      // bar the card hung past the frame and was cut off by exactly the amount
+      // the guess was wrong.
+      thumbnail.style.display = "flex";
+      const tooltipWidth =
+        thumbnail.offsetWidth || (this._thumb ? 160 : 60);
+      const half = tooltipWidth / 2;
+      // A card wider than the player cannot be kept inside it; centre it rather
+      // than pinning it to one edge.
+      const leftPos =
+        tooltipWidth >= rect.width
+          ? rect.width / 2
+          : Math.min(Math.max(offsetX, half), rect.width - half);
 
       thumbnail.style.left = `${leftPos}px`;
-      thumbnail.style.display = "flex";
 
       // Cancel previous pending show
       if (showRafId) {
@@ -13188,11 +13197,15 @@ export class MoviElement extends HTMLElement {
          white color for the dark theme — needs an explicit dark
          override here or it disappears against the light backdrop. */
       :host([theme="light"]) .movi-seek-chapter-title {
-        color: #11142d !important;
+        /* Muted the same way the dark card mutes it, so the chapter stays
+           secondary to the clock in both themes rather than only in one. */
+        color: rgba(17, 20, 45, 0.72) !important;
       }
 
+      /* No border to re-colour any more — just a light backdrop so a frame
+         that has not decoded yet is a pale gap rather than a black hole in a
+         white card. */
       :host([theme="light"]) .movi-thumbnail-img {
-         border-color: rgba(0, 0, 0, 0.1) !important;
          background-color: #f0f0f0 !important;
       }
 
@@ -18017,22 +18030,30 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Seek Thumbnail */
+      /* The scrub preview. Built out of the same glass the menus are made of
+         rather than its own opaque grey, so the one piece of chrome that
+         appears OVER the picture isn't also the one that looks unlike the
+         rest. */
       .movi-seek-thumbnail {
         position: absolute;
         bottom: 25px;
         left: 0;
-        transform: translateX(-50%);
-        background-color: rgba(28, 28, 28, 0.9);
-        color: white;
-        padding: 6px;
-        border-radius: 4px;
+        transform: translateX(-50%) translateY(4px);
+        background: var(--movi-glass-bg, rgba(28, 28, 28, 0.9));
+        border: 1px solid var(--movi-glass-border, transparent);
+        color: var(--movi-chrome-fg, #fff);
+        padding: 5px 5px 6px;
+        border-radius: 10px;
         font-size: 13px;
         font-weight: 500;
         pointer-events: none;
         white-space: nowrap;
         opacity: 0;
-        transition: opacity 0.1s ease;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.6);
+        /* A few pixels of rise as it appears, like every other panel. It
+           tracks the pointer horizontally, so there is no scale here — growing
+           from a corner while sliding sideways reads as two movements. */
+        transition: opacity 0.1s ease, transform 0.12s ease;
+        box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
         overflow: hidden;
         z-index: 20;
         display: none;
@@ -18048,27 +18069,34 @@ export class MoviElement extends HTMLElement {
         max-width: 180px;
         max-height: 200px;
         object-fit: contain;
-        margin-bottom: 4px;
-        border: 1px solid var(--movi-border-color, #333);
-        border-radius: 2px;
+        margin-bottom: 5px;
+        /* No outline. The card's own padding already separates the frame from
+           the chrome, and a hairline around a moving picture is one edge too
+           many at this size. Corners rounded enough to belong to the card
+           without eating the frame. */
+        border-radius: 6px;
         pointer-events: none;
       }
       .movi-seek-thumbnail.visible {
         opacity: 1;
+        transform: translateX(-50%) translateY(0);
       }
 
       .movi-seek-chapter-title {
         display: none;
         font-size: 11px;
         font-weight: 600;
-        color: var(--movi-chrome-fg, #fff);
+        /* Secondary to the time: the chapter says where you are, the clock
+           says exactly where you will land, and it is the clock the pointer is
+           being aimed with. */
+        color: color-mix(in srgb, var(--movi-chrome-fg, #fff) 72%, transparent);
         text-align: center;
         max-width: 180px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         padding: 0 4px;
-        margin-bottom: 2px;
+        margin-bottom: 1px;
         position: relative;
         z-index: 2;
       }
@@ -18076,6 +18104,14 @@ export class MoviElement extends HTMLElement {
       .movi-seek-time {
         position: relative;
         z-index: 2;
+        font-weight: 600;
+        /* Fixed-width digits. Scrubbing changes every digit several times a
+           second, and with proportional figures the label shifts under the
+           pointer on each change — a readout that wobbles while you aim with
+           it. */
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+        letter-spacing: 0.01em;
       }
 
       .movi-thumbnail-img {
