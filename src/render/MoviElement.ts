@@ -225,6 +225,11 @@ export interface MoviControlSpec {
   /** Right-hand text on the menu row for a non-toggle. Defaults to the hotkey
    *  when one is set, which is what the built-in rows show. */
   shortcutHint?: string;
+  /** Remember this toggle's state across loads and sessions, under the
+   *  element's `persistkey` namespace. The stored value wins over `active` at
+   *  registration — read it back with isControlActive(id) if the host keeps its
+   *  own copy. Ignored without `toggle`. */
+  persist?: boolean;
   /** Set false to stay silent when the control is used by its HOTKEY. On by
    *  default: a key press has no other feedback, which is why every built-in
    *  shortcut flashes the OSD. A click never flashes — the button itself is
@@ -866,6 +871,9 @@ export class MoviElement extends HTMLElement {
       "fallback",
       "engine",
       "wasmurl",
+      "persist",
+      "persistkey",
+      "controlslist",
     ];
   }
 
@@ -17824,6 +17832,44 @@ export class MoviElement extends HTMLElement {
         margin-right: 12px;
       }
 
+      /* controlslist="no<name>" — the host switching a built-in off.
+         CSS for the whole set, because most of these are only a button and a
+         menu row; the ones that also answer isControlAvailable() are gated
+         there as well, so their hotkeys go quiet with them. Written out one per
+         line rather than generated, so a token that does not exist matches
+         nothing instead of half-working. */
+      :host([controlslist~="noplay"]) .movi-play-pause,
+      :host([controlslist~="noseekbuttons"]) .movi-seek-backward,
+      :host([controlslist~="noseekbuttons"]) .movi-seek-forward,
+      :host([controlslist~="novolume"]) .movi-volume-container,
+      :host([controlslist~="notime"]) .movi-time,
+      :host([controlslist~="noaudio"]) .movi-audio-track-container,
+      :host([controlslist~="nocc"]) .movi-subtitle-track-container,
+      :host([controlslist~="noquality"]) .movi-quality-container,
+      :host([controlslist~="nospeed"]) .movi-speed-container,
+      :host([controlslist~="nostableaudio"]) .movi-stable-audio-container,
+      :host([controlslist~="nohdr"]) .movi-hdr-container,
+      :host([controlslist~="noloop"]) .movi-loop-btn,
+      :host([controlslist~="nosettings"]) .movi-settings-container,
+      :host([controlslist~="noaspect"]) .movi-aspect-ratio-btn,
+      :host([controlslist~="nopip"]) .movi-pip-btn,
+      :host([controlslist~="nofullscreen"]) .movi-fullscreen-btn,
+      :host([controlslist~="nomore"]) .movi-more-btn,
+      :host([controlslist~="noprogress"]) .movi-progress-container {
+        display: none !important;
+      }
+      /* …and the context-menu rows that reach the same controls, so a control
+         that is off is not simply one click further away. */
+      :host([controlslist~="nospeed"]) .movi-context-menu-item[data-action="speed"],
+      :host([controlslist~="noaspect"]) .movi-context-menu-item[data-action="fit"],
+      :host([controlslist~="nopip"]) .movi-context-menu-item[data-action="pip"],
+      :host([controlslist~="noloop"]) .movi-context-menu-item[data-action="loop-toggle"],
+      :host([controlslist~="nofullscreen"]) .movi-context-menu-item[data-action="fullscreen"],
+      :host([controlslist~="nostats"]) .movi-context-menu-item[data-action="nerd-stats"],
+      :host([controlslist~="noshortcuts"]) .movi-context-menu-item[data-action="keyboard-shortcuts"] {
+        display: none !important;
+      }
+
       .movi-custom-btn .movi-custom-btn-text {
         font-size: 12px;
         font-weight: 600;
@@ -19616,6 +19662,10 @@ export class MoviElement extends HTMLElement {
     // the first load with every attribute already applied.
     this._hasConnected = true;
 
+    // Remembered settings go on BEFORE the first load, so the player opens on
+    // the viewer's last choices rather than snapping to them a moment after.
+    this.applyPersistedSettings();
+
     // Point the WASM loader at a custom `movi.wasm` URL before the engine loads
     // (slim build only; harmless otherwise — the embedded build never fetches a
     // .wasm). Module-global on purpose: one .wasm serves the whole app.
@@ -19854,7 +19904,16 @@ export class MoviElement extends HTMLElement {
       this.initializePlayer();
     }
 
-    // Load saved settings (OPFS)
+    // Load saved settings (OPFS). Skipped entirely when the host has taken the
+    // decision with `persist` — see legacySettingsEnabled.
+    if (this.legacySettingsEnabled()) {
+      void this.restoreLegacySettings();
+    }
+  }
+
+  /** The pre-`persist` OPFS restore, moved out whole so the guard above reads
+   *  as one decision rather than wrapping a hundred lines. */
+  private async restoreLegacySettings(): Promise<void> {
     SettingsStorage.getInstance()
       .load()
       .then((settings) => {
@@ -20061,6 +20120,9 @@ export class MoviElement extends HTMLElement {
     // The wrapper no longer writes no-ops either; this is the guard for every
     // other host that might.
     if (_oldValue === newValue) return;
+    // Remember it, if the host asked for this one to be remembered. Before the
+    // switch, because several cases below return early.
+    this.notePersistedAttribute(name, newValue);
     switch (name) {
       case "wasmurl":
         // Also handled here, not just in connectedCallback: a framework wrapper
@@ -25979,6 +26041,145 @@ export class MoviElement extends HTMLElement {
   // state, not two that have to be kept in sync by the host.
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Persisted settings.
+  //
+  // A viewer who turns Stable Volume on, or picks 1.25x, or sets the aspect,
+  // has stated a preference — and it lasted until the next video, because the
+  // element remembered nothing of its own but the Auto-quality flag. Every app
+  // that wanted more wrote its own listeners and its own storage, which is how
+  // movi-tube came to persist height and aspect by hand.
+  //
+  // Opt-in per setting, because it is a decision and not a default: a kiosk
+  // that starts every clip muted at 1x must not inherit the last viewer's
+  // choices.
+  //
+  //   <movi-player persist="loop stablevolume speed aspect volume"
+  //                persistkey="tube"></movi-player>
+  //
+  // The write hangs off attributeChangedCallback rather than the setters: every
+  // one of these reflects to its attribute, so UI toggles, hotkeys, property
+  // writes and host markup all pass through one place that eight separate hooks
+  // would have had to cover between them.
+  // ---------------------------------------------------------------------------
+
+  /** Setting name → the attribute that carries it. */
+  private static readonly PERSISTABLE: Record<
+    string,
+    { attr: string; boolean: boolean }
+  > = {
+    loop: { attr: "loop", boolean: true },
+    muted: { attr: "muted", boolean: true },
+    volume: { attr: "volume", boolean: false },
+    speed: { attr: "playbackrate", boolean: false },
+    ambient: { attr: "ambientmode", boolean: true },
+    stablevolume: { attr: "stablevolume", boolean: true },
+    hdr: { attr: "hdr", boolean: true },
+    aspect: { attr: "objectfit", boolean: false },
+  };
+
+  private _persistNames(): Set<string> {
+    const raw = this.getAttribute("persist");
+    if (!raw) return new Set();
+    return new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((n) => n.trim().toLowerCase())
+        .filter(Boolean),
+    );
+  }
+
+  /** Namespaced, so two players on a page — or two apps on a domain — do not
+   *  quietly share one viewer's preferences. */
+  private _prefKey(name: string): string {
+    const ns = this.getAttribute("persistkey")?.trim();
+    return ns ? `movi:pref:${ns}:${name}` : `movi:pref:${name}`;
+  }
+
+  private _prefRead(name: string): string | null {
+    try {
+      return localStorage.getItem(this._prefKey(name));
+    } catch {
+      return null; // private mode / storage off — preferences just don't stick
+    }
+  }
+
+  private _prefWrite(name: string, value: string | null): void {
+    try {
+      if (value === null) localStorage.removeItem(this._prefKey(name));
+      else localStorage.setItem(this._prefKey(name), value);
+    } catch {
+      /* nothing to do — the setting still applies for this session */
+    }
+  }
+
+  private _applyingPersisted = false;
+
+  /** Called from attributeChangedCallback for every attribute that backs a
+   *  setting the host opted into. */
+  private notePersistedAttribute(attr: string, value: string | null): void {
+    if (this._applyingPersisted) return; // restoring, not choosing
+    const names = this._persistNames();
+    if (names.size === 0) return;
+    for (const [name, def] of Object.entries(MoviElement.PERSISTABLE)) {
+      if (def.attr !== attr || !names.has(name)) continue;
+      this._prefWrite(name, def.boolean ? (value === null ? "0" : "1") : value);
+    }
+  }
+
+  /**
+   * Put the remembered settings back, before the first load.
+   *
+   * The stored value WINS over the markup for any setting the host opted into
+   * — that is what opting in means. A host that wants a value fixed leaves it
+   * out of `persist`.
+   */
+  private applyPersistedSettings(): void {
+    const names = this._persistNames();
+    if (names.size === 0) return;
+    this._applyingPersisted = true;
+    try {
+      for (const name of names) {
+        const def = MoviElement.PERSISTABLE[name];
+        if (!def) continue;
+        const stored = this._prefRead(name);
+        if (stored === null) continue;
+        if (def.boolean) {
+          if (stored === "1") this.setAttribute(def.attr, "");
+          else this.removeAttribute(def.attr);
+        } else {
+          this.setAttribute(def.attr, stored);
+        }
+      }
+    } finally {
+      this._applyingPersisted = false;
+    }
+  }
+
+  /**
+   * Is the element's own always-on settings store still in charge?
+   *
+   * SettingsStorage has been quietly remembering volume, muted, speed, stable
+   * volume, ambient and HDR in OPFS since long before `persist` existed —
+   * unconditionally, un-namespaced, with no way to turn it off. Two stores for
+   * one setting is worse than either: whichever applied last would win, and
+   * which one that is depends on how fast OPFS answers.
+   *
+   * So `persist` takes the whole decision. Present, and it is the only answer:
+   * the old store neither saves nor restores, and the host's list is exactly
+   * what is remembered. Absent, nothing changes for anyone — which is what
+   * every existing embed already depends on.
+   */
+  private legacySettingsEnabled(): boolean {
+    return !this.hasAttribute("persist");
+  }
+
+  /** Every setting this element can remember — for a host building its own
+   *  preferences UI, so the list lives in one place. */
+  static get persistableSettings(): string[] {
+    return Object.keys(MoviElement.PERSISTABLE);
+  }
+
   /** Single keys the player's own shortcuts already claim. A custom hotkey is
    *  checked after them, so one of these can only ever be dead — said out loud
    *  at registration rather than left to be discovered. */
@@ -26027,6 +26228,13 @@ export class MoviElement extends HTMLElement {
       Logger.warn(TAG, "addControl: a control needs an id");
       return;
     }
+    if (this.isControlDisabled(spec.id)) {
+      Logger.debug(
+        TAG,
+        `addControl("${spec.id}"): switched off by controlslist — not added`,
+      );
+      return;
+    }
     const existing = this._customControls.get(spec.id);
     this.teardownCustomControl(spec.id);
     if (spec.hotkey && MoviElement.RESERVED_HOTKEYS.has(spec.hotkey.trim().toLowerCase())) {
@@ -26051,11 +26259,19 @@ export class MoviElement extends HTMLElement {
         }
       }
     }
+    // A remembered toggle opens on what the VIEWER last chose, not on what the
+    // host passed — a host keeping its own copy reads it back with
+    // isControlActive(id) right after registering.
+    let active = spec.active ?? existing?.active ?? false;
+    if (spec.toggle && spec.persist) {
+      const stored = this._prefRead(`ctl:${spec.id}`);
+      if (stored !== null) active = stored === "1";
+    }
     this._customControls.set(spec.id, {
       spec,
       // A replacement keeps the state it had: re-registering the same toggle
       // should not silently flip it back off under the viewer.
-      active: spec.active ?? existing?.active ?? false,
+      active,
     });
     this.renderCustomControl(spec.id);
   }
@@ -26069,7 +26285,14 @@ export class MoviElement extends HTMLElement {
     const entry = this._customControls.get(id);
     if (!entry) return;
     entry.spec = { ...entry.spec, ...patch, id };
-    if (patch.active !== undefined) entry.active = patch.active;
+    if (patch.active !== undefined) {
+      entry.active = patch.active;
+      // A host pushing state is the viewer's choice arriving by another route
+      // — a pill under the picture, a preference restored on navigation.
+      if (entry.spec.toggle && entry.spec.persist) {
+        this._prefWrite(`ctl:${id}`, entry.active ? "1" : "0");
+      }
+    }
     this.teardownCustomControl(id);
     this.renderCustomControl(id);
   }
@@ -26301,16 +26524,29 @@ export class MoviElement extends HTMLElement {
         label.className = "movi-context-menu-label";
         label.textContent = spec.label;
         item.appendChild(label);
-        const trailing = document.createElement("span");
-        trailing.className = "movi-context-menu-shortcut";
-        // A toggle says what it IS; anything else shows how to reach it, which
-        // is what every built-in row does with its own key.
-        trailing.textContent = spec.toggle
-          ? entry.active
-            ? "On"
-            : "Off"
-          : (spec.shortcutHint ?? this.formatHotkey(spec.hotkey));
-        item.appendChild(trailing);
+        // A built-in toggle row carries TWO trailing spans — a status word and,
+        // after it, the key chip:
+        //   <span class="…-label">Loop</span>
+        //   <span class="…-status">Off</span>
+        //   <span class="…-shortcut">L</span>
+        // Putting "On" in the shortcut span made it the key chip: styled as a
+        // key, sitting in the key's column, and on a narrow menu the first
+        // thing to fall off the right edge — which is where it went. A custom
+        // toggle now states itself where every other toggle does, and shows its
+        // hotkey where every other row shows one.
+        if (spec.toggle) {
+          const status = document.createElement("span");
+          status.className = "movi-context-menu-status";
+          status.textContent = entry.active ? "On" : "Off";
+          item.appendChild(status);
+        }
+        const chip = spec.shortcutHint ?? this.formatHotkey(spec.hotkey);
+        if (chip) {
+          const trailing = document.createElement("span");
+          trailing.className = "movi-context-menu-shortcut";
+          trailing.textContent = chip;
+          item.appendChild(trailing);
+        }
         // BOTH state classes. movi-context-menu-active is what the menu's own
         // styling reads (the fill and the rail); movi-custom-active is what the
         // HOST reads, and it is on the bar button already — so a host that
@@ -26371,6 +26607,9 @@ export class MoviElement extends HTMLElement {
     const entry = this._customControls.get(id);
     if (!entry) return;
     if (entry.spec.toggle) entry.active = !entry.active;
+    if (entry.spec.toggle && entry.spec.persist) {
+      this._prefWrite(`ctl:${id}`, entry.active ? "1" : "0");
+    }
     this.syncCustomControl(id);
     if (viaHotkey && entry.spec.osd !== false) {
       const state = entry.spec.toggle ? (entry.active ? "On" : "Off") : "";
@@ -26430,9 +26669,9 @@ export class MoviElement extends HTMLElement {
         const on = !!entry.spec.toggle && entry.active;
         el.classList.toggle("movi-context-menu-active", on);
         el.classList.toggle("movi-custom-active", on);
-        const trailing = el.querySelector(".movi-context-menu-shortcut");
-        if (trailing && entry.spec.toggle) {
-          trailing.textContent = entry.active ? "On" : "Off";
+        const status = el.querySelector(".movi-context-menu-status");
+        if (status && entry.spec.toggle) {
+          status.textContent = entry.active ? "On" : "Off";
         }
       } else {
         el.classList.toggle(
@@ -26455,6 +26694,36 @@ export class MoviElement extends HTMLElement {
    * also call this directly instead of inferring availability from a button's
    * computed style.
    */
+  /**
+   * Controls the host has switched off, as `no<name>` tokens — the shape
+   * <video controlslist> already uses, so it reads like something a viewer of
+   * this code has met before.
+   *
+   *   <movi-player controlslist="nofullscreen nopip nospeed"></movi-player>
+   *
+   * Hiding the button alone is not enough: its hotkey and its context-menu row
+   * would go on working, which is a control that is off in one place and on in
+   * two others. The names the availability check below knows are gated there
+   * too, so the button, the row and the key answer together; CSS hides the
+   * rest.
+   */
+  private _disabledControls(): Set<string> {
+    const raw = this.getAttribute("controlslist");
+    if (!raw) return new Set();
+    const out = new Set<string>();
+    for (const token of raw.split(/[\s,]+/)) {
+      const t = token.trim().toLowerCase();
+      if (t.startsWith("no") && t.length > 2) out.add(t.slice(2));
+    }
+    return out;
+  }
+
+  /** Is this control switched off by `controlslist`? Public, so a host can ask
+   *  the question the element asks. */
+  isControlDisabled(name: string): boolean {
+    return this._disabledControls().has(name.toLowerCase());
+  }
+
   isControlAvailable(
     action:
       | "snapshot"
@@ -26466,6 +26735,9 @@ export class MoviElement extends HTMLElement {
       | "stableaudio",
   ): boolean {
     if (!this.player) return false;
+    // Switched off by the host. First, because nothing below can make a control
+    // the host removed available again.
+    if (this.isControlDisabled(action)) return false;
     // Audio-graph control: no AudioContext path when audio is native.
     if (action === "stableaudio") return !this.player.usesNativeAudio?.();
     if (action === "hdr") {
@@ -27303,7 +27575,7 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("muted");
     }
     this.updateMuted();
-    SettingsStorage.getInstance().save({ muted: this._muted });
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ muted: this._muted });
     this.dispatchEvent(new CustomEvent("volumechange", { detail: { volume: this._volume, muted: this._muted } }));
   }
 
@@ -27364,7 +27636,7 @@ export class MoviElement extends HTMLElement {
     // ends unmuted-via-slider reloads as muted because OPFS still
     // holds the last muted=true write from whenever the user first
     // muted via M-key or the volume button.
-    SettingsStorage.getInstance().save(
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save(
       autoUnmuted ? { volume: this._volume, muted: false } : { volume: this._volume },
     );
     this.dispatchEvent(new CustomEvent("volumechange", { detail: { volume: this._volume, muted: this._muted } }));
@@ -27383,7 +27655,7 @@ export class MoviElement extends HTMLElement {
     this._playbackRate = Math.max(0.25, Math.min(ceiling, value));
     this.setAttribute("playbackrate", this._playbackRate.toString());
     this.updatePlaybackRate();
-    SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
     this.dispatchEvent(new CustomEvent("ratechange", { detail: { playbackRate: this._playbackRate } }));
     // Keep the OS lock-screen scrubber's speed indicator in sync.
     this.updateMediaSessionPosition();
@@ -27456,7 +27728,7 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("ambientmode");
     }
     this.updateAmbientMode();
-    SettingsStorage.getInstance().save({ ambientMode: this._ambientMode });
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ ambientMode: this._ambientMode });
     if (changed) {
       this.emitSettingChange("ambientchange", { enabled: !!this._ambientMode });
     }
@@ -27478,7 +27750,7 @@ export class MoviElement extends HTMLElement {
       this.player.setStableAudio(this._stableVolume);
       this.updateStableAudioUI();
     }
-    SettingsStorage.getInstance().save({ stableVolume: this._stableVolume });
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ stableVolume: this._stableVolume });
     if (changed) {
       this.emitSettingChange("stablevolumechange", { enabled: this._stableVolume });
     }
@@ -28566,7 +28838,7 @@ export class MoviElement extends HTMLElement {
       this.player.setHDREnabled(this._hdr);
     }
 
-    SettingsStorage.getInstance().save({ hdr: this._hdr });
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ hdr: this._hdr });
     this.emitSettingChange("hdrchange", { enabled: this._hdr });
   }
 
