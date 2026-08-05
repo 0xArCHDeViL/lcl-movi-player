@@ -17708,6 +17708,62 @@ export class MoviElement extends HTMLElement {
         transform: translateY(0);
       }
 
+      /* On a small player the panel stops being a dropdown and becomes a
+         popup.
+         Anchored to the gear, it reached most of the way across a phone and
+         still had to point at a 40px button in the corner — so it reads as
+         something hanging off the chrome while covering the picture anyway.
+         Centred, it is simply the thing you are looking at, and the rows get
+         the width they were designed for instead of whatever is left between
+         the gear and the frame edge.
+         Measured on the PLAYER, not the device: a phone held sideways in
+         fullscreen has room for the dropdown and keeps it. */
+      @container movi-host (max-width: 480px) {
+        /* Strip mode is excluded by name. It is 56px tall, so it is under this
+           width by definition, but its menus are placed by JS against the strip
+           and its scrim would dim the PAGE around a 56px audio bar rather than
+           a picture — a modal treatment for something that isn't one. */
+        :host(:not(.movi-audio-strip)) .movi-settings-menu {
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          right: auto;
+          bottom: auto;
+          /* Bounded by the PLAYER's width, not the viewport's. A fixed-position
+             element resolves a percentage against the viewport, so a 400px
+             player embedded in a wide page would have opened a panel wider than
+             itself — the host publishes its own width for exactly this. */
+          width: min(calc(var(--movi-player-width, 100vw) - 40px), 340px);
+          min-width: 0;
+          max-width: none;
+          /* Still bounded by the player's own height so it can never grow past
+             the frame it belongs to; the list scrolls inside instead. */
+          max-height: min(calc(var(--movi-player-height, 70vh) - 32px), 460px);
+          border-radius: 14px;
+          /* The dim behind it is the panel's own shadow, spread far enough to
+             cover the frame — a popup wants the picture pushed back, and doing
+             it this way adds no element to click through and nothing for the
+             outside-click handler to mistake for the menu. Clicks land on the
+             player underneath and dismiss it, which is what a tap outside a
+             popup should do. */
+          box-shadow:
+            var(--movi-shadow-md),
+            0 0 0 100vmax rgba(0, 0, 0, 0.55);
+          /* The centring lives in the transform, so the open/close travel has
+             to be folded into it rather than replacing it. */
+          transform: translate(-50%, calc(-50% + 8px));
+          transform-origin: center;
+        }
+        :host(:not(.movi-audio-strip)) .movi-settings-menu.is-open {
+          transform: translate(-50%, -50%);
+        }
+        /* Touch targets, not pointer targets — the same rows an inch of thumb
+           has to hit. */
+        :host(:not(.movi-audio-strip)) .movi-settings-row {
+          padding: 13px 12px;
+        }
+      }
+
       .movi-settings-row {
         display: flex;
         align-items: center;
