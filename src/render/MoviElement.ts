@@ -18235,8 +18235,8 @@ export class MoviElement extends HTMLElement {
         100% { background-position: 200% 0; }
       }
 
-      /* The placeholder holds the image's PLACE. That is the whole job — it
-         paints nothing.
+      /* The placeholder holds the image's PLACE, and says that a picture is on
+         its way.
          Sized to nothing, the card collapsed to its text while a frame was
          being fetched and grew back when it arrived. Two consequences, one
          invisible and one not: the card jumped in width on every scrub, and
@@ -18248,14 +18248,46 @@ export class MoviElement extends HTMLElement {
          processPreviewQueue), so it matches the source's shape rather than the
          16:9 assumed here for the very first fetch. */
       .movi-thumbnail-placeholder {
+        position: relative;
+        overflow: hidden;
         width: var(--movi-preview-w, 168px);
         height: var(--movi-preview-h, 95px);
         margin-bottom: 5px;
         border-radius: 2px;
         padding: 0;
         border: none;
-        background: rgba(255, 255, 255, 0.06);
-        animation: none;
+        background: rgba(255, 255, 255, 0.07);
+      }
+      /* A sweep across the gap while the frame is being fetched. Held flat, the
+         gap is indistinguishable from a frame that decoded to grey — and on a
+         slow seek that silence is several seconds long.
+         Moved by TRANSFORM, not by background-position: a transform runs on the
+         compositor and repaints nothing, which is what this has to be. It is
+         decoration on top of a video that is still decoding and must not take a
+         millisecond back from it. */
+      .movi-thumbnail-placeholder::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          100deg,
+          transparent 25%,
+          rgba(255, 255, 255, 0.11) 50%,
+          transparent 75%
+        );
+        transform: translateX(-100%);
+        animation: movi-thumb-shimmer 1.15s ease-in-out infinite;
+      }
+      @keyframes movi-thumb-shimmer {
+        to {
+          transform: translateX(100%);
+        }
+      }
+      /* A looping sweep is exactly what this setting is for. */
+      @media (prefers-reduced-motion: reduce) {
+        .movi-thumbnail-placeholder::after {
+          animation: none;
+        }
       }
       
       
