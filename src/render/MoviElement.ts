@@ -13007,6 +13007,16 @@ export class MoviElement extends HTMLElement {
         --movi-glass-bg: rgba(15, 15, 20, 0.85);
         --movi-glass-border: rgba(255, 255, 255, 0.08);
         --movi-glass-blur: 20px;
+
+        /* Corners. Two values for the whole chrome: the SURFACE a menu is
+           drawn on, and the ROW inside it. They were seven different numbers
+           across the menus — 16 on the context menu, 14 on the track menus, 12
+           on quality and speed, 10 on the settings panel, and the rows ranged
+           from 3 to 10 — which is not a style, it is what happens when each
+           menu is written on its own day. Named here so the next one inherits
+           the answer instead of picking a new number. */
+        --movi-radius-surface: 10px;
+        --movi-radius-row: 7px;
         
         /* Text Colors */
         --movi-controls-color: #FFFFFF;
@@ -14449,7 +14459,7 @@ export class MoviElement extends HTMLElement {
         right: 0;
         background: var(--movi-glass-bg);
         border: 1px solid var(--movi-glass-border);
-        border-radius: 14px;
+        border-radius: var(--movi-radius-surface);
         min-width: 260px;
         max-width: 340px;
         /* Capped against the PLAYER's own height (--movi-player-height
@@ -14651,7 +14661,7 @@ export class MoviElement extends HTMLElement {
         gap: 10px;
         min-width: 0;
         font-size: 14px;
-        border-radius: 8px;
+        border-radius: var(--movi-radius-row);
         margin: 1px 0;
       }
 
@@ -15299,7 +15309,7 @@ export class MoviElement extends HTMLElement {
         right: 0;
         background: var(--movi-glass-bg);
         border: 1px solid var(--movi-glass-border);
-        border-radius: 12px;
+        border-radius: var(--movi-radius-surface);
         min-width: 140px;
         /* Tall enough for all 8 speeds (0.25x…2x) without scrolling on a normal
            player; capped to 70vh so a short player still fits — its top rows no
@@ -15327,7 +15337,7 @@ export class MoviElement extends HTMLElement {
         transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         position: relative;
         margin: 2px 6px;
-        border-radius: 10px;
+        border-radius: var(--movi-radius-row);
       }
 
       .movi-speed-item:hover {
@@ -17280,7 +17290,7 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 16px;
+        border-radius: var(--movi-radius-surface);
         padding: 8px 4px; /* Consistent with submenus */
         min-width: 220px;
         z-index: 10000;
@@ -17352,7 +17362,7 @@ export class MoviElement extends HTMLElement {
         transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         position: relative;
         margin: 4px 6px;
-        border-radius: 10px;
+        border-radius: var(--movi-radius-row);
         letter-spacing: 0.01em;
       }
 
@@ -17469,7 +17479,7 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 16px;
+        border-radius: var(--movi-radius-surface);
         padding: 8px 4px;
         min-width: 230px;
         visibility: hidden;
@@ -17499,7 +17509,7 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 16px;
+        border-radius: var(--movi-radius-surface);
         padding: 8px 4px;
         min-width: 230px;
         visibility: hidden;
@@ -17553,7 +17563,7 @@ export class MoviElement extends HTMLElement {
         margin-bottom: 0;
         background: var(--movi-glass-bg);
         border: 1px solid var(--movi-glass-border);
-        border-radius: 12px;
+        border-radius: var(--movi-radius-surface);
         min-width: 200px;
         max-height: 280px;
         overflow-y: auto;
@@ -17566,6 +17576,9 @@ export class MoviElement extends HTMLElement {
       
       .movi-quality-item {
         padding: 8px 16px;
+        /* It had none, so its hover and its active fill painted as a square
+           block inside a rounded menu — the one row in the chrome that did. */
+        border-radius: var(--movi-radius-row);
         font-size: 13px;
         color: rgba(255, 255, 255, 0.9);
         cursor: pointer;
@@ -17654,22 +17667,20 @@ export class MoviElement extends HTMLElement {
          One rule for both: they say the same thing in the same place and had
          drifted into two sizes, two radii and two offsets.
 
-         Perched ON the corner rather than tucked inside it. Inset, it read as
-         part of the icon and sat over the gear's teeth; hung off the corner
-         with a ring in the bar's own colour it reads as a chip ABOUT the
-         button, which is what it is. The ring is what makes that work — a flat
-         chip on a busy glyph is a smudge.
+         Sits in the button's corner, where it always did. The ring is the only
+         addition — the chip lands on the gear's teeth, and a flat chip on a
+         busy glyph is a smudge; a hairline of the bar's own dark separates the
+         two without moving anything.
 
          Theme colour, not a hardcoded red: the badge is chrome like everything
          else, and a player themed green shouldn't sprout a red corner. */
       .movi-settings-btn-badge,
       .movi-quality-btn-badge {
         position: absolute;
-        top: 0;
+        top: 2px;
         right: 0;
-        transform: translate(40%, -30%);
         padding: 1px 4px;
-        border-radius: 999px;
+        border-radius: 2px;
         background: var(--movi-primary);
         color: var(--movi-chrome-fg, #fff);
         font-size: 8px;
@@ -17686,8 +17697,6 @@ export class MoviElement extends HTMLElement {
            show up in a text selection drag. */
         user-select: none;
       }
-      /* The chip hangs outside the button box, so nothing on the way up may
-         clip it. */
       .movi-settings-container,
       .movi-quality-btn {
         overflow: visible;
@@ -17719,7 +17728,7 @@ export class MoviElement extends HTMLElement {
            Same cap the track menus use. */
         max-height: min(calc(var(--movi-player-height, 70vh) - 96px), 460px);
         padding: 8px;
-        border-radius: 10px;
+        border-radius: var(--movi-radius-surface);
         background: var(--movi-glass-bg);
         border: 1px solid var(--movi-glass-border);
         box-shadow: var(--movi-shadow-md);
@@ -17772,7 +17781,6 @@ export class MoviElement extends HTMLElement {
           /* Still bounded by the player's own height so it can never grow past
              the frame it belongs to; the list scrolls inside instead. */
           max-height: min(calc(var(--movi-player-height, 70vh) - 32px), 460px);
-          border-radius: 14px;
           /* The dim behind it is the panel's own shadow, spread far enough to
              cover the frame — a popup wants the picture pushed back, and doing
              it this way adds no element to click through and nothing for the
@@ -17804,7 +17812,7 @@ export class MoviElement extends HTMLElement {
         width: 100%;
         padding: 11px 12px;
         border: none;
-        border-radius: 7px;
+        border-radius: var(--movi-radius-row);
         background: transparent;
         color: inherit;
         font: inherit;
@@ -17923,7 +17931,7 @@ export class MoviElement extends HTMLElement {
         width: 100%;
         padding: 11px 12px;
         border: none;
-        border-radius: 7px;
+        border-radius: var(--movi-radius-row);
         background: transparent;
         color: inherit;
         font: inherit;
@@ -17984,7 +17992,7 @@ export class MoviElement extends HTMLElement {
       .movi-settings-page-body .movi-subtitle-track-item {
         font-size: 14.5px;
         padding: 11px 12px;
-        border-radius: 7px;
+        border-radius: var(--movi-radius-row);
       }
       /* Borrowed lists arrive with their own menu's padding assumptions. */
       .movi-settings-page-body .movi-quality-list,
@@ -18063,7 +18071,7 @@ export class MoviElement extends HTMLElement {
         border: 1px solid var(--movi-glass-border, transparent);
         color: var(--movi-chrome-fg, #fff);
         padding: 5px 5px 6px;
-        border-radius: 10px;
+        border-radius: 4px;
         font-size: 13px;
         font-weight: 500;
         pointer-events: none;
@@ -18099,9 +18107,8 @@ export class MoviElement extends HTMLElement {
         margin-bottom: 5px;
         /* No outline. The card's own padding already separates the frame from
            the chrome, and a hairline around a moving picture is one edge too
-           many at this size. Corners rounded enough to belong to the card
-           without eating the frame. */
-        border-radius: 6px;
+           many at this size. */
+        border-radius: 2px;
         pointer-events: none;
       }
       .movi-seek-thumbnail.visible {
@@ -18167,7 +18174,7 @@ export class MoviElement extends HTMLElement {
         width: 168px;
         aspect-ratio: 16 / 9;
         margin-bottom: 5px;
-        border-radius: 6px;
+        border-radius: 2px;
         padding: 0;
         border: none;
         background: rgba(255, 255, 255, 0.06);
