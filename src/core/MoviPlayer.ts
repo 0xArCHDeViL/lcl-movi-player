@@ -2697,6 +2697,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // wait for the next tick rather than let the fallback decide. The
         // candidate and its confirmations stand.
         if (this._abrProbeInFlight) return;
+        // Audio first. A probe is bandwidth spent on a BETTER picture, and the
+        // split audio stream carries the thinnest buffer of the three things
+        // sharing this link — so when it is already thin, taking a share for a
+        // luxury is how a quality decision turns into a click in the speakers.
+        // Held rather than decided around: nothing is lost by waiting, and
+        // deciding without the probe is what hands the answer to a number
+        // measured on the rung we are leaving.
+        if (!this.disableAudio && !this.audioRenderer.hasHealthyBuffer()) {
+          Logger.debug(
+            TAG,
+            "ABR upshift held — the audio buffer is thin, no bandwidth to spend on a probe",
+          );
+          return;
+        }
         const rawProbeBits = await this.probeRungThroughput(up.url);
         // A rung gets probed again every time it comes up as a candidate, and
         // committing on the first reading that clears the bar is choosing the
@@ -2853,8 +2867,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // it, and the stream then fed at ~20Mbps until the buffer starved and the
     // rung was abandoned 13 seconds later. The pre-play number was right, and
     // it was right because of how it was measured.
-    const BURST_BYTES = 1_000_000; // the opening gift — not the link
-    const PROBE_BYTES = 2_400_000; // leaves ~1.4MB of honest measurement
+    // Every byte here is a byte the video and the split AUDIO stream do not
+    // get, on a link that is already the reason a switch is being considered.
+    // The log shows it plainly: the video stream halves, from 6.2MB/s to
+    // 3.6MB/s, for as long as a probe runs — and audio, which carries the
+    // least buffer of the three, is what the viewer hears break. So the probe
+    // takes the smallest sample that answers the question and then stops,
+    // rather than downloading a fixed slice to the end.
+    const BURST_BYTES = 800_000; // the opening gift — not the link
+    const BURST_MS = 250; // …and a slow link should not have to fund all of it
+    const TIMED_BYTES = 600_000; // enough to be a measurement
+    const TIMED_MS = 500;
+    const PROBE_BYTES = 2_000_000; // hard ceiling, rarely reached
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 6000);
     try {
@@ -2876,11 +2900,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         const { done, value } = await reader.read();
         if (done || !value) break;
         total += value.byteLength;
-        if (total > BURST_BYTES) {
+        const pastBurst =
+          total > BURST_BYTES || performance.now() - startedAt > BURST_MS;
+        if (pastBurst) {
           if (timingStart === 0) timingStart = performance.now();
           else timedBytes += value.byteLength;
         }
+        // Enough of a sample. Everything after this would be bandwidth spent
+        // to reach the same conclusion, so drop the connection and let the
+        // streams that are actually feeding playback have it back.
+        if (
+          (timedBytes >= TIMED_BYTES &&
+            performance.now() - timingStart >= 0.15 * 1000) ||
+          (timingStart > 0 && performance.now() - timingStart >= TIMED_MS)
+        ) {
+          break;
+        }
+        if (total >= PROBE_BYTES) break;
       }
+      try { await reader.cancel(); } catch {}
       if (this._destroyed) return -1;
       const totalSecs = (performance.now() - startedAt) / 1000;
       // A body that arrived faster than any link could deliver it came from a
