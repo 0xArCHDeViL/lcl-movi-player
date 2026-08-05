@@ -216,10 +216,22 @@ export interface MoviControlSpec {
   toggle?: boolean;
   /** Starting state for a toggle. */
   active?: boolean;
-  /** Right-hand text on the menu row for a non-toggle — a shortcut, usually. */
+  /** A key that uses this control, e.g. "a", "shift+a", "ctrl+alt+p". Matched
+   *  case-insensitively against the physical key plus its modifiers. Checked
+   *  AFTER the player's own shortcuts, so a host cannot accidentally take over
+   *  space or the arrows; a collision is logged once at registration. Appears
+   *  on the control's menu row automatically. */
+  hotkey?: string;
+  /** Right-hand text on the menu row for a non-toggle. Defaults to the hotkey
+   *  when one is set, which is what the built-in rows show. */
   shortcutHint?: string;
   /** Called on every use, with the state AFTER the toggle flipped. Also
    *  emitted as a "movi-control" event for hosts that prefer listeners. */
+  // NOTE for icon authors: while a toggle is on, BOTH of its faces carry the
+  // class `movi-custom-active`. An icon that ships its own <style> can key off
+  // it — the markup lands in the player's shadow tree, so the rule applies —
+  // and get a state-aware icon in the bar and in the menu with no help from
+  // the player.
   onSelect?: (active: boolean, player: MoviElement) => void;
 }
 
@@ -4693,6 +4705,20 @@ export class MoviElement extends HTMLElement {
           this.currentTime = this.duration;
           this.showControls();
           break;
+        default: {
+          // A host's own hotkey, and only here — after every built-in has had
+          // the event. A control registered on "k" gets nothing rather than
+          // taking play/pause away from everyone who expects it; addControl
+          // says so out loud when that happens, which is early enough for the
+          // author to pick another key.
+          const id = this.customHotkeyFor(e);
+          if (id) {
+            e.preventDefault();
+            this.triggerCustomControl(id);
+            this.showControls();
+          }
+          break;
+        }
       }
     });
 
@@ -17759,6 +17785,13 @@ export class MoviElement extends HTMLElement {
       .movi-custom-btn.movi-custom-active {
         color: var(--movi-primary);
       }
+      /* A host's non-SVG icon in a menu row: the built-in icons' spacing, none
+         of their sizing. See renderCustomControl. */
+      .movi-custom-menu-icon {
+        flex: 0 0 auto;
+        margin-right: 12px;
+      }
+
       .movi-custom-btn .movi-custom-btn-text {
         font-size: 12px;
         font-weight: 600;
@@ -25914,6 +25947,15 @@ export class MoviElement extends HTMLElement {
   // state, not two that have to be kept in sync by the host.
   // ---------------------------------------------------------------------------
 
+  /** Single keys the player's own shortcuts already claim. A custom hotkey is
+   *  checked after them, so one of these can only ever be dead — said out loud
+   *  at registration rather than left to be discovered. */
+  private static readonly RESERVED_HOTKEYS = new Set([
+    " ", "k", "j", "l", "f", "m", "c", "v", "a", "p", "r", "g", "s", "t", "h", "i",
+    "arrowleft", "arrowright", "arrowup", "arrowdown", "escape", "home", "end",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ",", ".", "<", ">",
+  ]);
+
   /** Built-in controls a custom one can be positioned against. */
   private static readonly CONTROL_ANCHORS: Record<string, string> = {
     play: ".movi-play-pause",
@@ -25954,6 +25996,12 @@ export class MoviElement extends HTMLElement {
     }
     const existing = this._customControls.get(spec.id);
     this.teardownCustomControl(spec.id);
+    if (spec.hotkey && MoviElement.RESERVED_HOTKEYS.has(spec.hotkey.trim().toLowerCase())) {
+      Logger.warn(
+        TAG,
+        `addControl("${spec.id}"): the player already uses "${spec.hotkey}" — the built-in shortcut wins and this hotkey will never fire`,
+      );
+    }
     this._customControls.set(spec.id, {
       spec,
       // A replacement keeps the state it had: re-registering the same toggle
@@ -25981,6 +26029,59 @@ export class MoviElement extends HTMLElement {
   removeControl(id: string): void {
     this.teardownCustomControl(id);
     this._customControls.delete(id);
+  }
+
+  /** "shift+a" → "Shift+A", for the menu row. Empty for no hotkey. */
+  private formatHotkey(hotkey?: string): string {
+    if (!hotkey) return "";
+    return hotkey
+      .split("+")
+      .map((part) => {
+        const p = part.trim();
+        if (!p) return "";
+        return p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1).toLowerCase();
+      })
+      .filter(Boolean)
+      .join("+");
+  }
+
+  /**
+   * Does this keydown match a custom control's hotkey?
+   *
+   * Only ever consulted AFTER the player's own shortcuts have had the event —
+   * a host that asks for "k" gets nothing rather than breaking play/pause for
+   * everyone, and the collision is reported when the control is added, where
+   * the author can still do something about it.
+   */
+  private customHotkeyFor(e: KeyboardEvent): string | null {
+    if (this._customControls.size === 0) return null;
+    const pressed = [
+      e.ctrlKey ? "ctrl" : "",
+      e.metaKey ? "meta" : "",
+      e.altKey ? "alt" : "",
+      e.shiftKey ? "shift" : "",
+      e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase(),
+    ]
+      .filter(Boolean)
+      .join("+");
+    for (const [id, entry] of this._customControls) {
+      const want = entry.spec.hotkey;
+      if (!want) continue;
+      // Modifiers in a fixed order, the key last — the same shape `pressed` is
+      // built in, so "shift+a" and "a+shift" are one hotkey. Sorting the parts
+      // instead put the KEY first, because indexOf returns -1 for anything that
+      // is not a modifier, and nothing ever matched.
+      const parts = want
+        .split("+")
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+      const order = ["ctrl", "meta", "alt", "shift"];
+      const mods = order.filter((m) => parts.includes(m));
+      const keys = parts.filter((p) => !order.includes(p));
+      if (keys.length !== 1) continue; // no key, or more than one — not a hotkey
+      if ([...mods, keys[0]].join("+") === pressed) return id;
+    }
+    return null;
   }
 
   /** The current state of a custom toggle, or false for a plain button. */
@@ -26094,7 +26195,18 @@ export class MoviElement extends HTMLElement {
         item.dataset.customControl = id;
         const icon = this.buildCustomIcon(spec.icon);
         if (icon) {
-          icon.classList.add("movi-context-menu-icon");
+          // An SVG gets the menu's icon class, which sizes it to the column the
+          // built-in rows line up in. Anything else does NOT: the class carries
+          // a 16x16, and a host that hands over a shaped element — a switch, a
+          // pill, a badge — had it squashed into a square it was never drawn
+          // for. Those keep their own size and take only the spacing, because
+          // the library understands SVG icons and does not understand what else
+          // a host might send.
+          icon.classList.add(
+            icon.tagName.toLowerCase() === "svg"
+              ? "movi-context-menu-icon"
+              : "movi-custom-menu-icon",
+          );
           item.appendChild(icon);
         }
         const label = document.createElement("span");
@@ -26103,16 +26215,23 @@ export class MoviElement extends HTMLElement {
         item.appendChild(label);
         const trailing = document.createElement("span");
         trailing.className = "movi-context-menu-shortcut";
+        // A toggle says what it IS; anything else shows how to reach it, which
+        // is what every built-in row does with its own key.
         trailing.textContent = spec.toggle
           ? entry.active
             ? "On"
             : "Off"
-          : (spec.shortcutHint ?? "");
+          : (spec.shortcutHint ?? this.formatHotkey(spec.hotkey));
         item.appendChild(trailing);
-        item.classList.toggle(
-          "movi-context-menu-active",
-          !!spec.toggle && entry.active,
-        );
+        // BOTH state classes. movi-context-menu-active is what the menu's own
+        // styling reads (the fill and the rail); movi-custom-active is what the
+        // HOST reads, and it is on the bar button already — so a host that
+        // styles its control by that class gets the same answer wherever the
+        // control appears. Without it, a switch drawn by the host sat in the
+        // menu permanently showing "off" beside a row that said On.
+        const on = !!spec.toggle && entry.active;
+        item.classList.toggle("movi-context-menu-active", on);
+        item.classList.toggle("movi-custom-active", on);
         this.insertAtAnchor(menu, item, spec, true);
       }
     }
@@ -26185,10 +26304,9 @@ export class MoviElement extends HTMLElement {
     sr.querySelectorAll(`[data-custom-control="${sel}"]`).forEach((node) => {
       const el = node as HTMLElement;
       if (el.classList.contains("movi-context-menu-item")) {
-        el.classList.toggle(
-          "movi-context-menu-active",
-          !!entry.spec.toggle && entry.active,
-        );
+        const on = !!entry.spec.toggle && entry.active;
+        el.classList.toggle("movi-context-menu-active", on);
+        el.classList.toggle("movi-custom-active", on);
         const trailing = el.querySelector(".movi-context-menu-shortcut");
         if (trailing && entry.spec.toggle) {
           trailing.textContent = entry.active ? "On" : "Off";
