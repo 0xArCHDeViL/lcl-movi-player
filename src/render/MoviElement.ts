@@ -191,6 +191,19 @@ const OSD = {
  *   });
  * ```
  */
+/** One row of a custom control's submenu. */
+export interface MoviControlItem {
+  /** Handed back to onPick. */
+  id: string;
+  /** The row's text. */
+  label: string;
+  /** Right-hand text — a value, a hint, a duration. */
+  hint?: string;
+  /** Children, for a nested list. A row with children OPENS rather than picks,
+   *  so it never reaches onPick; only leaves do. Any depth. */
+  items?: MoviControlItem[];
+}
+
 export interface MoviControlSpec {
   /** Unique, and the handle for updateControl / removeControl. */
   id: string;
@@ -225,6 +238,17 @@ export interface MoviControlSpec {
   /** Right-hand text on the menu row for a non-toggle. Defaults to the hotkey
    *  when one is set, which is what the built-in rows show. */
   shortcutHint?: string;
+  /** Turn the control's context-menu row into a submenu of choices — the shape
+   *  Speed and Aspect Ratio already use. The row opens the list instead of
+   *  doing anything itself, so `toggle` is ignored and onSelect never fires;
+   *  the pick arrives on `onPick` with the chosen item's id. Menu only: a bar
+   *  button has nowhere to put a list. */
+  items?: MoviControlItem[];
+  /** Called with the id of the submenu item the viewer chose. */
+  onPick?: (itemId: string, player: MoviElement) => void;
+  /** Which submenu item is currently the chosen one, by id. Update it with
+   *  updateControl(id, { value }) when the host's own state moves. */
+  value?: string;
   /** Remember this toggle's state across loads and sessions, under the
    *  element's `persistkey` namespace. The stored value wins over `active` at
    *  registration — read it back with isControlActive(id) if the host keeps its
@@ -5378,7 +5402,26 @@ export class MoviElement extends HTMLElement {
 
       // A host's own row. Handled before everything else so a custom id can
       // never collide with a built-in action name.
+      // A branch row inside a custom submenu — it opens its own panel and does
+      // nothing else. Same fall-through as the control's own row.
+      if (action && action.startsWith("customopen:")) return;
+      if (action && action.startsWith("custompick:")) {
+        // custompick:<controlId>:<itemId> — the control id cannot contain a
+        // colon-delimited surprise because only the FIRST separator is used to
+        // split it off; everything after belongs to the item.
+        const rest = action.slice("custompick:".length);
+        const cut = rest.indexOf(":");
+        if (cut > 0) {
+          this.pickCustomItem(rest.slice(0, cut), rest.slice(cut + 1));
+        }
+        hideContextMenu();
+        return;
+      }
       if (action && action.startsWith("custom:")) {
+        const entry = this._customControls.get(action.slice(7));
+        // A row that OPENS a submenu is not a row that does something. Let the
+        // click fall through to the hover/tap machinery that reveals the panel.
+        if (entry?.spec.items?.length) return;
         this.triggerCustomControl(action.slice(7));
         hideContextMenu();
         return;
@@ -5678,6 +5721,12 @@ export class MoviElement extends HTMLElement {
         ".movi-context-menu-submenu, .movi-context-menu-submenu-audio, .movi-context-menu-submenu-subtitle",
       )
       .forEach((sm) => sm.addEventListener("click", itemClickHandler));
+    // Kept so panels built LATER can be given the same handler. The built-in
+    // panels are in the markup and were wired above; a custom control's are
+    // created when it is added, which is after this ran — so a click on one
+    // reached nothing at all, which looked like the deepest rows simply not
+    // working.
+    this._menuItemClickHandler = itemClickHandler;
 
     // Handle hover for submenu
     const speedItem = contextMenu.querySelector(
@@ -26212,6 +26261,10 @@ export class MoviElement extends HTMLElement {
     more: ".movi-more-btn",
   };
 
+  /** The context menu's item-click delegate, kept so panels created after the
+   *  menu was wired can be given it too. See setupContextMenu. */
+  private _menuItemClickHandler: ((e: Event) => void) | null = null;
+
   private _customControls = new Map<
     string,
     { spec: MoviControlSpec; active: boolean }
@@ -26263,9 +26316,13 @@ export class MoviElement extends HTMLElement {
     // host passed — a host keeping its own copy reads it back with
     // isControlActive(id) right after registering.
     let active = spec.active ?? existing?.active ?? false;
-    if (spec.toggle && spec.persist) {
+    if (spec.persist) {
       const stored = this._prefRead(`ctl:${spec.id}`);
-      if (stored !== null) active = stored === "1";
+      if (stored !== null) {
+        // A submenu remembers WHICH item; a toggle remembers on or off.
+        if (spec.items?.length) spec = { ...spec, value: stored };
+        else if (spec.toggle) active = stored === "1";
+      }
     }
     this._customControls.set(spec.id, {
       spec,
@@ -26285,6 +26342,7 @@ export class MoviElement extends HTMLElement {
     const entry = this._customControls.get(id);
     if (!entry) return;
     entry.spec = { ...entry.spec, ...patch, id };
+    if (patch.value !== undefined) this.markCustomSubmenuValue(id);
     if (patch.active !== undefined) {
       entry.active = patch.active;
       // A host pushing state is the viewer's choice arriving by another route
@@ -26407,9 +26465,14 @@ export class MoviElement extends HTMLElement {
     const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
       ?.escape;
     const sel = esc ? esc(id) : id.replace(/["\\]/g, "\\$&");
-    sr.querySelectorAll(`[data-custom-control="${sel}"]`).forEach((n) =>
-      n.remove(),
-    );
+    // Both roots: the desktop menu and its submenu panels move into the body
+    // portal while open, so a control removed at that moment would leave its
+    // panel behind in the portal.
+    for (const root of [sr, this._menuPortalRoot]) {
+      root
+        ?.querySelectorAll(`[data-custom-control="${sel}"]`)
+        .forEach((n) => n.remove());
+    }
   }
 
   /**
@@ -26534,7 +26597,7 @@ export class MoviElement extends HTMLElement {
         // thing to fall off the right edge — which is where it went. A custom
         // toggle now states itself where every other toggle does, and shows its
         // hotkey where every other row shows one.
-        if (spec.toggle) {
+        if (spec.toggle && !spec.items?.length) {
           const status = document.createElement("span");
           status.className = "movi-context-menu-status";
           status.textContent = entry.active ? "On" : "Off";
@@ -26547,6 +26610,14 @@ export class MoviElement extends HTMLElement {
           trailing.textContent = chip;
           item.appendChild(trailing);
         }
+        // A submenu instead of an action: the row opens a list, the way Speed
+        // and Aspect Ratio do. Built from the same markup theirs is, so the
+        // arrow, the mobile Back row, the hover machinery and the portal all
+        // work on it without knowing it came from a host.
+        if (spec.items?.length) {
+          this.buildCustomSubmenu(id, item, spec.items, spec.value, menu, 0);
+        }
+
         // BOTH state classes. movi-context-menu-active is what the menu's own
         // styling reads (the fill and the rail); movi-custom-active is what the
         // HOST reads, and it is on the bar button already — so a host that
@@ -26653,6 +26724,145 @@ export class MoviElement extends HTMLElement {
    */
   showOsd(text: string, icon?: string | Element): void {
     this.showOSD(this.osdIconMarkup(icon), text);
+  }
+
+  /**
+   * Build a custom control's submenu, and its submenus, to any depth.
+   *
+   * Same markup the built-in Speed and Aspect panels use, so the arrow, the
+   * mobile Back row, the hover machinery and the desktop body-portal all work
+   * on it without knowing a host wrote it. Panels are appended to the CONTEXT
+   * MENU rather than nested inside one another, which is what the built-ins do
+   * and what lets the portal move them as a set.
+   *
+   * A row with children opens; a row without picks. That is the whole rule, and
+   * it is why onPick only ever hears from a leaf.
+   */
+  private buildCustomSubmenu(
+    controlId: string,
+    parentRow: HTMLElement,
+    items: MoviControlItem[],
+    value: string | undefined,
+    menu: Element,
+    depth: number,
+  ): void {
+    if (depth > 4) {
+      // Not a limit anyone should meet — five levels of menu is a bug in the
+      // menu, not a use case — but a cycle in host-supplied data would
+      // otherwise build panels until the tab dies.
+      Logger.warn(TAG, `addControl("${controlId}"): submenu nested too deep`);
+      return;
+    }
+    const arrow = document.createElement("span");
+    arrow.className = "movi-context-menu-arrow";
+    arrow.textContent = "▶";
+    parentRow.appendChild(arrow);
+
+    const sub = document.createElement("div");
+    sub.className = "movi-context-menu-submenu";
+    sub.dataset.submenu = `custom:${controlId}:${depth}:${(parentRow.dataset.action ?? "")}`;
+    sub.dataset.customControl = controlId;
+
+    const back = document.createElement("div");
+    back.className = "movi-context-menu-item movi-context-menu-back";
+    back.dataset.action = "back";
+    const backLabel = document.createElement("span");
+    backLabel.className = "movi-context-menu-label";
+    backLabel.textContent = "Back";
+    back.appendChild(backLabel);
+    sub.appendChild(back);
+
+    for (const choice of items) {
+      const row = document.createElement("div");
+      row.className = "movi-context-menu-item";
+      const label = document.createElement("span");
+      label.className = "movi-context-menu-label";
+      label.textContent = choice.label;
+      row.appendChild(label);
+      if (choice.hint) {
+        const hint = document.createElement("span");
+        hint.className = "movi-context-menu-shortcut";
+        hint.textContent = choice.hint;
+        row.appendChild(hint);
+      }
+      if (choice.items?.length) {
+        // A branch: it opens its own panel and is never a pick.
+        row.dataset.action = `customopen:${controlId}:${choice.id}`;
+        sub.appendChild(row);
+        this.buildCustomSubmenu(
+          controlId,
+          row,
+          choice.items,
+          value,
+          menu,
+          depth + 1,
+        );
+      } else {
+        row.dataset.action = `custompick:${controlId}:${choice.id}`;
+        row.classList.toggle("movi-context-menu-active", choice.id === value);
+        sub.appendChild(row);
+      }
+    }
+
+    menu.appendChild(sub);
+    if (this._menuItemClickHandler) {
+      sub.addEventListener("click", this._menuItemClickHandler);
+    }
+    this.setupSubmenuHover(parentRow, sub);
+  }
+
+  /** A submenu choice was made — remember it, mark it, tell the host. */
+  private pickCustomItem(id: string, itemId: string): void {
+    const entry = this._customControls.get(id);
+    if (!entry?.spec.items?.length) return;
+    // Searched to the bottom, not across the top. A nested list's leaves are
+    // the only rows that pick, and they are exactly the ones this missed —
+    // every deep choice was dropped as if it belonged to another control.
+    const isKnownLeaf = (items: MoviControlItem[]): boolean =>
+      items.some((i) =>
+        i.items?.length ? isKnownLeaf(i.items) : i.id === itemId,
+      );
+    if (!isKnownLeaf(entry.spec.items)) return;
+    entry.spec = { ...entry.spec, value: itemId };
+    if (entry.spec.persist) this._prefWrite(`ctl:${id}`, itemId);
+    this.markCustomSubmenuValue(id);
+    try {
+      entry.spec.onPick?.(itemId, this);
+    } catch (e) {
+      Logger.warn(TAG, `custom control "${id}" onPick threw`, e);
+    }
+    this.dispatchEvent(
+      new CustomEvent("movi-control", {
+        detail: { id, item: itemId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** Move the tick to the chosen submenu row. */
+  private markCustomSubmenuValue(id: string): void {
+    const entry = this._customControls.get(id);
+    if (!entry) return;
+    const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+      ?.escape;
+    const sel = esc ? esc(id) : id;
+    // The panel may be in the body portal rather than the shadow root — the
+    // desktop menu moves both there while it is open.
+    for (const root of [this.shadowRoot, this._menuPortalRoot]) {
+      root
+        ?.querySelectorAll(
+          `.movi-context-menu-submenu[data-custom-control="${sel}"] .movi-context-menu-item[data-action^="custompick:"]`,
+        )
+        .forEach((row) => {
+          const action = (row as HTMLElement).dataset.action ?? "";
+          const itemId = action.slice(`custompick:${id}:`.length);
+          row.classList.toggle(
+            "movi-context-menu-active",
+            itemId === entry.spec.value,
+          );
+        });
+    }
   }
 
   /** Push a control's state onto whichever of its two faces exist. */
