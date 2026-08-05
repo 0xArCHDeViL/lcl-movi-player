@@ -275,6 +275,18 @@
             {
               "name": "wasmurl",
               "description": "URL of the external `movi.wasm`, used only by the **slim build**"
+            },
+            {
+              "name": "persist",
+              "description": "Which settings to remember across loads and sessions. Space-separated; nothing"
+            },
+            {
+              "name": "persistkey",
+              "description": "Namespaces everything [`persist`](#persist) stores, so two players on a page —"
+            },
+            {
+              "name": "controlslist",
+              "description": "Switches built-in controls off, as `no<name>` tokens — the same shape"
             }
           ],
           "events": [

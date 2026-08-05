@@ -231,6 +231,12 @@ export interface MoviPlayerAttributes {
   gesturefs?: boolean | "";
   /** URL of the external `movi.wasm` (slim build only; defaults to next to the JS bundle). */
   wasmurl?: string;
+  /** Which settings to remember across loads — see the `persist` attribute. */
+  persist?: string;
+  /** Namespace for everything `persist` stores. */
+  persistkey?: string;
+  /** Built-in controls to switch off, as `no<name>` tokens. */
+  controlslist?: string;
 }
 
 /**

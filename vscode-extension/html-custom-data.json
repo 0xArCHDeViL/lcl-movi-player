@@ -945,6 +945,45 @@
               "url": "https://moviplayer.com/docs/api/element#wasmurl"
             }
           ]
+        },
+        {
+          "name": "persist",
+          "description": {
+            "kind": "markdown",
+            "value": "Which settings to remember across loads and sessions. Space-separated; nothing"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#persist"
+            }
+          ]
+        },
+        {
+          "name": "persistkey",
+          "description": {
+            "kind": "markdown",
+            "value": "Namespaces everything [`persist`](#persist) stores, so two players on a page —"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#persistkey"
+            }
+          ]
+        },
+        {
+          "name": "controlslist",
+          "description": {
+            "kind": "markdown",
+            "value": "Switches built-in controls off, as `no<name>` tokens — the same shape"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#controlslist"
+            }
+          ]
         }
       ],
       "references": [

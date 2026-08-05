@@ -386,6 +386,74 @@ Feeds everything that reads chapters: the segmented progress bar, the chapter na
 
 ---
 
+#### `controlslist`
+
+Switches built-in controls off, as `no<name>` tokens — the same shape
+`<video controlslist>` uses.
+
+```html
+<movi-player src="video.mp4" controls
+             controlslist="nofullscreen nopip nospeed"></movi-player>
+```
+
+**Tokens:** `noplay`, `noseekbuttons`, `novolume`, `notime`, `noprogress`,
+`noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`, `nohdr`, `noloop`,
+`nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`, `nostats`,
+`noshortcuts` — plus the `id` of any control added with
+[`addControl()`](#addcontrol-spec), which is simply not added.
+
+A switched-off control goes everywhere it lives: the button, its context-menu
+row, and — for the ones the availability check knows (`aspect`, `pip`,
+`snapshot`, `rotate`, `hdr`, `ambient`, `timeline`, `stableaudio`) — its
+keyboard shortcut. Ask the same question in code with
+`player.isControlDisabled("pip")`.
+
+---
+
+#### `persist`
+
+Which settings to remember across loads and sessions. Space-separated; nothing
+is remembered unless it is listed.
+
+```html
+<movi-player src="video.mp4" controls
+             persist="loop stablevolume speed aspect volume"
+             persistkey="my-app"></movi-player>
+```
+
+**Settings:** `loop`, `muted`, `volume`, `speed`, `ambient`, `stablevolume`,
+`hdr`, `aspect`. Also available as `MoviElement.persistableSettings`.
+
+Opt-in per setting on purpose: a kiosk that starts every clip muted at 1x
+should not inherit the last viewer's choices. A remembered value **wins over
+the markup** — that is what opting in means, so leave a setting out of the list
+if the page must fix it.
+
+Custom controls added with [`addControl()`](#addcontrol-spec) take
+`persist: true` and are remembered under the same namespace.
+
+::: tip Replaces the built-in store
+Without `persist`, the element keeps its long-standing behaviour of remembering
+volume, muted, speed, stable volume, ambient and HDR on its own. Setting
+`persist` takes that decision over completely — the old store stops saving and
+restoring, and this list is exactly what is remembered.
+:::
+
+---
+
+#### `persistkey`
+
+Namespaces everything [`persist`](#persist) stores, so two players on a page —
+or two apps on a domain — do not share one viewer's preferences.
+
+```html
+<movi-player persist="volume speed" persistkey="lesson-player"></movi-player>
+```
+
+**Default:** unset — preferences are stored per origin.
+
+---
+
 ### Advanced Attributes
 
 #### `renderer`
