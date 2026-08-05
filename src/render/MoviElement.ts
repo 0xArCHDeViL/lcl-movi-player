@@ -2179,6 +2179,16 @@ export class MoviElement extends HTMLElement {
           ) as HTMLElement;
           if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
           thumbnailImg.style.display = "block";
+          // Teach the placeholder this source's shape, so the next fetch holds
+          // a gap the right size instead of a 16:9 guess and the card keeps
+          // its height across the swap.
+          if (thumbnailPlaceholder) {
+            const h = thumbnailImg.offsetHeight;
+            if (h > 0) {
+              thumbnailPlaceholder.style.height = `${h}px`;
+              thumbnailPlaceholder.style.aspectRatio = "auto";
+            }
+          }
 
           // Re-apply rotation transform + margin on each preview load. Skip for
           // 360° previews — those are already reprojected to the upright view,
@@ -2304,16 +2314,26 @@ export class MoviElement extends HTMLElement {
       // the guess was wrong.
       thumbnail.style.display = "flex";
       const tooltipWidth =
-        thumbnail.offsetWidth || (this._thumb ? 160 : 60);
+        thumbnail.offsetWidth || (this._thumb ? 180 : 60);
       const half = tooltipWidth / 2;
+      // Clamped against the PLAYER, not against the track. The track is inset
+      // from the frame by the chrome padding, so clamping to the track pinned
+      // the card to the track's end and left that inset empty — and it is the
+      // FRAME that clips, so a card kept inside the track can still be cut by
+      // the frame if the two disagree. Measured in viewport coordinates and
+      // converted back, which is the only way to compare them.
+      const hostRect = this.getBoundingClientRect();
+      const EDGE = 6; // never let it touch the frame
+      const minCentre = hostRect.left + half + EDGE;
+      const maxCentre = hostRect.right - half - EDGE;
       // A card wider than the player cannot be kept inside it; centre it rather
       // than pinning it to one edge.
-      const leftPos =
-        tooltipWidth >= rect.width
-          ? rect.width / 2
-          : Math.min(Math.max(offsetX, half), rect.width - half);
+      const centre =
+        minCentre > maxCentre
+          ? hostRect.left + hostRect.width / 2
+          : Math.min(Math.max(clientX, minCentre), maxCentre);
 
-      thumbnail.style.left = `${leftPos}px`;
+      thumbnail.style.left = `${centre - rect.left}px`;
 
       // Cancel previous pending show
       if (showRafId) {
@@ -18064,9 +18084,16 @@ export class MoviElement extends HTMLElement {
       }
       .movi-thumbnail-img {
         display: block;
-        width: auto;
+        /* A FIXED width, not one that follows the frame. The card is centred on
+           the pointer, so its width is what decides how far it may travel
+           before it would leave the frame — and that has to be known BEFORE the
+           image loads. Sized from the picture, the card measured narrow while
+           the frame was still arriving, the clamp allowed a position it would
+           not have allowed a moment later, and the card grew out past the edge
+           and was clipped there. It also stops the card resizing under the
+           pointer as you scrub across frames of different shapes. */
+        width: 168px;
         height: auto;
-        max-width: 180px;
         max-height: 200px;
         object-fit: contain;
         margin-bottom: 5px;
@@ -18124,15 +18151,26 @@ export class MoviElement extends HTMLElement {
         100% { background-position: 200% 0; }
       }
 
+      /* The placeholder holds the image's PLACE. That is the whole job — it
+         paints nothing.
+         Sized to nothing, the card collapsed to its text while a frame was
+         being fetched and grew back when it arrived. Two consequences, one
+         invisible and one not: the card jumped in width on every scrub, and
+         the edge clamp — which centres the card on the pointer and therefore
+         has to know how wide it is — measured the collapsed card, allowed a
+         position it would not have allowed a moment later, and the card grew
+         out past the frame and was clipped there.
+         The height is written from the real image once one has loaded (see
+         processPreviewQueue), so it matches the source's shape rather than the
+         16:9 assumed here for the very first fetch. */
       .movi-thumbnail-placeholder {
-        width: auto;
-        height: auto;
-        min-width: 0;
-        min-height: 0;
-        margin: 0;
+        width: 168px;
+        aspect-ratio: 16 / 9;
+        margin-bottom: 5px;
+        border-radius: 6px;
         padding: 0;
         border: none;
-        background: transparent;
+        background: rgba(255, 255, 255, 0.06);
         animation: none;
       }
       
