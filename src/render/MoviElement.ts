@@ -17722,10 +17722,9 @@ export class MoviElement extends HTMLElement {
          One rule for both: they say the same thing in the same place and had
          drifted into two sizes, two radii and two offsets.
 
-         Sits in the button's corner, where it always did. The ring is the only
-         addition — the chip lands on the gear's teeth, and a flat chip on a
-         busy glyph is a smudge; a hairline of the bar's own dark separates the
-         two without moving anything.
+         Sits in the button's corner, where it always did, and flat: a ring of
+         the bar's own dark was tried to separate it from the gear's teeth
+         underneath and it read as a shadow the chip had not asked for.
 
          Theme colour, not a hardcoded red: the badge is chrome like everything
          else, and a player themed green shouldn't sprout a red corner. */
@@ -17743,10 +17742,6 @@ export class MoviElement extends HTMLElement {
         line-height: 11px;
         letter-spacing: 0.04em;
         text-transform: uppercase;
-        /* Separates the chip from whatever it is sitting on. Black rather than
-           a variable: this rides on the controls bar, which is a scrim over the
-           video and therefore dark whatever the theme is. */
-        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
         pointer-events: none;
         /* It is a label, not a target — never let it eat the button's click or
            show up in a text selection drag. */
