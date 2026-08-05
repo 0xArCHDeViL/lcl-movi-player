@@ -2179,16 +2179,6 @@ export class MoviElement extends HTMLElement {
           ) as HTMLElement;
           if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
           thumbnailImg.style.display = "block";
-          // Teach the placeholder this source's shape, so the next fetch holds
-          // a gap the right size instead of a 16:9 guess and the card keeps
-          // its height across the swap.
-          if (thumbnailPlaceholder) {
-            const h = thumbnailImg.offsetHeight;
-            if (h > 0) {
-              thumbnailPlaceholder.style.height = `${h}px`;
-              thumbnailPlaceholder.style.aspectRatio = "auto";
-            }
-          }
 
           // Re-apply rotation transform + margin on each preview load. Skip for
           // 360° previews — those are already reprojected to the upright view,
@@ -2305,6 +2295,10 @@ export class MoviElement extends HTMLElement {
         ) as HTMLElement;
         if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
       }
+
+      // The frame's box, from the source's proportions. Before the measurement
+      // below, because it decides the card's width.
+      this.updatePreviewBox();
 
       // Position Tooltip. Laid out FIRST so the clamp below can measure what it
       // is clamping: the card's real width depends on the frame inside it and
@@ -18092,17 +18086,24 @@ export class MoviElement extends HTMLElement {
       }
       .movi-thumbnail-img {
         display: block;
-        /* A FIXED width, not one that follows the frame. The card is centred on
-           the pointer, so its width is what decides how far it may travel
-           before it would leave the frame — and that has to be known BEFORE the
-           image loads. Sized from the picture, the card measured narrow while
-           the frame was still arriving, the clamp allowed a position it would
-           not have allowed a moment later, and the card grew out past the edge
-           and was clipped there. It also stops the card resizing under the
-           pointer as you scrub across frames of different shapes. */
-        width: 168px;
-        height: auto;
-        max-height: 200px;
+        /* A box the SOURCE's shape decides, not the individual frame's — and
+           set before any frame arrives.
+           It cannot follow the image: the card is centred on the pointer, so
+           its width is what decides how far it may travel before leaving the
+           frame, and a width only known once the picture loads let the clamp
+           allow a position it would not have allowed a moment later, after
+           which the card grew out past the edge and was clipped. But a width
+           fixed at 168 was wrong the other way — a portrait source was letter-
+           boxed into a landscape box with an empty column either side of it.
+           The player knows the video's proportions from its track, so the box
+           is written from those (see previewBoxVars) and the picture fills it.
+           The fallback is the 16:9 box this used to be. */
+        width: var(--movi-preview-w, 168px);
+        height: var(--movi-preview-h, auto);
+        /* Only reachable before the track is known, where the height is auto
+           and a tall frame would otherwise size the card off the top of the
+           player. */
+        max-height: 158px;
         object-fit: contain;
         margin-bottom: 5px;
         /* No outline. The card's own padding already separates the frame from
@@ -18171,8 +18172,8 @@ export class MoviElement extends HTMLElement {
          processPreviewQueue), so it matches the source's shape rather than the
          16:9 assumed here for the very first fetch. */
       .movi-thumbnail-placeholder {
-        width: 168px;
-        aspect-ratio: 16 / 9;
+        width: var(--movi-preview-w, 168px);
+        height: var(--movi-preview-h, 95px);
         margin-bottom: 5px;
         border-radius: 2px;
         padding: 0;
@@ -26104,6 +26105,48 @@ export class MoviElement extends HTMLElement {
   /**
    * Apply rotation transform + margin to a seek thumbnail image
    */
+  /** The preview frame's box, as wide and as tall as the SOURCE's proportions
+   *  allow inside these caps. */
+  private static readonly PREVIEW_MAX_W = 168;
+  private static readonly PREVIEW_MAX_H = 158;
+  private _previewBoxKey = "";
+
+  /**
+   * Publish the preview frame's box as CSS custom properties.
+   *
+   * Written from the video's own proportions rather than left to the image,
+   * for two reasons that pull in opposite directions. The card is centred on
+   * the pointer, so the edge clamp has to know its width BEFORE a frame has
+   * loaded — which rules out sizing to the picture. But a fixed landscape box
+   * letterboxes a portrait source, which is a phone recording previewed with
+   * an empty column down each side. The track carries the answer to both: the
+   * shape is known from the moment the video opens, and it does not change
+   * frame to frame.
+   *
+   * A manual 90/270 rotation transposes what the viewer sees, and the preview
+   * is rotated to match, so the box is transposed with it.
+   */
+  private updatePreviewBox(): void {
+    const track = this.player?.trackManager?.getActiveVideoTrack?.() as
+      | { width?: number; height?: number }
+      | undefined;
+    let w = track?.width || this.video?.videoWidth || 0;
+    let h = track?.height || this.video?.videoHeight || 0;
+    if (w <= 0 || h <= 0) return; // nothing known yet — the 16:9 fallback stands
+    if (this._currentManualRotation % 180 !== 0) [w, h] = [h, w];
+    const scale = Math.min(
+      MoviElement.PREVIEW_MAX_W / w,
+      MoviElement.PREVIEW_MAX_H / h,
+    );
+    const boxW = Math.round(w * scale);
+    const boxH = Math.round(h * scale);
+    const key = `${boxW}x${boxH}`;
+    if (key === this._previewBoxKey) return;
+    this._previewBoxKey = key;
+    this.style.setProperty("--movi-preview-w", `${boxW}px`);
+    this.style.setProperty("--movi-preview-h", `${boxH}px`);
+  }
+
   private applyThumbnailRotation(img: HTMLImageElement): void {
     const deg = this._currentManualRotation;
     if (deg === 0) {
