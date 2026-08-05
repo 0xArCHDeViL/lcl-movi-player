@@ -7053,10 +7053,12 @@ export class MoviElement extends HTMLElement {
           label = `Auto (${activeHeight}p)`;
         }
         // Same tiering as the gear's own badge — see _heightBadge.
-        const badge = this._heightBadge(
-          track.height || 0,
-          (track as any).width || 0,
-        );
+        // The track's own width when it has one — a DASH/HLS variant usually
+        // does — and the playing frame's aspect when it doesn't.
+        const trackWidth = (track as any).width || 0;
+        const badge = trackWidth
+          ? this._heightBadge(track.height || 0, trackWidth)
+          : this._rungBadge(track.height || 0);
         const badgeHtml = badge
           ? `<span class="movi-quality-badge movi-quality-badge-${badge.toLowerCase()}">${badge}</span>`
           : "";
@@ -8284,6 +8286,37 @@ export class MoviElement extends HTMLElement {
     return tiers[tiers.length - 1][1];
   }
 
+  /**
+   * A ladder rung's badge, tiered on the frame it will actually paint.
+   *
+   * A rung carries a height and nothing else, and height alone is not a
+   * resolution: a 1.9:1 master's 1920-wide rung is 1012 tall, and its
+   * 3840-wide rung is 2026. Tiered on those numbers the menu called Full HD
+   * nothing at all and 4K "HD" — while the gear, which reads the PLAYING
+   * frame and so knows both dimensions, correctly said HD. Same ladder, two
+   * answers, and the one the viewer notices is the disagreement.
+   *
+   * Every rung of a ladder is the same picture at a different size, so the
+   * frame that is playing gives all of them their aspect. Nothing is playing
+   * yet (or it is square-ish) → fall back to the height alone, which is right
+   * for the 16:9 ladders that are most of them.
+   */
+  private _rungBadge(height: number): string {
+    if (height <= 0) return "";
+    const active = this.player?.trackManager?.getActiveVideoTrack?.() as
+      | { width?: number; height?: number }
+      | undefined;
+    const live =
+      active?.width && active?.height
+        ? active
+        : this.video?.videoWidth > 0 && this.video?.videoHeight > 0
+          ? { width: this.video.videoWidth, height: this.video.videoHeight }
+          : null;
+    const aspect =
+      live && live.height! > 0 ? live.width! / live.height! : 0;
+    return this._heightBadge(height, aspect > 0 ? Math.round(height * aspect) : 0);
+  }
+
   private _heightBadge(height: number, width: number = 0): string {
     // Use the 16:9-normalised height when a width is known so ultrawide /
     // letterboxed tracks (e.g. 3840x2080) still tier as 4K rather than HD —
@@ -8492,7 +8525,9 @@ export class MoviElement extends HTMLElement {
     const isAuto = !!player?.isAutoQuality?.();
 
     const activeQuality = this._videoQualities.find((q) => q.src === activeSrc);
-    this._updateQualityBtnBadge(activeQuality?.badge || this._heightBadge(activeQuality?.height || 0));
+    this._updateQualityBtnBadge(
+      activeQuality?.badge || this._rungBadge(activeQuality?.height || 0),
+    );
 
     const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
     const rows: string[] = [];
@@ -8514,8 +8549,11 @@ export class MoviElement extends HTMLElement {
             ? `@${q.fps}`
             : "";
         const label = `${q.label}${fpsSuffix}`;
-        const badgeHtml = q.badge
-          ? `<span class="movi-quality-badge movi-quality-badge-${q.badge.toLowerCase()}">${q.badge}</span>`
+        // The author's own badge wins; otherwise tier the rung the same way
+        // the gear tiers what is playing, so the two never disagree.
+        const badge = q.badge || this._rungBadge(q.height);
+        const badgeHtml = badge
+          ? `<span class="movi-quality-badge movi-quality-badge-${badge.toLowerCase()}">${badge}</span>`
           : "";
         return `<div class="movi-quality-item ${isActive ? "movi-quality-active" : ""}" data-src="${q.src.replace(/"/g, "&quot;")}"><span class="movi-quality-label-wrap"><span class="movi-quality-label">${label}</span>${badgeHtml}</span>${isActive ? check : ""}</div>`;
       }),
@@ -8593,7 +8631,7 @@ export class MoviElement extends HTMLElement {
     const isAuto = !!player?.isAutoQuality?.();
     const active = renditions.find((r) => r.url === activeUrl);
     this._updateQualityBtnBadge(
-      this._heightBadge(parseInt(active?.label || "0", 10)),
+      this._rungBadge(parseInt(active?.label || "0", 10)),
     );
 
     const BADGE_CSS =
@@ -8655,7 +8693,7 @@ export class MoviElement extends HTMLElement {
       label.textContent = r.label;
       wrap.appendChild(label);
       // Resolution badge (HD / 4K / 8K) next to the label, matching the gear.
-      const badge = this._heightBadge(parseInt(r.label, 10));
+      const badge = this._rungBadge(parseInt(r.label, 10));
       if (badge) {
         const b = document.createElement("span");
         b.className = "movi-quality-item-badge";
