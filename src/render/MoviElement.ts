@@ -17617,21 +17617,47 @@ export class MoviElement extends HTMLElement {
         display: flex;
         align-items: center;
       }
-      .movi-settings-btn-badge {
+      /* The resolution chip, on the gear and on the standalone quality button.
+         One rule for both: they say the same thing in the same place and had
+         drifted into two sizes, two radii and two offsets.
+
+         Perched ON the corner rather than tucked inside it. Inset, it read as
+         part of the icon and sat over the gear's teeth; hung off the corner
+         with a ring in the bar's own colour it reads as a chip ABOUT the
+         button, which is what it is. The ring is what makes that work — a flat
+         chip on a busy glyph is a smudge.
+
+         Theme colour, not a hardcoded red: the badge is chrome like everything
+         else, and a player themed green shouldn't sprout a red corner. */
+      .movi-settings-btn-badge,
+      .movi-quality-btn-badge {
         position: absolute;
-        top: 2px;
+        top: 0;
         right: 0;
-        padding: 0 3px;
-        border-radius: 2px;
-        /* Theme colour, not a hardcoded red — the badge is chrome like
-           everything else, and a player themed green shouldn't sprout a red
-           chip in the corner. */
+        transform: translate(40%, -30%);
+        padding: 1px 4px;
+        border-radius: 999px;
         background: var(--movi-primary);
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         font-size: 8px;
-        font-weight: 700;
+        font-weight: 800;
         line-height: 11px;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        /* Separates the chip from whatever it is sitting on. Black rather than
+           a variable: this rides on the controls bar, which is a scrim over the
+           video and therefore dark whatever the theme is. */
+        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+        pointer-events: none;
+        /* It is a label, not a target — never let it eat the button's click or
+           show up in a text selection drag. */
+        user-select: none;
+      }
+      /* The chip hangs outside the button box, so nothing on the way up may
+         clip it. */
+      .movi-settings-container,
+      .movi-quality-btn {
+        overflow: visible;
       }
       /* The gear turns with the panel, the way a control that opens something
          should acknowledge it. Driven by a class this element sets, NOT by
@@ -17728,18 +17754,33 @@ export class MoviElement extends HTMLElement {
         white-space: nowrap;
         overflow: visible;
       }
+      /* The label is a fixed word; the VALUE is the variable-length thing
+         anyone opened the panel to read. They were sized the other way round —
+         the label took every spare pixel and the value was capped at 45% of the
+         row — so the one line that matters was the one that got an ellipsis:
+         "Quality  Auto (2160p@…". Now the value takes the slack and is the last
+         thing to be truncated; the label gives way first, and "Quality" has
+         room to spare. */
       .movi-settings-row-label {
-        flex: 1 1 auto;
+        /* Shrinks three times as readily as the value beside it, so a row too
+           narrow for both gives up "Playback speed" before it gives up what the
+           playback speed IS. */
+        flex: 0 3 auto;
         min-width: 0;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
       .movi-settings-row-value {
-        flex: 0 0 auto;
+        flex: 0 1 auto;
+        /* Right-aligned by the margin, not by growing: the trailing element of
+           a row is pinned to its end whether it is a value or a switch, and
+           growing the label to do that job is what capped the value at 45%. */
+        margin-left: auto;
+        min-width: 0;
+        text-align: right;
         color: var(--movi-text-mute, rgba(255, 255, 255, 0.62));
         font-size: 13.5px;
-        max-width: 45%;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -17760,6 +17801,9 @@ export class MoviElement extends HTMLElement {
          "on" and leaves "off" as the absence of anything. */
       .movi-settings-switch {
         flex: 0 0 auto;
+        /* Same pinning as the value rows — a toggle row has no value span to
+           push it across. */
+        margin-left: auto;
         width: 30px;
         height: 17px;
         padding: 2px;
@@ -17865,21 +17909,7 @@ export class MoviElement extends HTMLElement {
         position: relative;
       }
 
-      .movi-quality-btn-badge {
-        position: absolute;
-        top: 4px;
-        right: 0;
-        font-size: 8px;
-        font-weight: 700;
-        line-height: 1;
-        padding: 2px 3px;
-        border-radius: 3px;
-        letter-spacing: 0.4px;
-        text-transform: uppercase;
-        background: var(--movi-primary);
-        color: var(--movi-chrome-fg, #fff);
-        pointer-events: none;
-      }
+      /* Styled with the gear's chip above — same badge, same rule. */
 
       /* Hide speed/quality menus on mobile by default and position them centrally */
       @container movi-host (max-width: 720px) {
