@@ -673,6 +673,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // frames are downloaded and decode far faster than real time; the renderer
   // drops the ones older than the clock and the picture resumes at once.
   private static readonly RENDITION_SWAP_LOOKBACK_S = 4;
+  /** How far past the playhead the incoming rendition must decode before a
+   *  seamless switch will commit. A quarter second is several frames of
+   *  runway — enough that the new decoder is never the thing being waited on
+   *  at the seam. */
+  private static readonly SEAMLESS_PRIME_LEAD_S = 0.25;
+  /** …and the most it may prime, however much the outgoing queue holds. Whole
+   *  decoded frames are expensive at 4K and outrageous at 8K. */
+  private static readonly SEAMLESS_PRIME_MAX_AHEAD_S = 0.6;
+  private static readonly SEAMLESS_PRIME_MIN_FRAMES = 3;
+  /** Long enough to cross a GOP on a slow link, short enough that a switch
+   *  which cannot be made seamless falls back before the reason for switching
+   *  gets worse. */
+  private static readonly SEAMLESS_PRIME_BUDGET_MS = 5000;
   // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
   // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
   // so a rung the link keeps failing to hold is backed off harder and harder
@@ -1048,83 +1061,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Setup decoder outputs
     if (this.videoDecoder) {
-      this.videoDecoder.setOnFrame((frame) => {
-        // Background mode: drop video frames silently (audio keeps playing)
-        // But keep frames if PiP is active (canvas is visible in PiP window)
-        if (document.hidden && !this.isPiPActive) {
-          frame.close();
-          return;
-        }
-
-        // Queue frames for smooth presentation with A/V sync
-        // Allow processing if playing OR if we are seeking (waiting for sync)
-        if (
-          this.videoRenderer &&
-          (this.stateManager.getState() === "playing" ||
-            this.waitingForVideoSync)
-        ) {
-          // IMPORTANT: Drop video frames before the seek target time
-          // These frames are decoded to build decoder state (reference frames),
-          // but we don't display them - we want accurate seeking to the target time
-          const frameTime = frame.timestamp / 1_000_000; // Convert to seconds
-          // CRITICAL: Check seekTargetTime !== -1 instead of >= 0 to support negative start times
-          // Some media files have negative PTS offsets (e.g., startTime = -0.105s)
-          if (this.seekTargetTime !== -1 && frameTime < this.seekTargetTime) {
-            // Drop this frame, it's before our target time
-            frame.close();
-            return;
-          }
-
-          // Video reached target! If a seek is awaiting sync, fire the
-          // completion path. Otherwise the guard was set in filter-only
-          // mode (first-play / post-prefetch resume) just to drop pre-target
-          // frames produced by Open-GOP recovery — we just clear the guard
-          // so subsequent frames flow through without re-entering this
-          // branch (which would log a warn-spam every frame).
-          if (this.seekTargetTime !== -1) {
-            if (this.waitingForVideoSync) {
-              Logger.debug(TAG, `onFrame: frameTime=${frameTime.toFixed(3)}s >= seekTargetTime=${this.seekTargetTime.toFixed(3)}s, calling notifySeekCompletion`);
-              this.notifySeekCompletion(frameTime);
-            } else {
-              this.seekTargetTime = -1;
-            }
-          }
-
-          this.videoRenderer.queueFrame(frame);
-        } else {
-          frame.close();
-        }
-      });
-
-      this.videoDecoder.setOnError((error) => {
-        Logger.error(TAG, "Video decoder error", error);
-        this.emit("error", error);
-        // Note: Decoder now has built-in recovery, only pauses after MAX_ERRORS
-      });
-
-      // When the decoder enters its "skip non-keyframes until next IDR" recovery
-      // during normal playback (decode-error recreate, e.g. high-bitrate 1080p
-      // H.264 whose HW decoder throws an EncodingError on an IDR), we deliberately
-      // do NOT flip into buffering. Per request: the clock and audio keep running
-      // and the video simply holds its last frame until the next keyframe lands
-      // (~1 GOP), then A/V sync catches the video up with a jump. The stall
-      // detector is already suppressed across this window via
-      // videoDecoder.isRecentlyRecovering(), so the empty video queue here is not
-      // mistaken for a stall. Seeks are handled by the seek pipeline (suppressed
-      // here via the state/sync guard).
-      this.videoDecoder.onKeyframeWaitChange = (waiting) => {
-        const state = this.stateManager.getState();
-        // Track the hold so ABR doesn't misread the draining video buffer
-        // (clock advancing, video frozen on last frame) as the rung failing.
-        this._videoHoldingForKeyframe = waiting && state === "playing";
-        if (state === "seeking" || this.waitingForVideoSync) return;
-        if (this._videoHoldingForKeyframe) {
-          Logger.debug(
-            TAG,
-            "Decoder waiting for keyframe mid-playback — staying in playing (audio/clock continue, video holds until next keyframe)",
-          );
-        }
-      };
+      this.wireVideoDecoder(this.videoDecoder);
     }
 
     this.audioDecoder.setOnData((data) => this.renderDecodedAudio(data));
@@ -1907,26 +1844,68 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // And aim BEHIND it — see RENDITION_SWAP_LOOKBACK_S. Landing ahead of the
     // clock freezes the picture until the clock catches up; landing behind it
     // costs a little decode of frames that are already in hand.
-    const swapTime = Math.max(
-      0,
-      Math.min(
-        this.getCurrentTime() - MoviPlayer.RENDITION_SWAP_LOOKBACK_S,
-        this.getDuration() || Number.POSITIVE_INFINITY,
-      ),
-    );
-    try {
-      await newDemuxer.seek(swapTime + newStartTime);
-    } catch (e) {
-      Logger.warn(TAG, "in-place switch: new demuxer seek failed", e);
-      try { newDemuxer.close(); } catch {}
-      try { newSource.close(); } catch {}
-      return endSwitch(false);
+    const lookbackFromNow = () =>
+      Math.max(
+        0,
+        Math.min(
+          this.getCurrentTime() - MoviPlayer.RENDITION_SWAP_LOOKBACK_S,
+          this.getDuration() || Number.POSITIVE_INFINITY,
+        ),
+      );
+    let swapTime = lookbackFromNow();
+    // Where the incoming source was actually positioned. The two paths seek to
+    // different points, and the buffer bar is drawn from this.
+    let seekedTo = swapTime;
+    // --- PRIME (old STILL playing): decode the incoming rendition past the
+    // playhead so the swap below costs no frames. Only attempted while the
+    // picture is actually running — a paused or seeking player has no seam to
+    // hide — and only when both renditions count time from the same origin,
+    // since the splice compares their frames by raw timestamp.
+    let primed: { decoder: MoviVideoDecoder; frames: VideoFrame[] } | null = null;
+    const sameOrigin = Math.abs(newStartTime - this.startTime) < 0.001;
+    if (
+      sameOrigin &&
+      this.videoRenderer &&
+      this.stateManager.getState() === "playing"
+    ) {
+      try {
+        // Aimed AT the playhead, not behind it. The lookback below exists
+        // because the hard path resumes decoding from where it seeks and must
+        // not land ahead of the clock; priming decodes forward past the clock
+        // on purpose, so every second of lookback would be a second of frames
+        // decoded only to be thrown away — at the resolution that most needs
+        // the switch to be cheap.
+        seekedTo = this.getCurrentTime();
+        await newDemuxer.seek(seekedTo + newStartTime);
+        primed = await this.primeRendition(newDemuxer, newVideoTrack, newStartTime);
+      } catch (e) {
+        Logger.debug(TAG, `Seamless prime unavailable: ${e}`);
+        primed = null;
+      }
+    }
+
+    if (!primed) {
+      // Re-read the clock for the same reason it was read after the open: a
+      // prime that ran for seconds and then gave up would otherwise seek to a
+      // point that far behind the playhead ON TOP of the lookback, and the swap
+      // would have to decode the whole deficit before showing anything.
+      swapTime = lookbackFromNow();
+      seekedTo = swapTime;
+      try {
+        await newDemuxer.seek(swapTime + newStartTime);
+      } catch (e) {
+        Logger.warn(TAG, "in-place switch: new demuxer seek failed", e);
+        try { newDemuxer.close(); } catch {}
+        try { newSource.close(); } catch {}
+        return endSwitch(false);
+      }
     }
 
     // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
-    // the video source/demuxer, reconfigure the video decoder, resume. ---
-    // This is where the picture stops, so this is where the indicator starts.
-    beginSwitchIndicator();
+    // the video source/demuxer, hand the renderer its new frames, resume. ---
+    // Primed, this is invisible and no indicator goes up. Unprimed, this is
+    // where the picture stops, so this is where the indicator starts.
+    if (!primed) beginSwitchIndicator();
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
@@ -1941,8 +1920,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await new Promise((r) => setTimeout(r, 10));
     }
 
+    // The wait above can outlast a prime: the clock kept running through it, so
+    // frames staged for a playhead that has since passed them are no longer a
+    // handover, they are a jump backwards. Drop them, and if that empties the
+    // staging the switch is simply not seamless this time — nothing has been
+    // swapped yet, so the hard path below is still open.
+    if (primed) {
+      const floor = this.getCurrentTime() - 0.05;
+      while (
+        primed.frames.length > 0 &&
+        primed.frames[0].timestamp / 1_000_000 - newStartTime < floor
+      ) {
+        primed.frames.shift()!.close();
+      }
+      if (primed.frames.length === 0) {
+        Logger.debug(TAG, "Seamless prime went stale during the swap — hard switch");
+        try { primed.decoder.close(); } catch {}
+        primed = null;
+        beginSwitchIndicator();
+        swapTime = lookbackFromNow();
+        seekedTo = swapTime;
+        // Put the read cursor back where the hard path expects it. The prime
+        // drove it forward, and the reconfigured decoder would otherwise be fed
+        // from mid-GOP and sit on its keyframe wait for as long as the GOP is
+        // long. Failure here is not a reason to abandon the swap — the video
+        // loop is already stopped, so there is nothing to return TO.
+        try {
+          await newDemuxer.seek(swapTime + newStartTime);
+        } catch (e) {
+          Logger.warn(TAG, "in-place switch: re-seek after a stale prime failed", e);
+        }
+      }
+    }
+
     const oldDemuxer = this.demuxer;
     const oldSource = this.source;
+    const oldDecoder = this.videoDecoder;
 
     // Everything read against the outgoing pipeline is now history — see the
     // generation check in processLoop's catch.
@@ -1961,11 +1974,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // clamp holds the old rendition's higher, differently-scaled value and the
     // buffer bar freezes after a quality switch.
     this.lastBufferedTime = 0;
-    this.bufferedRangeStart = swapTime;
+    this.bufferedRangeStart = seekedTo;
 
     // The video decoder's software path reads through the demuxer's WASM module.
     const bindings = newDemuxer.getBindings();
-    if (bindings) this.videoDecoder.setBindings(bindings);
+    if (bindings) (primed?.decoder ?? this.videoDecoder).setBindings(bindings);
 
     // Set the active rendition BEFORE setTracks: setTracks fires tracksChange,
     // which re-renders the quality menu + gear badge from getActiveDashRendition
@@ -1977,15 +1990,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.trackManager.setTracks([newVideoTrack]);
     this.trackManager.selectVideoTrack(newVideoTrack.id);
 
-    // Flush + reconfigure the video decoder/renderer for the new resolution.
-    try { await this.videoDecoder.flush(); } catch {}
-    this.videoRenderer?.clearQueue();
-    const extradata = newDemuxer.getExtradata(newVideoTrack.id) ?? undefined;
-    await this.videoDecoder.configure(
-      newVideoTrack,
-      extradata,
-      this.config.frameRate ?? 0,
-    );
+    if (primed) {
+      // Hand over: the outgoing frames already queued play out, the primed ones
+      // take the timeline from there, and the decoder that made them becomes
+      // the decoder. Nothing is flushed — a flush is a wait for a pipeline we
+      // are about to discard, and on some builds it is a wait that times out.
+      const spliceAt = primed.frames[0].timestamp;
+      const adopted = this.videoRenderer?.spliceQueue(spliceAt, primed.frames) ?? 0;
+      this.wireVideoDecoder(primed.decoder);
+      this.videoDecoder = primed.decoder;
+      try { oldDecoder.close(); } catch {}
+      Logger.debug(
+        TAG,
+        `Seamless handover at ${(spliceAt / 1_000_000).toFixed(3)}s with ${adopted} frames primed`,
+      );
+    } else {
+      // Flush + reconfigure the video decoder/renderer for the new resolution.
+      try { await this.videoDecoder.flush(); } catch {}
+      this.videoRenderer?.clearQueue();
+      const extradata = newDemuxer.getExtradata(newVideoTrack.id) ?? undefined;
+      await this.videoDecoder.configure(
+        newVideoTrack,
+        extradata,
+        this.config.frameRate ?? 0,
+      );
+    }
     this.videoRenderer?.configure(
       newVideoTrack.width,
       newVideoTrack.height,
@@ -2012,7 +2041,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     Logger.info(
       TAG,
-      `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}`,
+      `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}${primed ? " (seamless)" : ""}`,
     );
     // Hold the indicator until the new rendition is actually on screen. The
     // swap is complete here, but the decoder has not produced a frame yet —
@@ -2020,7 +2049,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // is the gap the viewer sees. Detached on purpose: the caller (ABR) is
     // waiting on this promise to release its own switch lock, and holding that
     // until the first frame lands would delay the next decision.
-    void this.clearSwitchIndicatorOnResumedPlayback(endSwitch);
+    // …and none of that applies to a seamless handover: no indicator went up,
+    // because the picture never stopped to need one.
+    if (!primed) void this.clearSwitchIndicatorOnResumedPlayback(endSwitch);
     return true;
   }
 
@@ -9853,6 +9884,248 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     const duration = this.getDuration();
     return duration > 0 && this.getBufferedTime() >= duration - 0.5;
+  }
+
+  /**
+   * Everything a video decoder needs to be THE video decoder: frames into the
+   * renderer's queue with the seek-target filter, errors out to the host, and
+   * the keyframe-wait hold that keeps a mid-playback recovery out of the
+   * buffering state.
+   *
+   * A method rather than a block in the constructor because a seamless quality
+   * switch builds its next decoder BEFORE it owns the pipeline — it primes into
+   * a private list of frames, and takes this wiring only at the swap. Wiring
+   * that differed even slightly from the original would show up as a bug that
+   * appears only after the first switch.
+   */
+  /**
+   * Decode the incoming rendition PAST the playhead before anything is swapped,
+   * so the changeover costs no frames.
+   *
+   * The old switch was seamless everywhere except the one place that shows: the
+   * network prep overlapped, but the DECODE did not. The pipeline stopped, the
+   * decoder flushed, every queued frame was thrown away, the decoder
+   * reconfigured, and only then did the first packet of the new rendition go
+   * in. What the viewer sees is the sum of those — a still frame under a
+   * spinner, for as long as a fresh GOP takes.
+   *
+   * So a second decoder runs alongside the first, on its own demuxer, and
+   * decodes until it holds frames the clock has not reached yet. Only then does
+   * anything swap, and what swaps is a queue that already has the next quarter
+   * second in it. The outgoing frames play out first (see spliceQueue), so the
+   * seam is one frame following another at a new size.
+   *
+   * Two decoders exist at once for the length of the prime, which is the cost:
+   * on a device that only has one hardware decoder the second will not
+   * configure, and on a slow one the extra decode may cost the OLD rendition a
+   * frame or two. Both end the same way — null, and the caller does the hard
+   * switch it always did.
+   *
+   * Staging is bounded by the clock, not by the packet count: a frame the
+   * playhead has already passed is closed the moment it arrives, so the window
+   * held in memory is the lead below and never the whole seek-to-live gap. It
+   * matters — at 8K a second of frames is not something to hold "just in case".
+   */
+  private async primeRendition(
+    newDemuxer: Demuxer,
+    newTrack: VideoTrack,
+    newStartTime: number,
+  ): Promise<{ decoder: MoviVideoDecoder; frames: VideoFrame[] } | null> {
+    const staged: VideoFrame[] = [];
+    const mediaTime = (f: VideoFrame) => f.timestamp / 1_000_000 - newStartTime;
+    const dropStale = () => {
+      const floor = this.getCurrentTime() - 0.05;
+      while (staged.length > 0 && mediaTime(staged[0]) < floor) {
+        staged.shift()!.close();
+      }
+    };
+    const discard = () => {
+      for (const f of staged) f.close();
+      staged.length = 0;
+    };
+
+    const dec = new MoviVideoDecoder(this.config.decoder === "software");
+    const bindings = newDemuxer.getBindings();
+    if (bindings) dec.setBindings(bindings);
+    let decoderFailed = false;
+    dec.setOnError(() => {
+      decoderFailed = true;
+    });
+    dec.setOnFrame((frame) => {
+      // Behind the playhead already — decoded only to build reference state.
+      if (mediaTime(frame) < this.getCurrentTime() - 0.05) {
+        frame.close();
+        return;
+      }
+      staged.push(frame);
+    });
+    dec.setPlaybackRate(this.clock.getPlaybackRate());
+
+    try {
+      const extradata = newDemuxer.getExtradata(newTrack.id) ?? undefined;
+      const configured = await dec.configure(
+        newTrack,
+        extradata,
+        this.config.frameRate ?? 0,
+      );
+      if (!configured || decoderFailed) {
+        discard();
+        dec.close();
+        return null;
+      }
+      // Priming holds two decoders open at once, and on a device with one
+      // hardware decode session the SECOND one is the one that loses it — it
+      // configures perfectly well and quietly comes up in software. Adopting
+      // that would trade a visible switch for an invisible collapse to CPU
+      // decode at the higher resolution, which is a far worse trade. The hard
+      // path has no such contention: by the time it configures, the outgoing
+      // decoder is closed and the hardware is free.
+      if (dec.isSoftwareBacked && !this.videoDecoder?.isSoftwareBacked) {
+        Logger.debug(
+          TAG,
+          "Seamless prime came up in software while the outgoing decoder is on hardware — hard switch instead",
+        );
+        discard();
+        dec.close();
+        return null;
+      }
+
+      // How far ahead to prime. Reaching the end of what the outgoing rendition
+      // has queued would mean losing nothing at all, but that queue can hold
+      // seconds and these are whole decoded frames — at 8K, seconds of them is
+      // not memory to spend on a cosmetic. Capped, so a deep queue gives up its
+      // tail and everything else is kept.
+      const queued = this.videoRenderer?.queuedPtsRange ?? null;
+      const target = Math.min(
+        Math.max(
+          this.getCurrentTime() + MoviPlayer.SEAMLESS_PRIME_LEAD_S,
+          (queued?.last ?? 0) + 0.05,
+        ),
+        this.getCurrentTime() + MoviPlayer.SEAMLESS_PRIME_MAX_AHEAD_S,
+      );
+
+      const deadline = performance.now() + MoviPlayer.SEAMLESS_PRIME_BUDGET_MS;
+      let started = false;
+      let fed = 0;
+      for (;;) {
+        if (decoderFailed || this._destroyed) break;
+        if (performance.now() > deadline) break;
+        dropStale();
+        const last = staged.length > 0 ? mediaTime(staged[staged.length - 1]) : -Infinity;
+        if (last >= target && staged.length >= MoviPlayer.SEAMLESS_PRIME_MIN_FRAMES) {
+          return { decoder: dec, frames: staged };
+        }
+        const packet = await newDemuxer.readPacket();
+        if (!packet) break; // EOF before we could get ahead
+        if (packet.streamIndex !== newTrack.id) continue;
+        // A decoder that has just configured needs a random-access point, and
+        // the demuxer's seek landed on one — but a non-IDR open-GOP keyframe is
+        // not one, and feeding it here would produce the corrupt frames the
+        // main path spends its keyframe hunt avoiding.
+        if (!started) {
+          if (!packet.keyframe || !packet.isIdr) continue;
+          started = true;
+        }
+        dec.decode(
+          packet.data,
+          packet.timestamp,
+          packet.keyframe,
+          packet.dts,
+          packet.isIdr,
+          packet.isRasl,
+          packet.disposable,
+        );
+        // Frames come out asynchronously; without yielding, this loop would
+        // feed the whole budget in before a single one arrived — and hold the
+        // main thread away from the rendition that is still playing.
+        if (++fed % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+      }
+    } catch (e) {
+      Logger.debug(TAG, `Seamless prime failed: ${e}`);
+    }
+    discard();
+    dec.close();
+    return null;
+  }
+
+  private wireVideoDecoder(dec: MoviVideoDecoder): void {
+    dec.setOnFrame((frame) => {
+      // Background mode: drop video frames silently (audio keeps playing)
+      // But keep frames if PiP is active (canvas is visible in PiP window)
+      if (document.hidden && !this.isPiPActive) {
+        frame.close();
+        return;
+      }
+
+      // Queue frames for smooth presentation with A/V sync
+      // Allow processing if playing OR if we are seeking (waiting for sync)
+      if (
+        this.videoRenderer &&
+        (this.stateManager.getState() === "playing" ||
+          this.waitingForVideoSync)
+      ) {
+        // IMPORTANT: Drop video frames before the seek target time
+        // These frames are decoded to build decoder state (reference frames),
+        // but we don't display them - we want accurate seeking to the target time
+        const frameTime = frame.timestamp / 1_000_000; // Convert to seconds
+        // CRITICAL: Check seekTargetTime !== -1 instead of >= 0 to support negative start times
+        // Some media files have negative PTS offsets (e.g., startTime = -0.105s)
+        if (this.seekTargetTime !== -1 && frameTime < this.seekTargetTime) {
+          // Drop this frame, it's before our target time
+          frame.close();
+          return;
+        }
+
+        // Video reached target! If a seek is awaiting sync, fire the
+        // completion path. Otherwise the guard was set in filter-only
+        // mode (first-play / post-prefetch resume) just to drop pre-target
+        // frames produced by Open-GOP recovery — we just clear the guard
+        // so subsequent frames flow through without re-entering this
+        // branch (which would log a warn-spam every frame).
+        if (this.seekTargetTime !== -1) {
+          if (this.waitingForVideoSync) {
+            Logger.debug(TAG, `onFrame: frameTime=${frameTime.toFixed(3)}s >= seekTargetTime=${this.seekTargetTime.toFixed(3)}s, calling notifySeekCompletion`);
+            this.notifySeekCompletion(frameTime);
+          } else {
+            this.seekTargetTime = -1;
+          }
+        }
+
+        this.videoRenderer.queueFrame(frame);
+      } else {
+        frame.close();
+      }
+    });
+
+    dec.setOnError((error) => {
+      Logger.error(TAG, "Video decoder error", error);
+      this.emit("error", error);
+      // Note: Decoder now has built-in recovery, only pauses after MAX_ERRORS
+    });
+
+    // When the decoder enters its "skip non-keyframes until next IDR" recovery
+    // during normal playback (decode-error recreate, e.g. high-bitrate 1080p
+    // H.264 whose HW decoder throws an EncodingError on an IDR), we deliberately
+    // do NOT flip into buffering. Per request: the clock and audio keep running
+    // and the video simply holds its last frame until the next keyframe lands
+    // (~1 GOP), then A/V sync catches the video up with a jump. The stall
+    // detector is already suppressed across this window via
+    // videoDecoder.isRecentlyRecovering(), so the empty video queue here is not
+    // mistaken for a stall. Seeks are handled by the seek pipeline (suppressed
+    // here via the state/sync guard).
+    dec.onKeyframeWaitChange = (waiting) => {
+      const state = this.stateManager.getState();
+      // Track the hold so ABR doesn't misread the draining video buffer
+      // (clock advancing, video frozen on last frame) as the rung failing.
+      this._videoHoldingForKeyframe = waiting && state === "playing";
+      if (state === "seeking" || this.waitingForVideoSync) return;
+      if (this._videoHoldingForKeyframe) {
+        Logger.debug(
+          TAG,
+          "Decoder waiting for keyframe mid-playback — staying in playing (audio/clock continue, video holds until next keyframe)",
+        );
+      }
+    };
   }
 
   private decodingOnCpu(): boolean {

@@ -4252,6 +4252,66 @@ export class CanvasRenderer {
   }
 
   /**
+   * Hand the queue over to a new rendition WITHOUT emptying it.
+   *
+   * clearQueue() is the seek primitive: throw everything away, the picture is
+   * about to jump anyway. A quality switch is the opposite case — the picture
+   * must not jump at all — so the frames already queued from the outgoing
+   * rendition are exactly what covers the changeover. Everything from
+   * `fromPtsMicros` on is replaced by the incoming rendition's frames and the
+   * older ones play out first, so the seam falls between two consecutive
+   * presentation times and reads as one continuous picture at a new size.
+   *
+   * Presentation timing is deliberately NOT reset: the clock never stopped, and
+   * re-anchoring it here is what makes a switch look like a seek. `justSeeked`
+   * stays untouched for the same reason.
+   *
+   * Returns the number of incoming frames adopted — zero means the splice point
+   * was already behind the queue and the caller should fall back to a hard
+   * switch rather than leave a gap.
+   */
+  spliceQueue(fromPtsMicros: number, frames: VideoFrame[]): number {
+    const kept: VideoFrame[] = [];
+    for (const frame of this.frameQueue) {
+      if (frame.timestamp >= fromPtsMicros) frame.close();
+      else kept.push(frame);
+    }
+    this.frameQueue = kept;
+    let adopted = 0;
+    for (const frame of frames) {
+      if (frame.timestamp < fromPtsMicros) {
+        frame.close();
+        continue;
+      }
+      this.queueFrame(frame);
+      adopted++;
+    }
+    // The perf detectors are judging a rung that is no longer playing, and the
+    // decode-bound verdict in particular would carry a 4K stall onto the 720p
+    // that replaced it. configure() re-arms them; this only makes sure the
+    // window between here and there isn't judged against the wrong rendition.
+    this._perfWindowStart = 0;
+    this._perfDeficitWindows = 0;
+    this._perfStuckWindows = 0;
+    Logger.debug(
+      TAG,
+      `Queue spliced at ${(fromPtsMicros / 1_000_000).toFixed(3)}s: ${kept.length} outgoing frames play out, ${adopted} incoming queued`,
+    );
+    return adopted;
+  }
+
+  /** Oldest and newest presentation times sitting in the queue, in SECONDS.
+   *  The switch path uses the newest to pick a splice point the outgoing
+   *  rendition can actually reach. */
+  get queuedPtsRange(): { first: number; last: number } | null {
+    if (this.frameQueue.length === 0) return null;
+    return {
+      first: this.frameQueue[0].timestamp / 1_000_000,
+      last: this.frameQueue[this.frameQueue.length - 1].timestamp / 1_000_000,
+    };
+  }
+
+  /**
    * Render an ImageBitmap
    */
   renderBitmap(_bitmap: ImageBitmap): void {
