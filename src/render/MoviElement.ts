@@ -4296,6 +4296,27 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      // A host's hotkey, when it carries a MODIFIER — before the switch, not
+      // after it.
+      //
+      // The switch pairs each letter with its uppercase twin (case "a" sits
+      // beside case "A") so that Caps Lock does not break the shortcuts. The
+      // cost is that Shift+A arrives as "A" and is caught by the aspect-ratio
+      // case, so a host's Shift+A fired the built-in and never reached the
+      // default branch below. Anything with a modifier is not a built-in
+      // shortcut in the first place — except Ctrl+arrows and the speed keys,
+      // which still fall through to the switch when no custom control claims
+      // the combination.
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) {
+        const modId = this.customHotkeyFor(e);
+        if (modId) {
+          e.preventDefault();
+          this.triggerCustomControl(modId, true);
+          this.showControls();
+          return;
+        }
+      }
+
       switch (e.key) {
         case " ":
         case "k":
@@ -4714,11 +4735,13 @@ export class MoviElement extends HTMLElement {
           this.showControls();
           break;
         default: {
-          // A host's own hotkey, and only here — after every built-in has had
-          // the event. A control registered on "k" gets nothing rather than
-          // taking play/pause away from everyone who expects it; addControl
-          // says so out loud when that happens, which is early enough for the
-          // author to pick another key.
+          // A host's own UNMODIFIED hotkey, and only here — after every
+          // built-in has had the event. A control registered on "k" gets
+          // nothing rather than taking play/pause away from everyone who
+          // expects it; addControl says so out loud when that happens, which
+          // is early enough for the author to pick another key. (Modified
+          // combinations were already offered above, where the switch's
+          // uppercase pairs would otherwise have swallowed them.)
           const id = this.customHotkeyFor(e);
           if (id) {
             e.preventDefault();
