@@ -8676,9 +8676,10 @@ export class MoviElement extends HTMLElement {
     // is unchanged (no reload), so the player tracks it via its active-rendition
     // url; on the first render that's "" and we fall back to the element's chosen
     // (default) src.
-    const activeSrc =
+    const activeSrc = this.effectiveQualityKey(
       (player?.getActiveDashRendition?.() as string) ||
-      (typeof this._src === "string" ? this._src : "");
+        (typeof this._src === "string" ? this._src : ""),
+    );
 
     // Feed the qualities (with bitrate) to the player's ABR so "Auto" can size
     // and switch them; needs 2+ with a (real or estimated) bitrate. Pass the
@@ -8794,8 +8795,10 @@ export class MoviElement extends HTMLElement {
         // A screen, not a speedometer: this is the picture changing, and the
         // speed icon here read as though the playback rate had moved.
         if (picked) this.showOSD(OSD.quality, picked.label || "Quality");
-        if (newSrc && newSrc !== activeSrc) this.switchPremuxedQuality(newSrc);
-        else this.updateQualityMenu();
+        if (newSrc && newSrc !== activeSrc) {
+          this.markQualityPending(newSrc);
+          this.switchPremuxedQuality(newSrc);
+        } else this.updateQualityMenu();
         closeMenu();
       });
     });
@@ -8814,7 +8817,9 @@ export class MoviElement extends HTMLElement {
   ): void {
     qualityContainer.style.display = "flex";
     const player = this.player as any;
-    const activeUrl = (player?.getActiveDashRendition?.() as string) || "";
+    const activeUrl = this.effectiveQualityKey(
+      (player?.getActiveDashRendition?.() as string) || "",
+    );
     // "Auto" needs 2+ renditions with bitrates. Re-apply a persisted Auto
     // preference (survives movi-tube's per-video element rebuild) before reading
     // isAuto, so a fresh load lands on Auto instead of a fixed rung.
@@ -8907,8 +8912,10 @@ export class MoviElement extends HTMLElement {
         // Picking a specific quality leaves Auto.
         player?.setAutoQuality?.(false);
         this._writeQualityAutoPref(false);
-        if (r.url !== activeUrl) this.switchDashRendition(r.url);
-        else this.updateQualityMenu(); // was Auto on this rung — just repaint
+        if (r.url !== activeUrl) {
+          this.markQualityPending(r.url);
+          this.switchDashRendition(r.url);
+        } else this.updateQualityMenu(); // was Auto on this rung — just repaint
         closeMenu();
       });
       items.push(item);
@@ -8924,6 +8931,50 @@ export class MoviElement extends HTMLElement {
    * analyzeDashFallback re-attaches the audio/subtitle and only the video
    * Representation changes.
    */
+  /**
+   * The rung the viewer just chose, shown as chosen before it arrives.
+   *
+   * A pick used to leave the menu and the gear reading the OLD quality until
+   * the switch landed — and the switch got slower on purpose when it stopped
+   * dropping frames: the new rendition is opened, seeked and decoded PAST the
+   * playhead before anything swaps, and only then does the active rendition
+   * change and the UI catch up. On a slow link that is seconds of a menu
+   * insisting you are still on 480p after you asked for 1080p.
+   *
+   * So the pick shows immediately and the switch confirms it. Cleared when the
+   * real rendition catches up (the renderers below check), and on a switch that
+   * bails — a rung that could not be prepared must not stay ticked.
+   */
+  private _pendingQualityKey: string | null = null;
+
+  /** Read by every quality renderer instead of the player's active rendition,
+   *  so the chosen rung is the one shown from the moment it is chosen. */
+  private effectiveQualityKey(actual: string): string {
+    if (!this._pendingQualityKey) return actual;
+    // The switch landed — the pending pick is now simply the truth.
+    if (this._pendingQualityKey === actual) {
+      this._pendingQualityKey = null;
+      return actual;
+    }
+    return this._pendingQualityKey;
+  }
+
+  /** Show a pick as taken, at once, and repaint the places that show it. */
+  private markQualityPending(key: string): void {
+    this._pendingQualityKey = key;
+    this.updateQualityMenu();
+    this._renderGearBadge();
+  }
+
+  /** The switch is over — by arriving, or by failing. Either way the menu goes
+   *  back to telling the truth. */
+  private clearQualityPending(): void {
+    if (!this._pendingQualityKey) return;
+    this._pendingQualityKey = null;
+    this.updateQualityMenu();
+    this._renderGearBadge();
+  }
+
   private switchDashRendition(url: string): void {
     if (
       !this.player ||
@@ -8940,7 +8991,12 @@ export class MoviElement extends HTMLElement {
       player
         .switchVideoRenditionInPlace(url)
         .then((ok: boolean) => {
-          if (!ok) this._reloadQualitySwitch(url);
+          // Landed: effectiveQualityKey sees the real rendition match and lets
+          // the pick go. Bailed: the reload path takes over and the pick still
+          // stands for it — a rung the viewer chose stays chosen while another
+          // route to it is tried.
+          if (ok) this.clearQualityPending();
+          else this._reloadQualitySwitch(url);
         })
         .catch(() => this._reloadQualitySwitch(url));
       return;
@@ -9068,7 +9124,8 @@ export class MoviElement extends HTMLElement {
       this._suppressSwReload = true;
       p.switchVideoRenditionInPlace(newSrc)
         .then((ok: boolean) => {
-          if (!ok) this._reloadPremuxedQuality(newSrc);
+          if (ok) this.clearQualityPending();
+          else this._reloadPremuxedQuality(newSrc);
         })
         .catch(() => this._reloadPremuxedQuality(newSrc));
       return;
@@ -22781,6 +22838,9 @@ export class MoviElement extends HTMLElement {
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
     this._qualityBadge = "";
     this._qualityBadgeReported = false;
+    // A pick belongs to the video it was made on. Carried into the next one it
+    // would tick a rung of the old ladder that may not even exist here.
+    this._pendingQualityKey = null;
 
     // Clear the hardware-decode ceiling on a genuinely new load so the NEXT
     // source (a reused-element host swapping videos; movi-tube rebuilds the whole
