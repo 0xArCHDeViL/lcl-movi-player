@@ -2307,10 +2307,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // 144p rung every tick looked like a buffer in trouble, so the upshift gate
     // refused, and quality only ever climbed if the viewer PAUSED (which stops
     // the playhead, so the buffer stops shrinking).
-    const duration = this.getDuration();
-    const nothingLeftToFetch =
-      (this.source as { isFullyCached?: () => boolean } | null)?.isFullyCached?.() === true ||
-      (duration > 0 && this.getBufferedTime() >= duration - 0.5);
+    const nothingLeftToFetch = this.nothingLeftToFetch();
     const draining =
       !nothingLeftToFetch &&
       this._lastBufferAhead > 0 &&
@@ -2370,8 +2367,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const videoRecovering =
       this._videoHoldingForKeyframe ||
       !!this.videoDecoder?.isRecentlyRecovering?.();
+    // Nothing left to fetch means nothing a downshift can fix. `draining`
+    // already knows that; the absolute-low clause did not, and near the end of
+    // a fully-downloaded file bufferAhead is small for the only reason it can
+    // be — the video is ending. That read as a rung in trouble and dropped a
+    // 2160p file to 360p three seconds before it finished, with the switch's
+    // spinner over the last of the picture. The bytes were already on the
+    // machine; there was no link to relieve.
     const bufferLow =
       !videoRecovering &&
+      !nothingLeftToFetch &&
       ((draining && bufferAhead < 6) || (bufferAhead < 4 && settledSinceSwitch));
     if (
       (stalling || bufferLow) &&
@@ -3049,6 +3054,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seconds, each step "rescuing" the refill of the step before. Give a fresh
     // rung the same settle the ordinary downshift gets.
     if (performance.now() - this._lastAbrSwitchAt < 10000) return null;
+    // Same reasoning as the ordinary downshift: with the download finished
+    // there is no link to relieve, so whatever froze the picture — decode, or
+    // simply the end of the file — a lower rung cannot address it, and the
+    // switch would cost a re-open and a spinner to prove that.
+    if (this.nothingLeftToFetch()) return null;
     const rungs = this._dashRenditions
       .filter((r) => (r.bandwidth || 0) > 0)
       .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
@@ -9823,6 +9833,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * CPU; the ladder ceiling has to treat all three the same, or the rung sits
    * there with a full decode queue and the spinner up, never stepping down.
    */
+  /**
+   * Is the download finished — the whole file in hand, or everything up to the
+   * end of the media already buffered?
+   *
+   * The ABR's every downshift reason is a statement about the LINK, and once
+   * there is nothing left to fetch there is no link left in the picture. A
+   * shrinking buffer then means only that the playhead is walking toward an end
+   * that is already downloaded, which is what playback IS. Dropping a rung
+   * there costs a switch and buys nothing: the bytes for the rung we would
+   * leave are already on the machine, and the ones for the rung we would land
+   * on are not.
+   */
+  private nothingLeftToFetch(): boolean {
+    if (
+      (this.source as { isFullyCached?: () => boolean } | null)?.isFullyCached?.() === true
+    ) {
+      return true;
+    }
+    const duration = this.getDuration();
+    return duration > 0 && this.getBufferedTime() >= duration - 0.5;
+  }
+
   private decodingOnCpu(): boolean {
     if (webCodecsUnavailable()) return true;
     return this.videoDecoder ? this.videoDecoder.isSoftwareBacked : false;
