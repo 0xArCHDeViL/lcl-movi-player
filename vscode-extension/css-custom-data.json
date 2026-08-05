@@ -171,6 +171,32 @@
       ]
     },
     {
+      "name": "--movi-radius-surface",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `10px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-row",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `7px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-controls-color",
       "description": {
         "kind": "markdown",

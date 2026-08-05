@@ -627,6 +627,14 @@
               "description": "Movi Player theme variable.\n\nDefault: `20px`"
             },
             {
+              "name": "--movi-radius-surface",
+              "description": "Movi Player theme variable.\n\nDefault: `10px`"
+            },
+            {
+              "name": "--movi-radius-row",
+              "description": "Movi Player theme variable.\n\nDefault: `7px`"
+            },
+            {
               "name": "--movi-controls-color",
               "description": "Movi Player theme variable.\n\nDefault: `#FFFFFF`"
             },

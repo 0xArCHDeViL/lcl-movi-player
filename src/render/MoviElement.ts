@@ -170,6 +170,59 @@ const OSD = {
   seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
 } as const;
 
+/**
+ * A control the HOST adds — to the bottom bar, to the context menu, or both.
+ *
+ * Described rather than constructed: the player builds the button and the menu
+ * row from this, keeps them in step, and removes them together. See
+ * MoviElement.addControl.
+ *
+ * ```ts
+ *   player.addControl({
+ *     id: "autoplay",
+ *     label: "Autoplay",
+ *     icon: autoplaySvg,        // markup or a node; omit for a plain word
+ *     side: "right",
+ *     before: "cc",             // sits just left of the subtitles button
+ *     toggle: true,
+ *     active: true,
+ *     placement: "both",        // bar AND context menu, one shared state
+ *     onSelect: (on) => setAutoplay(on),
+ *   });
+ * ```
+ */
+export interface MoviControlSpec {
+  /** Unique, and the handle for updateControl / removeControl. */
+  id: string;
+  /** Accessible name, tooltip, and the text shown in the context menu. */
+  label: string;
+  /** Inline SVG markup or an element to clone. Without one the label is drawn
+   *  as text, which is a perfectly good control. */
+  icon?: string | Element;
+  /** Tooltip override. Pass null for no tooltip at all. */
+  title?: string | null;
+  /** Which end of the bar. Default "right". */
+  side?: "left" | "right";
+  /** Position against a built-in: "play", "back10", "forward10", "volume",
+   *  "time", "audio", "cc", "quality", "speed", "stableaudio", "hdr", "loop",
+   *  "settings", "aspect", "pip", "fullscreen", "more". In the context menu,
+   *  the built-in's action name instead. Unknown or absent → the end. */
+  before?: string;
+  after?: string;
+  /** Where it appears. Default "bar". */
+  placement?: "bar" | "menu" | "both";
+  /** A toggle carries state: pressed styling, On/Off in the menu, and the
+   *  boolean handed to onSelect. Without it, a plain button. */
+  toggle?: boolean;
+  /** Starting state for a toggle. */
+  active?: boolean;
+  /** Right-hand text on the menu row for a non-toggle — a shortcut, usually. */
+  shortcutHint?: string;
+  /** Called on every use, with the state AFTER the toggle flipped. Also
+   *  emitted as a "movi-control" event for hosts that prefer listeners. */
+  onSelect?: (active: boolean, player: MoviElement) => void;
+}
+
 export class MoviElement extends HTMLElement {
   private canvas: HTMLCanvasElement;
   private video: HTMLVideoElement;
@@ -5257,6 +5310,14 @@ export class MoviElement extends HTMLElement {
       e.preventDefault(); // Added e.preventDefault()
 
       const action = item.dataset.action;
+
+      // A host's own row. Handled before everything else so a custom id can
+      // never collide with a built-in action name.
+      if (action && action.startsWith("custom:")) {
+        this.triggerCustomControl(action.slice(7));
+        hideContextMenu();
+        return;
+      }
 
       // Handle Back button for mobile submenus
       if (action === "back") {
@@ -17695,6 +17756,21 @@ export class MoviElement extends HTMLElement {
       .movi-quality-btn {
         overflow: visible;
       }
+
+      /* A host's own bar button. It is a .movi-btn first, so it inherits the
+         size, hit area, hover and focus of every other control and cannot end
+         up looking like a guest. The only thing added is what a built-in
+         toggle already has: the accent while it is on. */
+      .movi-custom-btn.movi-custom-active {
+        color: var(--movi-primary);
+      }
+      .movi-custom-btn .movi-custom-btn-text {
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1;
+        white-space: nowrap;
+        padding: 0 2px;
+      }
       /* The gear turns with the panel, the way a control that opens something
          should acknowledge it. Driven by a class this element sets, NOT by
          :has(.is-open) — Safari doesn't reliably re-evaluate :has() when the
@@ -25790,6 +25866,298 @@ export class MoviElement extends HTMLElement {
       if (ctxOutline) ctxOutline.style.display = "block";
       if (ctxFilled) ctxFilled.style.display = "none";
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Custom controls — the host's own buttons in the bar and rows in the
+  // context menu.
+  //
+  // Everything the player offers is a control it decided to have. A host that
+  // wants one of its own — an Autoplay toggle, a "next episode", a like button
+  // — had nowhere to put it: the bar is inside a shadow root, and reaching in
+  // to append a button means depending on class names that are not an API and
+  // on an order the overflow tray rearranges.
+  //
+  // So a control is described rather than constructed. The description says
+  // where it goes (which side, and next to which built-in), whether it is a
+  // toggle or a plain button, and what to call when it is used; the element
+  // builds it, keeps the bar button and the menu row in step, and takes it
+  // back down on removeControl. One description can appear in both places,
+  // because a control the viewer can reach two ways is one control with one
+  // state, not two that have to be kept in sync by the host.
+  // ---------------------------------------------------------------------------
+
+  /** Built-in controls a custom one can be positioned against. */
+  private static readonly CONTROL_ANCHORS: Record<string, string> = {
+    play: ".movi-play-pause",
+    back10: ".movi-seek-backward",
+    forward10: ".movi-seek-forward",
+    volume: ".movi-volume-container",
+    time: ".movi-time",
+    audio: ".movi-audio-track-container",
+    cc: ".movi-subtitle-track-container",
+    subtitle: ".movi-subtitle-track-container",
+    quality: ".movi-quality-container",
+    speed: ".movi-speed-container",
+    stableaudio: ".movi-stable-audio-container",
+    hdr: ".movi-hdr-container",
+    loop: ".movi-loop-btn",
+    settings: ".movi-settings-container",
+    aspect: ".movi-aspect-ratio-btn",
+    pip: ".movi-pip-btn",
+    fullscreen: ".movi-fullscreen-btn",
+    more: ".movi-more-btn",
+  };
+
+  private _customControls = new Map<
+    string,
+    { spec: MoviControlSpec; active: boolean }
+  >();
+
+  /**
+   * Add a control of the host's own to the bar, the context menu, or both.
+   *
+   * Adding the same id twice replaces the first — so a host that re-runs its
+   * setup (a framework re-render, a source change) does not end up with two.
+   */
+  addControl(spec: MoviControlSpec): void {
+    if (!spec?.id) {
+      Logger.warn(TAG, "addControl: a control needs an id");
+      return;
+    }
+    const existing = this._customControls.get(spec.id);
+    this.teardownCustomControl(spec.id);
+    this._customControls.set(spec.id, {
+      spec,
+      // A replacement keeps the state it had: re-registering the same toggle
+      // should not silently flip it back off under the viewer.
+      active: spec.active ?? existing?.active ?? false,
+    });
+    this.renderCustomControl(spec.id);
+  }
+
+  /**
+   * Change a control that is already there. Only the fields present in the
+   * patch are touched, so `updateControl(id, { active: true })` is the way to
+   * reflect state the host owns without rebuilding anything.
+   */
+  updateControl(id: string, patch: Partial<MoviControlSpec>): void {
+    const entry = this._customControls.get(id);
+    if (!entry) return;
+    entry.spec = { ...entry.spec, ...patch, id };
+    if (patch.active !== undefined) entry.active = patch.active;
+    this.teardownCustomControl(id);
+    this.renderCustomControl(id);
+  }
+
+  /** Take a custom control back down. Unknown ids are ignored. */
+  removeControl(id: string): void {
+    this.teardownCustomControl(id);
+    this._customControls.delete(id);
+  }
+
+  /** The current state of a custom toggle, or false for a plain button. */
+  isControlActive(id: string): boolean {
+    return this._customControls.get(id)?.active ?? false;
+  }
+
+  /** Remove this control's DOM without forgetting that it exists. */
+  private teardownCustomControl(id: string): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+      ?.escape;
+    const sel = esc ? esc(id) : id.replace(/["\\]/g, "\\$&");
+    sr.querySelectorAll(`[data-custom-control="${sel}"]`).forEach((n) =>
+      n.remove(),
+    );
+  }
+
+  /**
+   * Turn a host's icon into a node.
+   *
+   * Markup goes through DOMParser rather than innerHTML: the string comes from
+   * the host page, which is the same trust level as the call itself, but
+   * parsing it as a document and importing the root keeps script elements and
+   * inline handlers from being executed on the way in — and keeps this off the
+   * one path in the element that has to be audited for injection.
+   */
+  private buildCustomIcon(icon?: string | Element): Element | null {
+    if (!icon) return null;
+    if (typeof icon !== "string") return icon.cloneNode(true) as Element;
+    const trimmed = icon.trim();
+    if (!trimmed.startsWith("<")) return null;
+    try {
+      const doc = new DOMParser().parseFromString(trimmed, "image/svg+xml");
+      const root = doc.documentElement;
+      if (!root || root.nodeName === "parsererror") return null;
+      root.querySelectorAll("script").forEach((n) => n.remove());
+      return document.importNode(root, true);
+    } catch {
+      return null;
+    }
+  }
+
+  private renderCustomControl(id: string): void {
+    const entry = this._customControls.get(id);
+    const sr = this.shadowRoot;
+    if (!entry || !sr) return;
+    const { spec } = entry;
+    const wantsBar = spec.placement !== "menu";
+    const wantsMenu = spec.placement === "menu" || spec.placement === "both";
+
+    if (wantsBar) {
+      const side =
+        spec.side === "left" ? ".movi-controls-left" : ".movi-controls-right";
+      const row = sr.querySelector(side);
+      if (row) {
+        const btn = document.createElement("button");
+        btn.className = "movi-btn movi-custom-btn";
+        btn.type = "button";
+        btn.dataset.customControl = id;
+        btn.setAttribute("aria-label", spec.label);
+        if (spec.title !== null) btn.title = spec.title ?? spec.label;
+        if (spec.toggle) btn.setAttribute("aria-pressed", String(entry.active));
+        const icon = this.buildCustomIcon(spec.icon);
+        if (icon) btn.appendChild(icon);
+        else {
+          // No icon is not an error — a word is a perfectly good control, and
+          // it is better than a button nobody can see.
+          const text = document.createElement("span");
+          text.className = "movi-custom-btn-text";
+          text.textContent = spec.label;
+          btn.appendChild(text);
+        }
+        btn.classList.toggle(
+          "movi-custom-active",
+          !!spec.toggle && entry.active,
+        );
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.triggerCustomControl(id);
+        });
+        this.insertAtAnchor(row, btn, spec);
+      }
+    }
+
+    if (wantsMenu) {
+      const menu = this.shadowRoot?.querySelector(".movi-context-menu");
+      if (menu) {
+        const item = document.createElement("div");
+        item.className = "movi-context-menu-item";
+        item.dataset.action = `custom:${id}`;
+        item.dataset.customControl = id;
+        const icon = this.buildCustomIcon(spec.icon);
+        if (icon) {
+          icon.classList.add("movi-context-menu-icon");
+          item.appendChild(icon);
+        }
+        const label = document.createElement("span");
+        label.className = "movi-context-menu-label";
+        label.textContent = spec.label;
+        item.appendChild(label);
+        const trailing = document.createElement("span");
+        trailing.className = "movi-context-menu-shortcut";
+        trailing.textContent = spec.toggle
+          ? entry.active
+            ? "On"
+            : "Off"
+          : (spec.shortcutHint ?? "");
+        item.appendChild(trailing);
+        item.classList.toggle(
+          "movi-context-menu-active",
+          !!spec.toggle && entry.active,
+        );
+        this.insertAtAnchor(menu, item, spec, true);
+      }
+    }
+  }
+
+  /** Place a node before/after a named built-in, or at the end of the row. */
+  private insertAtAnchor(
+    parent: Element,
+    node: Element,
+    spec: MoviControlSpec,
+    isMenu = false,
+  ): void {
+    const find = (name?: string): Element | null => {
+      if (!name) return null;
+      if (isMenu) {
+        return parent.querySelector(
+          `.movi-context-menu-item[data-action="${name}"]`,
+        );
+      }
+      const sel = MoviElement.CONTROL_ANCHORS[name];
+      if (!sel) return null;
+      // The anchor may sit inside the mobile-expandable wrapper; the custom
+      // control goes beside the wrapper's child, not beside the wrapper, so
+      // the two stay adjacent when the tray collapses.
+      return parent.querySelector(sel);
+    };
+    const before = find(spec.before);
+    if (before?.parentElement) {
+      before.parentElement.insertBefore(node, before);
+      return;
+    }
+    const after = find(spec.after);
+    if (after?.parentElement) {
+      after.parentElement.insertBefore(node, after.nextSibling);
+      return;
+    }
+    parent.appendChild(node);
+  }
+
+  /** A custom control was used — flip a toggle, tell the host, resync both UIs. */
+  private triggerCustomControl(id: string): void {
+    const entry = this._customControls.get(id);
+    if (!entry) return;
+    if (entry.spec.toggle) entry.active = !entry.active;
+    this.syncCustomControl(id);
+    try {
+      entry.spec.onSelect?.(entry.active, this);
+    } catch (e) {
+      // A host callback that throws is the host's problem, not a reason for
+      // the player's click handling to unwind.
+      Logger.warn(TAG, `custom control "${id}" handler threw`, e);
+    }
+    this.dispatchEvent(
+      new CustomEvent("movi-control", {
+        detail: { id, active: entry.active },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** Push a control's state onto whichever of its two faces exist. */
+  private syncCustomControl(id: string): void {
+    const entry = this._customControls.get(id);
+    const sr = this.shadowRoot;
+    if (!entry || !sr) return;
+    const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+      ?.escape;
+    const sel = esc ? esc(id) : id;
+    sr.querySelectorAll(`[data-custom-control="${sel}"]`).forEach((node) => {
+      const el = node as HTMLElement;
+      if (el.classList.contains("movi-context-menu-item")) {
+        el.classList.toggle(
+          "movi-context-menu-active",
+          !!entry.spec.toggle && entry.active,
+        );
+        const trailing = el.querySelector(".movi-context-menu-shortcut");
+        if (trailing && entry.spec.toggle) {
+          trailing.textContent = entry.active ? "On" : "Off";
+        }
+      } else {
+        el.classList.toggle(
+          "movi-custom-active",
+          !!entry.spec.toggle && entry.active,
+        );
+        if (entry.spec.toggle) {
+          el.setAttribute("aria-pressed", String(entry.active));
+        }
+      }
+    });
   }
 
   /**
