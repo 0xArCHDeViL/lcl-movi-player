@@ -300,6 +300,11 @@ export class MoviElement extends HTMLElement {
   // intentional choice; the pill is only meant to bridge the browser's
   // autoplay-with-sound block, not pester on every manual mute.
   private _userHasUnmuted: boolean = false;
+  /** The viewer muted this deliberately — through the setter, which is where
+   *  the button, the M key and a slider dragged to zero all arrive. The
+   *  autoplay fallback mutes by writing `_muted` directly, so it never trips
+   *  this and its pill still appears. */
+  private _userChoseMute: boolean = false;
   private brokenIndicator: HTMLElement | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
   /** Shown in the page while the canvas is living in a PiP window. */
@@ -21394,6 +21399,8 @@ export class MoviElement extends HTMLElement {
     );
     this._autoMutedForAutoplay = true;
     this._muted = true;
+    // Ours, not theirs — so the pill is allowed to appear.
+    this._userChoseMute = false;
     this.updateMuted(); // pushes mute to player + surfaces the pill
     // Announce the state change. `updateMuted()` only refreshes our own
     // chrome (volume icon + pill), so without this an integrator's custom
@@ -21446,7 +21453,15 @@ export class MoviElement extends HTMLElement {
     //      user never asked to mute, so the pill is their only route back to
     //      audio and must show even without a `controls` attribute.
     const shouldShow =
-      this._muted && hasAudio && !this._userHasUnmuted &&
+      this._muted &&
+      hasAudio &&
+      !this._userHasUnmuted &&
+      // A mute the VIEWER asked for is not a mute to offer a way out of. The
+      // autoplay clause below cannot tell the two apart: on a player with
+      // `controls autoplay` — which is most of them — pressing mute produced
+      // "Tap to unmute", as though the browser had done it. The pill is for the
+      // one case where something was taken away without being asked.
+      !this._userChoseMute &&
       ((this._controls && this._autoplay) || this._autoMutedForAutoplay);
     overlay.style.display = shouldShow ? "flex" : "none";
   }
@@ -23122,6 +23137,9 @@ export class MoviElement extends HTMLElement {
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
     this._qualityBadge = "";
     this._qualityBadgeReported = false;
+    // A deliberate mute belonged to the video it was chosen on; the next one
+    // negotiates its own audio with the browser from scratch.
+    this._userChoseMute = false;
     // A pick belongs to the video it was made on. Carried into the next one it
     // would tick a rung of the old ladder that may not even exist here.
     this._pendingQualityKey = null;
@@ -28117,6 +28135,8 @@ export class MoviElement extends HTMLElement {
     // no-op. Setting it here makes the unmute path attribute-independent.
     this._muted = value;
     if (value) {
+      // Reaching the setter to MUTE is as deliberate as reaching it to unmute.
+      this._userChoseMute = true;
       this.setAttribute("muted", "");
     } else {
       // Reaching the setter (M-key, integrator JS, slider-driven unmute,
@@ -28126,6 +28146,7 @@ export class MoviElement extends HTMLElement {
       // `_muted` directly without going through this setter, so they
       // can't accidentally trip the latch.
       this._userHasUnmuted = true;
+      this._userChoseMute = false;
       this.removeAttribute("muted");
     }
     this.updateMuted();
