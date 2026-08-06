@@ -153,7 +153,21 @@ export class HttpSource implements SourceAdapter {
    * with the replacement that just started.
    */
   private lifetimeAbort = new AbortController();
-  private streamError: Error | null = null; // Store fatal errors from background stream
+  private streamError: Error | null = null;
+  /**
+   * A failure this URL will not recover from, remembered for the life of the
+   * source rather than for the life of one stream attempt.
+   *
+   * `streamError` is cleared by startStream(), which is correct for it — each
+   * attempt starts clean. But read() answers a window it cannot cover by
+   * calling startStream(), so a URL that had begun refusing produced: fetch,
+   * fail, set streamError, stop; read; startStream; CLEAR the error; fetch;
+   * fail… Measured against a signed URL expiring mid-playback, that ran 1131
+   * requests in five seconds, the state stayed "playing", and no error ever
+   * survived long enough for a reader to see one. The viewer got a picture
+   * that had quietly stopped and no reason for it.
+   */
+  private fatalError: Error | null = null; // Store fatal errors from background stream
 
   // Track maximum buffered position (independent of sliding window)
   private maxBufferedEnd: number = 0;
@@ -936,6 +950,10 @@ export class HttpSource implements SourceAdapter {
 
     Logger.info(TAG, `Starting stream from ${fromOffset}`);
 
+    // A URL that has already refused for good is not worth asking again — and
+    // asking is exactly what turns one refusal into a retry storm.
+    if (this.fatalError) throw this.fatalError;
+
     // Clear any previous stream error
     this.streamError = null;
 
@@ -986,6 +1004,15 @@ export class HttpSource implements SourceAdapter {
     const RANGE_RETRY_DELAY = 1500; // ms between range retries
     let rangeRetryCount = 0;
     let consecutiveOnlineFetchFailures = 0;
+    // A 4xx is usually the truth — an expired signature, a revoked link — but
+    // not always the FINAL truth: a CDN edge can hand back a 403 for a moment
+    // during a re-auth, and a 404 can be a node that has not caught up. So it
+    // is asked again, a few times, with a widening gap. Only the same answer
+    // every time is treated as the answer.
+    let fatalAttempts = 0;
+    const MAX_FATAL_ATTEMPTS = 3;
+    const FATAL_RETRY_DELAY = 700;
+    let lastFatalMessage = "";
     let streamBaseOffset = startOffset;
     // Set once a bounded range fetch is rejected with 403 by a server that only
     // accepts open-ended ranges; from then on this stream requests `bytes=N-`.
@@ -1100,6 +1127,11 @@ export class HttpSource implements SourceAdapter {
 
         // Reset range retry counter on successful 206
         rangeRetryCount = 0;
+        // …and the fatal streak: the URL answered, so whatever it was is over.
+        if (response.ok || response.status === 206) {
+          fatalAttempts = 0;
+          lastFatalMessage = "";
+        }
 
         if (!response.ok && response.status !== 206) {
           // If 4xx error (client error), maybe don't retry indefinitely
@@ -1338,6 +1370,7 @@ export class HttpSource implements SourceAdapter {
               Logger.error(TAG, `CORS error accessing ${this.url} (${consecutiveOnlineFetchFailures} consecutive failures while online)`);
               this.atomicSetStreaming(false);
               this.streamError = corsError;
+              this.fatalError = corsError;
               throw corsError;
             }
             Logger.warn(TAG, `Fetch failed while online (${consecutiveOnlineFetchFailures}/${CORS_DETECTION_THRESHOLD}), may be transient network issue`);
@@ -1363,9 +1396,34 @@ export class HttpSource implements SourceAdapter {
         // surface the real reason to the user.
         const errMsgForFatal = (error as any)?.message || "";
         if (errMsgForFatal.includes("(Fatal)")) {
-          Logger.error(TAG, `Fatal HTTP error, not retrying: ${errMsgForFatal}`);
+          // Same failure as last time? Then it is a fact about the URL, not a
+          // moment. A DIFFERENT one starts the count again — something is still
+          // changing, and that is worth another ask.
+          if (errMsgForFatal !== lastFatalMessage) {
+            lastFatalMessage = errMsgForFatal;
+            fatalAttempts = 0;
+          }
+          fatalAttempts++;
+          if (fatalAttempts < MAX_FATAL_ATTEMPTS && this.atomicIsStreaming()) {
+            const wait = FATAL_RETRY_DELAY * fatalAttempts;
+            Logger.warn(
+              TAG,
+              `${errMsgForFatal} (attempt ${fatalAttempts}/${MAX_FATAL_ATTEMPTS}) — retrying in ${wait}ms`,
+            );
+            try {
+              if (this.reader) await this.reader.cancel();
+            } catch {}
+            this.reader = null;
+            await new Promise((r) => setTimeout(r, wait));
+            continue;
+          }
+          Logger.error(
+            TAG,
+            `Fatal HTTP error after ${fatalAttempts} attempts, giving up: ${errMsgForFatal}`,
+          );
           this.atomicSetStreaming(false);
           this.streamError = error instanceof Error ? error : new Error(errMsgForFatal);
+          this.fatalError = this.streamError;
           break;
         }
 
@@ -1424,6 +1482,9 @@ export class HttpSource implements SourceAdapter {
           this.streamError = (error instanceof Error)
             ? error
             : new Error(typeof error === "string" ? error : "Stream failed after maximum retries");
+          // Ten attempts with backoff have been spent. Whatever this is, one
+          // more startStream() will not fix it — and read() would call one.
+          this.fatalError = this.streamError;
           break;
         }
         // Backoff — listen for online event or abort signal to exit early
@@ -2033,6 +2094,11 @@ export class HttpSource implements SourceAdapter {
         Logger.warn(TAG, `One-off range fetch failed, falling back to stream restart`, e);
       }
     }
+
+    // A URL that has already failed for good answers every read the same way.
+    // Checked here as well as in startStream() so the one-off range path above
+    // cannot spin on it either.
+    if (this.fatalError) throw this.fatalError;
 
     // Need new stream (Seeked outside window, or stream dead)
     Logger.debug(TAG, `Read: starting new stream from ${offset}`);
