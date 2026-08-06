@@ -6456,10 +6456,36 @@ export class MoviElement extends HTMLElement {
           border-radius: 2px; cursor: pointer; position: relative;
         }
         .pip-progress-bar:hover { height: 5px; }
+        /* The downloaded-ahead range, under the played fill — the page's bar
+           has always shown it and the PiP bar did not, so the one place a
+           viewer watches from had no way to tell a stall from a pause. */
+        .pip-progress-buffer {
+          position: absolute; left: 0; top: 0; height: 100%;
+          background: rgba(255,255,255,0.35); border-radius: 2px;
+          width: 0%; pointer-events: none;
+        }
         .pip-progress-fill {
+          position: absolute; left: 0; top: 0;
           height: 100%; background: var(--movi-primary, #8B5CF6); border-radius: 2px;
           width: 0%; pointer-events: none;
         }
+        /* Loading, in the window the viewer is actually looking at. The
+           player's own spinner and poster live in the page's shadow root, which
+           during PiP is the surface nobody is watching — so a video that took a
+           few seconds to open looked like a PiP window that had died. */
+        .pip-spinner {
+          position: absolute; inset: 0; display: none;
+          align-items: center; justify-content: center;
+          background: rgba(0,0,0,0.35); pointer-events: none;
+        }
+        body.is-loading .pip-spinner { display: flex; }
+        .pip-spinner > i {
+          width: 34px; height: 34px; border-radius: 50%;
+          border: 3px solid rgba(255,255,255,0.25);
+          border-top-color: #fff;
+          animation: pip-spin 0.9s linear infinite;
+        }
+        @keyframes pip-spin { to { transform: rotate(360deg); } }
         .pip-time { font: 500 10px/1 -apple-system, sans-serif; color: rgba(255,255,255,0.7); white-space: nowrap; }
         .pip-time-row { display: flex; justify-content: space-between; padding: 0 2px; }
         .pip-btn-row { display: flex; align-items: center; justify-content: center; gap: 16px; position: relative; }
@@ -6531,8 +6557,11 @@ export class MoviElement extends HTMLElement {
       timeRow.appendChild(timeDuration);
       const progressBar = pipWindow.document.createElement("div");
       progressBar.className = "pip-progress-bar";
+      const progressBuffer = pipWindow.document.createElement("div");
+      progressBuffer.className = "pip-progress-buffer";
       const progressFill = pipWindow.document.createElement("div");
       progressFill.className = "pip-progress-fill";
+      progressBar.appendChild(progressBuffer);
       progressBar.appendChild(progressFill);
       progressRow.appendChild(timeRow);
       progressRow.appendChild(progressBar);
@@ -6631,6 +6660,16 @@ export class MoviElement extends HTMLElement {
         const dur = this.duration || 0;
         const pct = dur > 0 ? (cur / dur) * 100 : 0;
         progressFill.style.width = `${pct}%`;
+        const buffered = this.player.getBufferEndTime?.() ?? 0;
+        progressBuffer.style.width =
+          dur > 0 ? `${Math.min(100, (buffered / dur) * 100)}%` : "0%";
+        // Loading is anything that is not playable picture: opening a source,
+        // and re-buffering mid-play.
+        const st = this.player.getState?.();
+        pipWindow.document.body.classList.toggle(
+          "is-loading",
+          st === "loading" || st === "buffering" || st === "seeking",
+        );
         timeCurrent.textContent = this.formatTime(cur);
         timeDuration.textContent = this.formatTime(dur);
         updatePlayPauseIcon();
@@ -6639,6 +6678,13 @@ export class MoviElement extends HTMLElement {
           ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
           : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`;
       }, 250);
+
+      // The spinner lives outside the controls, which fade out — a load that
+      // outlasts them must not take the only sign of life with it.
+      const pipSpinner = pipWindow.document.createElement("div");
+      pipSpinner.className = "pip-spinner";
+      pipSpinner.appendChild(pipWindow.document.createElement("i"));
+      pipWindow.document.body.appendChild(pipSpinner);
 
       // Show controls briefly on open
       pipWindow.document.body.classList.add("show-controls");
@@ -18925,6 +18971,14 @@ export class MoviElement extends HTMLElement {
       :host(.movi-pip-active) .movi-rotate-btn,
       :host(.movi-pip-active) .movi-aspect-ratio-btn,
       :host(.movi-pip-active) .movi-fullscreen-btn {
+        display: none !important;
+      }
+      /* The spinner belongs to the surface the picture is on. At z-index 1000
+         it sat ON TOP of the placeholder, so a video opening while PiP was up
+         put its loading state in the window nobody is watching, and left the
+         PiP window looking dead. It has its own spinner there now. (The poster
+         needs no rule — it is z-index 1 and the placeholder already covers it.) */
+      :host(.movi-pip-active) .movi-loading-indicator {
         display: none !important;
       }
 
