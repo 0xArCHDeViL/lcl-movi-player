@@ -6619,7 +6619,14 @@ export class MoviElement extends HTMLElement {
 
       // Update progress + time on interval
       const pipUpdateInterval = setInterval(() => {
-        if (!this._pipWindow || !this.player) { clearInterval(pipUpdateInterval); return; }
+        // Only the WINDOW closing ends this. A missing player used to end it
+        // too, and a source change makes the player missing for a moment while
+        // it is rebuilt — so changing the video killed the PiP window's own
+        // clock for good. It sat on the previous video's numbers, 10:35 of
+        // 23:13, with a play icon that no longer matched, while the page beside
+        // it showed the new video 14 seconds in.
+        if (!this._pipWindow) { clearInterval(pipUpdateInterval); return; }
+        if (!this.player) return; // between sources — wait for the next one
         const cur = this.currentTime;
         const dur = this.duration || 0;
         const pct = dur > 0 ? (cur / dur) * 100 : 0;
