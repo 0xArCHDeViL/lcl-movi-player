@@ -2147,6 +2147,21 @@ export class HttpSource implements SourceAdapter {
    * Uses the maximum of current buffer window and historical max position,
    * but caps it to not exceed what's actually available
    */
+  /**
+   * The first byte the streaming window currently holds.
+   *
+   * The window slides, so "the end is EOF" does NOT mean the file is
+   * downloaded — a container whose index lives at the tail (Matroska cues, a
+   * trailing MP4 moov) sends the window there during open, and for that moment
+   * the window ends at the last byte of a 3.6GB file it has read 4MB of.
+   * Callers that want "everything from here to the end is in hand" have to ask
+   * where the window STARTS as well.
+   */
+  getBufferedStart(): number {
+    if (this.fullyBuffered) return 0;
+    return this.atomicGetBufferStart();
+  }
+
   getBufferedEnd(): number {
     // Entire file is in memory — report full size
     if (this.fullyBuffered && this.size > 0) return this.size;

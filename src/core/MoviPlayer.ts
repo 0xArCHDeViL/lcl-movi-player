@@ -9713,7 +9713,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // the byte-delta maths from ever saying so — it leaves the bar a
         // sliver short of the end on a file that finished downloading minutes
         // ago, which reads as "still buffering" forever.
-        if (bufferedEndBytes >= this.fileSize) {
+        // …but only when the window actually SPANS from here to the end. It
+        // slides, and a container whose index lives at the tail — Matroska
+        // cues, a trailing moov — sends it there during open: for that moment
+        // the window ends at the last byte of a file it has read four
+        // megabytes of, and this said the whole thing was buffered. Worse, it
+        // said so into a monotonic latch, so a 45-minute file showed a full bar
+        // from the first second and only told the truth again after a seek
+        // reset the latch.
+        // Measured against where the PLAYHEAD is, not where the demuxer's
+        // cursor is: during the tail read they are the same byte, so comparing
+        // the window to the cursor still calls a 4MB read of a 3.6GB file
+        // "fully buffered". The playhead's offset is only an estimate — linear,
+        // so VBR skews it — but the question here is coarse: is the window
+        // somewhere near the beginning of what is left to play, or is it parked
+        // at the far end of the file reading an index?
+        const windowStart = this.source.getBufferedStart();
+        const playheadBytes = (this.getCurrentTime() / duration) * this.fileSize;
+        if (bufferedEndBytes >= this.fileSize && windowStart <= playheadBytes) {
           this.lastBufferedTime = duration;
           return duration;
         }
