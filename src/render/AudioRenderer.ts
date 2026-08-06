@@ -1269,7 +1269,19 @@ export class AudioRenderer {
     // contextStateHandler), and anything scheduled before that lands on an
     // anchor about to be thrown away — audio for those seconds is discarded
     // as late while the wall clock walks the picture forward without it.
-    if (this.audioContext && this.audioContext.state === "suspended") {
+    //
+    // …but only while playback is actually running. pause() suspends the
+    // context and deliberately KEEPS its scheduled nodes, so that resuming
+    // continues exactly where it stopped — which means a resume() here starts
+    // them. Unmuting a paused player played it: pause, mute, unmute, and the
+    // audio ran on over a still picture. Nothing is lost by waiting; play()
+    // resumes the context itself, and that press is a user gesture too, so the
+    // first unmute still gets its unlock.
+    if (
+      this.isPlaying &&
+      this.audioContext &&
+      this.audioContext.state === "suspended"
+    ) {
       try {
         await this.audioContext.resume();
         Logger.debug(TAG, "AudioContext resumed on unmute");
