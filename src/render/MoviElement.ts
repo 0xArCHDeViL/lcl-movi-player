@@ -12906,9 +12906,30 @@ export class MoviElement extends HTMLElement {
         // the time / progress / volume icon updates against an empty
         // class on the controls-container. Force the updates through.
         const inStripMode = this.classList.contains("movi-audio-strip");
-        const controlsHidden = !inStripMode && this.controlsContainer?.classList.contains(
-          "movi-controls-hidden",
-        );
+        // …and never while the picture is in a PiP window. The skip below
+        // exists because a hidden bar is a bar nobody can see, so writing to it
+        // is waste — but in PiP the page has no picture, the bar IS what is on
+        // screen, and whether it happens to carry the hidden class at this
+        // instant is not something the clock should depend on. Left gated, the
+        // page sat at 0:00 through an entire video while the player's own clock
+        // ran past forty seconds; one showControls() and it caught up
+        // immediately, which is what took so long to see.
+        const controlsHidden =
+          !inStripMode &&
+          !this._pipWindow &&
+          this.controlsContainer?.classList.contains("movi-controls-hidden");
+        // While PiP is open the bar is the only thing on this surface, and it
+        // must not be allowed to stay hidden — hideControls() already stands
+        // down for PiP, but a source change hides it by another route and
+        // nothing was putting it back, leaving the placeholder alone on screen
+        // with a running video no one could scrub. Self-healing here rather
+        // than hunting that route: the tick already runs, and asking is free.
+        if (
+          this._pipWindow &&
+          this.controlsContainer?.classList.contains("movi-controls-hidden")
+        ) {
+          this.showControls();
+        }
         this.updatePlayPauseIcon();
         this.updateLoadingIndicator();
         this.updateTitle();
