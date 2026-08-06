@@ -152,7 +152,7 @@ type EngineName = (typeof ENGINE_NAMES)[number];
 const OSD = {
   loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
   stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
-  hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:6px;">HDR</span>`,
+  hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:var(--movi-radius-tile,6px);">HDR</span>`,
   speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
   audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
   subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
@@ -6293,9 +6293,9 @@ export class MoviElement extends HTMLElement {
   private static readonly PIP_SUBTITLE_CSS = `
     .movi-subtitle-overlay { position: absolute; z-index: 5; pointer-events: none; text-align: center; box-sizing: border-box; }
     .movi-subtitle-anchor { display: block; width: 100%; text-align: left; box-sizing: border-box; }
-    .movi-subtitle-block { display: inline-block; max-width: 100%; border-radius: 4px; padding: 4px 12px; text-align: left; box-sizing: border-box; }
+    .movi-subtitle-block { display: inline-block; max-width: 100%; border-radius: var(--movi-radius-subtitle); padding: 4px 12px; text-align: left; box-sizing: border-box; }
     .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block { background: none; padding: 0; }
-    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line { width: fit-content; max-width: 100%; padding: 2px 12px; border-radius: 4px; background: rgba(var(--movi-sub-bg-rgb, 8, 8, 8), var(--movi-sub-bg-alpha, 0.75)); }
+    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line { width: fit-content; max-width: 100%; padding: 2px 12px; border-radius: var(--movi-radius-subtitle); background: rgba(var(--movi-sub-bg-rgb, 8, 8, 8), var(--movi-sub-bg-alpha, 0.75)); }
     .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line + .movi-subtitle-line { margin-top: 2px; }
     .movi-subtitle-block.movi-subtitle-advance { animation: movi-subtitle-line-advance 300ms cubic-bezier(0.22, 0.61, 0.36, 1); }
     @keyframes movi-subtitle-line-advance { from { transform: translateY(var(--movi-sub-adv, 0px)); } to { transform: translateY(0); } }
@@ -8839,7 +8839,7 @@ export class MoviElement extends HTMLElement {
     );
 
     const BADGE_CSS =
-      "margin-left:8px;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.16);color:#fff;vertical-align:middle;";
+      "margin-left:8px;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:1px 5px;border-radius:var(--movi-radius-badge,4px);background:rgba(255,255,255,0.16);color:#fff;vertical-align:middle;";
     const checkSvg = () =>
       document.importNode(
         new DOMParser().parseFromString(
@@ -13244,7 +13244,35 @@ export class MoviElement extends HTMLElement {
            the answer instead of picking a new number. */
         --movi-radius-surface: 10px;
         --movi-radius-row: 7px;
-        
+        /* The same reasoning carried through the rest of the chrome, which had
+           the same problem the menus did: 4px, 6px, 8px, 10px, 12px and more
+           scattered across panels, buttons and badges with nothing deciding
+           which belonged where. Grouped by WHAT a thing is, not by the number
+           it happened to be given:
+             panel    floating panels + dialogs (timeline, stats, shortcuts…)
+             control  buttons, inputs and rows inside them
+             tile     smaller inner tiles and compact variants
+             badge    status chips (LIVE, HDR, quality, shortcut keys)
+             subtitle the subtitle backgrounds, which a host restyles often
+             scrollbar every custom scrollbar thumb
+             osd      the centre feedback capsule
+           Picture-in-Picture is deliberately absent: it renders into its own
+           document, which these never reach. */
+        --movi-radius-panel: 10px;
+        --movi-radius-control: 8px;
+        --movi-radius-tile: 6px;
+        --movi-radius-badge: 4px;
+        --movi-radius-badge-sm: 3px;
+        --movi-radius-subtitle: 4px;
+        --movi-radius-scrollbar: 3px;
+        --movi-radius-osd: 22px;
+        /* The seek-bar hover card and the frame inside it. Declared here
+           rather than only referenced at the use site so they show up in the
+           generated custom-elements/vscode data — a token an embedder cannot
+           discover is not really exposed. */
+        --movi-preview-radius: 4px;
+        --movi-preview-img-radius: 2px;
+
         /* Text Colors */
         --movi-controls-color: #FFFFFF;
         /* Foreground for chrome that is ALWAYS dark (bottom bar, OSD capsule,
@@ -14321,7 +14349,7 @@ export class MoviElement extends HTMLElement {
         border: none;
         cursor: pointer;
         padding: 2px 6px;
-        border-radius: 4px;
+        border-radius: var(--movi-radius-badge);
         font: inherit;
         font-weight: 700;
         letter-spacing: 0.06em;
@@ -14789,7 +14817,7 @@ export class MoviElement extends HTMLElement {
         justify-content: center;
         width: 28px;
         height: 28px;
-        border-radius: 8px;
+        border-radius: var(--movi-radius-control);
         color: var(--movi-controls-color);
         opacity: 0.7;
         transition: background var(--movi-transition-fast), opacity var(--movi-transition-fast), color var(--movi-transition-fast);
@@ -14869,7 +14897,7 @@ export class MoviElement extends HTMLElement {
       .movi-audio-track-list::-webkit-scrollbar-thumb,
       .movi-subtitle-track-list::-webkit-scrollbar-thumb {
         background: color-mix(in srgb, var(--movi-controls-color) 0.28, transparent);
-        border-radius: 3px;
+        border-radius: var(--movi-radius-scrollbar);
       }
       .movi-audio-track-list::-webkit-scrollbar-thumb:hover,
       .movi-subtitle-track-list::-webkit-scrollbar-thumb:hover {
@@ -14948,7 +14976,7 @@ export class MoviElement extends HTMLElement {
         flex-shrink: 0;
         white-space: nowrap;
         padding: 3px 8px;
-        border-radius: 6px;
+        border-radius: var(--movi-radius-tile);
         background: color-mix(in srgb, var(--movi-controls-color) 0.08, transparent);
         border: 1px solid color-mix(in srgb, var(--movi-controls-color) 0.08, transparent);
       }
@@ -15026,7 +15054,7 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         justify-content: center;
         height: 86px;
-        border-radius: 10px;
+        border-radius: var(--movi-radius-panel);
         overflow: hidden;
         background:
           linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0)),
@@ -15046,7 +15074,7 @@ export class MoviElement extends HTMLElement {
       .movi-sub-cust-preview-block {
         display: inline-block;
         padding: 4px 12px;
-        border-radius: 4px;
+        border-radius: var(--movi-radius-badge);
       }
 
       .movi-sub-cust-preview-line {
@@ -15289,7 +15317,7 @@ export class MoviElement extends HTMLElement {
         justify-content: center;
         gap: 6px;
         padding: 12px 6px 10px;
-        border-radius: 10px;
+        border-radius: var(--movi-radius-panel);
         /* Always-dark tile background so the white "Aa" sample (which
            shows the actual edge effect) keeps proper contrast in
            light theme too. */
@@ -15340,7 +15368,7 @@ export class MoviElement extends HTMLElement {
         align-items: baseline;
         gap: 2px;
         padding: 2px 6px;
-        border-radius: 6px;
+        border-radius: var(--movi-radius-tile);
         background: color-mix(in srgb, var(--movi-controls-color) 0.06, transparent);
         transition: background var(--movi-transition-fast);
       }
@@ -15395,7 +15423,7 @@ export class MoviElement extends HTMLElement {
         cursor: pointer;
         text-align: center;
         padding: 8px 6px;
-        border-radius: 8px;
+        border-radius: var(--movi-radius-control);
         font-size: 12px;
         font-weight: 600;
         font-variant-numeric: tabular-nums;
@@ -15443,7 +15471,7 @@ export class MoviElement extends HTMLElement {
         font-weight: 600;
         color: var(--movi-controls-color);
         padding: 8px 16px;
-        border-radius: 8px;
+        border-radius: var(--movi-radius-control);
         background: color-mix(in srgb, var(--movi-controls-color) 0.06, transparent);
         transition: background var(--movi-transition-fast), color var(--movi-transition-fast);
       }
@@ -15514,7 +15542,7 @@ export class MoviElement extends HTMLElement {
         font-size: 10px;
         background: rgba(255, 255, 255, 0.1);
         padding: 2px 6px;
-        border-radius: 4px;
+        border-radius: var(--movi-radius-badge);
         margin-left: auto;
         font-weight: 600;
       }
@@ -15612,7 +15640,7 @@ export class MoviElement extends HTMLElement {
         z-index: 9;
         background: rgba(0, 0, 0, 0.82);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
+        border-radius: var(--movi-radius-panel);
         padding: 0;
         min-width: 280px;
         max-width: 380px;
@@ -15637,7 +15665,7 @@ export class MoviElement extends HTMLElement {
 
       .movi-nerd-stats::-webkit-scrollbar-thumb {
         background: rgba(255, 255, 255, 0.15);
-        border-radius: 2px;
+        border-radius: var(--movi-radius-scrollbar);
       }
 
       .movi-nerd-stats-header {
@@ -15742,7 +15770,7 @@ export class MoviElement extends HTMLElement {
       .movi-nerd-stats-graph {
         width: 100%;
         height: 80px;
-        border-radius: 4px;
+        border-radius: var(--movi-radius-badge);
         display: block;
         position: static;
         z-index: auto;
@@ -15757,7 +15785,7 @@ export class MoviElement extends HTMLElement {
           min-width: unset;
           max-width: unset;
           font-size: 9px;
-          border-radius: 6px;
+          border-radius: var(--movi-radius-tile);
         }
 
         .movi-nerd-stats-header {
@@ -15826,7 +15854,7 @@ export class MoviElement extends HTMLElement {
         z-index: 11;
         background: rgba(0, 0, 0, 0.88);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
+        border-radius: var(--movi-radius-panel);
         padding: 0;
         flex-direction: column;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -15865,7 +15893,7 @@ export class MoviElement extends HTMLElement {
         font-size: 11px;
         font-weight: 600;
         padding: 5px 12px;
-        border-radius: 6px;
+        border-radius: var(--movi-radius-tile);
         cursor: pointer;
         transition: opacity 0.2s;
         font-family: inherit;
@@ -15915,14 +15943,14 @@ export class MoviElement extends HTMLElement {
 
       .movi-timeline-strip::-webkit-scrollbar-thumb {
         background: rgba(255, 255, 255, 0.15);
-        border-radius: 2px;
+        border-radius: var(--movi-radius-scrollbar);
       }
 
       .movi-timeline-item {
         flex-shrink: 0;
         cursor: pointer;
         position: relative;
-        border-radius: 6px;
+        border-radius: var(--movi-radius-tile);
         overflow: hidden;
         border: 1px solid rgba(255, 255, 255, 0.08);
         transition: border-color 0.2s, transform 0.2s;
@@ -16031,7 +16059,7 @@ export class MoviElement extends HTMLElement {
         z-index: 100;
         background: rgba(0, 0, 0, 0.92);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px;
+        border-radius: var(--movi-radius-panel);
         padding: 0;
         flex-direction: column;
         min-width: 420px;
@@ -16094,7 +16122,7 @@ export class MoviElement extends HTMLElement {
       .movi-shortcut-row kbd {
         background: rgba(255, 255, 255, 0.1);
         border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 5px;
+        border-radius: var(--movi-radius-badge);
         padding: 3px 8px;
         font-size: 11px;
         font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
@@ -16145,7 +16173,7 @@ export class MoviElement extends HTMLElement {
         padding: 6px 12px;
         background: rgba(255, 255, 255, 0.06);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 8px;
+        border-radius: var(--movi-radius-control);
         max-width: 380px;
         margin-left: auto;
         margin-right: auto;
@@ -16191,13 +16219,13 @@ export class MoviElement extends HTMLElement {
       .movi-cues-list::-webkit-scrollbar { width: 8px; }
       .movi-cues-list::-webkit-scrollbar-thumb {
         background: rgba(255, 255, 255, 0.12);
-        border-radius: 4px;
+        border-radius: var(--movi-radius-scrollbar);
       }
       .movi-cues-row {
         display: flex;
         gap: 12px;
         padding: 10px 12px;
-        border-radius: 8px;
+        border-radius: var(--movi-radius-control);
         cursor: pointer;
         align-items: flex-start;
         transition: background 0.12s;
@@ -16228,7 +16256,7 @@ export class MoviElement extends HTMLElement {
         background: color-mix(in srgb, var(--movi-primary) 0.4, transparent);
         color: inherit;
         padding: 0 2px;
-        border-radius: 3px;
+        border-radius: var(--movi-radius-badge-sm);
       }
       .movi-cues-empty {
         text-align: center;
@@ -16291,7 +16319,7 @@ export class MoviElement extends HTMLElement {
         z-index: 50;
         background: rgba(0, 0, 0, 0.9);
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 10px;
+        border-radius: var(--movi-radius-panel);
         padding: 14px 20px;
         display: flex;
         align-items: center;
@@ -16338,7 +16366,7 @@ export class MoviElement extends HTMLElement {
 
       .movi-resume-btn {
         border: none;
-        border-radius: 6px;
+        border-radius: var(--movi-radius-tile);
         padding: 7px 16px;
         font-size: 12px;
         font-weight: 600;
@@ -17392,7 +17420,7 @@ export class MoviElement extends HTMLElement {
       .movi-subtitle-block {
         display: inline-block;
         max-width: 100%;
-        border-radius: 4px;
+        border-radius: var(--movi-radius-subtitle);
         padding: 4px 12px;
         text-align: left;
         box-sizing: border-box;
@@ -17421,7 +17449,7 @@ export class MoviElement extends HTMLElement {
         width: fit-content;
         max-width: 100%;
         padding: 2px 12px;
-        border-radius: 4px;
+        border-radius: var(--movi-radius-subtitle);
         background: rgba(
           var(--movi-sub-bg-rgb, 8, 8, 8),
           var(--movi-sub-bg-alpha, 0.75)
@@ -17543,7 +17571,7 @@ export class MoviElement extends HTMLElement {
       }
       .movi-context-menu::-webkit-scrollbar-thumb {
         background: rgba(255, 255, 255, 0.2);
-        border-radius: 3px;
+        border-radius: var(--movi-radius-scrollbar);
       }
       .movi-context-menu::-webkit-scrollbar-thumb:hover {
         background: rgba(255, 255, 255, 0.35);
@@ -17685,7 +17713,7 @@ export class MoviElement extends HTMLElement {
         margin-left: 16px;
         padding: 2px 6px;
         background: rgba(255, 255, 255, 0.08);
-        border-radius: 4px;
+        border-radius: var(--movi-radius-badge);
         font-weight: 500;
       }
 
@@ -17843,7 +17871,7 @@ export class MoviElement extends HTMLElement {
         font-weight: 700;
         line-height: 1;
         padding: 2px 4px;
-        border-radius: 3px;
+        border-radius: var(--movi-radius-badge-sm);
         letter-spacing: 0.4px;
         background: rgba(255, 255, 255, 0.18);
         color: rgba(255, 255, 255, 0.95);
@@ -17906,7 +17934,7 @@ export class MoviElement extends HTMLElement {
         top: 2px;
         right: 0;
         padding: 1px 4px;
-        border-radius: 2px;
+        border-radius: var(--movi-radius-badge-sm);
         background: var(--movi-primary);
         color: var(--movi-chrome-fg, #fff);
         font-size: 8px;
@@ -18248,7 +18276,7 @@ export class MoviElement extends HTMLElement {
         margin-bottom: 6px;
         border: none;
         border-bottom: 1px solid var(--movi-glass-border);
-        border-radius: 6px 6px 0 0;
+        border-radius: var(--movi-radius-tile) var(--movi-radius-tile) 0 0;
         background: transparent;
         color: inherit;
         font: inherit;
@@ -18323,7 +18351,7 @@ export class MoviElement extends HTMLElement {
       .movi-subtitle-track-menu::-webkit-scrollbar-thumb,
       .movi-speed-menu::-webkit-scrollbar-thumb {
         background: rgba(255, 255, 255, 0.05); /* Stealth by default */
-        border-radius: 10px;
+        border-radius: var(--movi-radius-scrollbar);
         background-clip: padding-box;
         border: 2px solid transparent;
         transition: background 0.3s;
@@ -18353,7 +18381,9 @@ export class MoviElement extends HTMLElement {
         border: 1px solid var(--movi-glass-border, transparent);
         color: var(--movi-chrome-fg, #fff);
         padding: 5px 5px 6px;
-        border-radius: 4px;
+        /* Overridable from the host page: the card is inside the shadow root,
+           so a var is the only handle an embedder has on its corner. */
+        border-radius: var(--movi-preview-radius, 4px);
         font-size: 13px;
         font-weight: 500;
         pointer-events: none;
@@ -18397,7 +18427,7 @@ export class MoviElement extends HTMLElement {
         /* No outline. The card's own padding already separates the frame from
            the chrome, and a hairline around a moving picture is one edge too
            many at this size. */
-        border-radius: 2px;
+        border-radius: var(--movi-preview-img-radius, 2px);
         pointer-events: none;
       }
       .movi-seek-thumbnail.visible {
@@ -18465,7 +18495,9 @@ export class MoviElement extends HTMLElement {
         width: var(--movi-preview-w, 168px);
         height: var(--movi-preview-h, 95px);
         margin-bottom: 5px;
-        border-radius: 2px;
+        /* Tracks the image's corner — the placeholder stands in its place
+           while a frame is fetched, so a different radius would visibly pop. */
+        border-radius: var(--movi-preview-img-radius, 2px);
         padding: 0;
         border: none;
         background: rgba(255, 255, 255, 0.07);
@@ -18689,7 +18721,7 @@ export class MoviElement extends HTMLElement {
         padding: 10px 20px;
         background: rgba(255, 255, 255, 0.15);
         border: 1px solid rgba(255, 255, 255, 0.2);
-        border-radius: 8px;
+        border-radius: var(--movi-radius-control);
         color: var(--movi-chrome-fg, #fff);
         font-size: 14px;
         font-weight: 500;
@@ -19060,7 +19092,7 @@ export class MoviElement extends HTMLElement {
                area. Default sizing assumes a desktop viewport. */
             padding: 6px 14px;
             gap: 8px;
-            border-radius: 22px;
+            border-radius: var(--movi-radius-osd);
             max-width: calc(100% - 32px);
         }
         .movi-osd-icon svg {
@@ -19200,7 +19232,7 @@ export class MoviElement extends HTMLElement {
         height: 56px !important;
         max-height: 56px !important;
         background: var(--movi-surface, #0f0f0f);
-        border-radius: 6px;
+        border-radius: var(--movi-radius-tile);
         /* "overflow: visible" is intentional — popups (speed menu,
            audio-track menu, right-click context menu) anchor inside the
            shadow root and open upward from the bar. With overflow:hidden
@@ -21624,6 +21656,16 @@ export class MoviElement extends HTMLElement {
       // Same for host-supplied chapters: the element outlives the player, and a
       // fresh one only knows about the container's own.
       if (this._chapters) this.player.setChapters(this._chapters);
+
+      // …and for Document PiP. The window belongs to the ELEMENT and survives a
+      // source change, but `isPiPActive` lives on the player and a fresh one
+      // starts false — and the player drops video whenever it believes it is
+      // backgrounded with no PiP open. Watching in PiP means the tab IS
+      // backgrounded, so the next video came up with its frames thrown away:
+      // audio playing into a PiP window that had gone black. Nothing announced
+      // it, because from the player's point of view it was doing the right
+      // thing.
+      if (this._pipWindow) this.player.isPiPActive = true;
 
       // Bind device enumeration + apply any pending `audiooutput` selection
       // now that the audio engine exists.

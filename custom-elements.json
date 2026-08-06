@@ -647,6 +647,46 @@
               "description": "Movi Player theme variable.\n\nDefault: `7px`"
             },
             {
+              "name": "--movi-radius-panel",
+              "description": "Movi Player theme variable.\n\nDefault: `10px`"
+            },
+            {
+              "name": "--movi-radius-control",
+              "description": "Movi Player theme variable.\n\nDefault: `8px`"
+            },
+            {
+              "name": "--movi-radius-tile",
+              "description": "Movi Player theme variable.\n\nDefault: `6px`"
+            },
+            {
+              "name": "--movi-radius-badge",
+              "description": "Movi Player theme variable.\n\nDefault: `4px`"
+            },
+            {
+              "name": "--movi-radius-badge-sm",
+              "description": "Movi Player theme variable.\n\nDefault: `3px`"
+            },
+            {
+              "name": "--movi-radius-subtitle",
+              "description": "Movi Player theme variable.\n\nDefault: `4px`"
+            },
+            {
+              "name": "--movi-radius-scrollbar",
+              "description": "Movi Player theme variable.\n\nDefault: `3px`"
+            },
+            {
+              "name": "--movi-radius-osd",
+              "description": "Movi Player theme variable.\n\nDefault: `22px`"
+            },
+            {
+              "name": "--movi-preview-radius",
+              "description": "Movi Player theme variable.\n\nDefault: `4px`"
+            },
+            {
+              "name": "--movi-preview-img-radius",
+              "description": "Movi Player theme variable.\n\nDefault: `2px`"
+            },
+            {
               "name": "--movi-controls-color",
               "description": "Movi Player theme variable.\n\nDefault: `#FFFFFF`"
             },

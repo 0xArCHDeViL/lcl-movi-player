@@ -197,6 +197,136 @@
       ]
     },
     {
+      "name": "--movi-radius-panel",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `10px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-control",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `8px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-tile",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `6px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-badge",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `4px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-badge-sm",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `3px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-subtitle",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `4px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-scrollbar",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `3px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-radius-osd",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `22px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-preview-radius",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `4px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-preview-img-radius",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `2px`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-controls-color",
       "description": {
         "kind": "markdown",
