@@ -302,6 +302,8 @@ export class MoviElement extends HTMLElement {
   private _userHasUnmuted: boolean = false;
   private brokenIndicator: HTMLElement | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
+  /** Shown in the page while the canvas is living in a PiP window. */
+  private pipPlaceholder: HTMLElement | null = null;
   // Cover-art canvas painted when the source has embedded album art and no
   // playable video stream. Sits above the WebGL canvas; both children below
   // resize with the host element via updateCoverArtOverlay().
@@ -1170,6 +1172,35 @@ export class MoviElement extends HTMLElement {
       </div>
     `;
     shadowRoot.appendChild(this.emptyStateIndicator);
+
+    // What the page shows while the picture is somewhere else.
+    //
+    // Document PiP MOVES the canvas into its own window, so the player's own
+    // area is left holding nothing — a black rectangle with a control bar under
+    // it, and no way to tell whether the video is in a PiP window or simply
+    // broken. Native <video> puts a message and a way back there, and so does
+    // every player that has thought about it.
+    this.pipPlaceholder = document.createElement("div");
+    this.pipPlaceholder.className = "movi-pip-placeholder";
+    this.pipPlaceholder.style.display = "none";
+    // eslint-disable-next-line no-unsanitized/property -- static template, no user data
+    this.pipPlaceholder.innerHTML = `
+      <div class="movi-pip-placeholder-inner">
+        <svg class="movi-pip-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+          <rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect>
+        </svg>
+        <p class="movi-pip-placeholder-text">Playing in picture-in-picture</p>
+        <button type="button" class="movi-pip-placeholder-btn">Bring it back</button>
+      </div>
+    `;
+    this.pipPlaceholder
+      .querySelector(".movi-pip-placeholder-btn")
+      ?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void this.togglePiP();
+      });
+    shadowRoot.appendChild(this.pipPlaceholder);
 
     // Create OSD (On-Screen Display) container
     const osdContainer = document.createElement("div");
@@ -6236,6 +6267,15 @@ export class MoviElement extends HTMLElement {
 
   private _pipWindow: Window | null = null;
 
+  /** The page's stand-in for a picture that is currently elsewhere. */
+  private setPipPlaceholderVisible(on: boolean): void {
+    if (this.pipPlaceholder) this.pipPlaceholder.style.display = on ? "flex" : "none";
+    // Controls that act on a picture which is not here: PiP moves the canvas,
+    // so fullscreen, snapshot, rotate and the rest would work on an empty
+    // surface. The class is the single hook the stylesheet hangs all of that on.
+    this.classList.toggle("movi-pip-active", on);
+  }
+
   private restorePiPCanvas(): void {
     Logger.info(TAG, `restorePiPCanvas called — _pipWindow: ${!!this._pipWindow}, canvas: ${!!this.canvas}, shadowRoot: ${!!this.shadowRoot}`);
     if (!this._pipWindow) {
@@ -6244,6 +6284,8 @@ export class MoviElement extends HTMLElement {
     }
     this._pipWindow = null;
     if (this.player) this.player.isPiPActive = false;
+    this.setPipPlaceholderVisible(false);
+    this.setPipUiTimer(false);
 
     const canvas = this.canvas;
     const sr = this.shadowRoot;
@@ -6638,6 +6680,11 @@ export class MoviElement extends HTMLElement {
       };
       pipWindow.addEventListener("pagehide", restore);
       pipWindow.addEventListener("unload", restore);
+      this.setPipPlaceholderVisible(true);
+      this.setPipUiTimer(true);
+      // The bar may already be hidden from before PiP opened — and hideControls
+      // will not put it back on its own now that it stands down for PiP.
+      this.showControls();
 
       Logger.info(TAG, `PiP opened: ${Math.round(pipWidth)}x${pipHeight}`);
     } catch (error) {
@@ -12298,6 +12345,13 @@ export class MoviElement extends HTMLElement {
 
   private hideControls(): void {
     if (!this._controls) return;
+    // Never while the picture is in a PiP window. Auto-hide exists to get the
+    // bar out of the way of the video — and the video is not here: what it
+    // would be covering is the placeholder that says so. Worse, the tick below
+    // skips the clock, the progress bar and the volume icon while the bar is
+    // hidden (nobody can see them), so hiding it here left a frozen 0:00 and an
+    // empty progress bar sitting in plain sight for as long as PiP was open.
+    if (this._pipWindow) return;
     const container = this.controlsContainer;
     if (container) {
       container.classList.remove("movi-controls-visible");
@@ -12749,12 +12803,33 @@ export class MoviElement extends HTMLElement {
     // pipeline and trigger GOP-boundary rebuffering on 4K AV1. This
     // matches the cadence of HTMLMediaElement's own `timeupdate`
     // event, so reactive listeners still feel immediate.
-    const UI_UPDATE_MIN_MS = 250;
-    let lastRun = 0;
-    const updateUI = (timestamp: number) => {
+
+    const step = (timestamp: number) => {
+      if (!this.runUiTick(timestamp)) return;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /**
+   * One pass of the in-page UI: the clock, the progress bar, the buffered
+   * range, the icons — and the frozen-video, stuck-playback and rung-restore
+   * watchdogs that ride along with them. Returns false when there is no player
+   * left to update, which stops whichever driver called it.
+   *
+   * Split out from its rAF loop because rAF is not always running. A tab that
+   * is not the foreground one has its animation frames paused, which is the
+   * normal state while watching in Document PiP — the video plays on in its own
+   * window and the page behind it froze mid-second: the time, the progress bar,
+   * every icon, and, less visibly, the throughput sampling and all three
+   * watchdogs. So PiP drives this from a timer as well; timers are throttled in
+   * a background tab but never stopped, and roughly a second is plenty for a
+   * 4Hz readout.
+   */
+  private runUiTick(timestamp: number): boolean {
       if (!this.player) {
         this._uiUpdatesRunning = false;
-        return;
+        return false;
       }
 
       // Fold the live download speed into the ABR estimate on every UI tick —
@@ -12765,8 +12840,8 @@ export class MoviElement extends HTMLElement {
       // measures its own sustained rate fresh (see the start-low note).
       this.player.sampleThroughput?.();
 
-      if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
-        lastRun = timestamp;
+      if (timestamp - this._lastUiTickAt >= MoviElement.UI_UPDATE_MIN_MS) {
+        this._lastUiTickAt = timestamp;
         // tracksChange can land BEFORE the renderer's configure() has applied the
         // new rung's colour metadata, so the read there can still be the old
         // value. Watch the flag instead and re-sync whenever it actually flips —
@@ -12847,9 +12922,28 @@ export class MoviElement extends HTMLElement {
         this._checkRungRestore(timestamp);
       }
 
-      requestAnimationFrame(updateUI);
-    };
-    requestAnimationFrame(updateUI);
+    return true;
+  }
+
+  /** ~4Hz. Time display, progress bar and icons do not need 60fps precision —
+   *  at 60fps these DOM writes burn 30-50ms/sec of main thread on a low-end
+   *  phone, enough to starve the media pipeline. Matches the cadence of
+   *  HTMLMediaElement's own timeupdate. */
+  private static readonly UI_UPDATE_MIN_MS = 250;
+  private _lastUiTickAt = 0;
+  private _pipUiTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Keep the page's own UI alive while the picture is in a PiP window. */
+  private setPipUiTimer(on: boolean): void {
+    if (on) {
+      if (this._pipUiTimer !== null) return;
+      this._pipUiTimer = setInterval(() => {
+        this.runUiTick(performance.now());
+      }, MoviElement.UI_UPDATE_MIN_MS);
+    } else if (this._pipUiTimer !== null) {
+      clearInterval(this._pipUiTimer);
+      this._pipUiTimer = null;
+    }
   }
 
   /**
@@ -18742,6 +18836,70 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Empty State Indicator */
+      /* The page's stand-in while the canvas lives in a PiP window. Same
+         geometry as the empty state — it is the same job, a surface with no
+         picture on it — but it says which of the two situations this is and
+         offers the way out of it. Above the controls bar's z-index so the bar
+         still works underneath. */
+      .movi-pip-placeholder {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: #000;
+        color: var(--movi-chrome-fg, #fff);
+        z-index: 6;
+        padding: 24px 24px calc(var(--movi-controls-height) + 16px);
+        box-sizing: border-box;
+        text-align: center;
+      }
+      .movi-pip-placeholder-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        max-width: 320px;
+      }
+      .movi-pip-placeholder-icon {
+        width: 44px;
+        height: 44px;
+        opacity: 0.55;
+      }
+      .movi-pip-placeholder-text {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 500;
+        opacity: 0.75;
+      }
+      .movi-pip-placeholder-btn {
+        appearance: none;
+        border: 1px solid var(--movi-glass-border, rgba(255, 255, 255, 0.16));
+        background: rgba(255, 255, 255, 0.1);
+        color: inherit;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 8px 16px;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background var(--movi-transition-fast, 0.15s ease);
+      }
+      .movi-pip-placeholder-btn:hover {
+        background: rgba(255, 255, 255, 0.18);
+      }
+      /* Controls that act on a picture which is not on this surface. PiP moved
+         the canvas, so these would operate on nothing — snapshot would save a
+         blank frame, rotate and aspect would turn an empty box, fullscreen
+         would fill the screen with it. The PiP button itself stays: it is the
+         way back. */
+      :host(.movi-pip-active) .movi-snapshot-btn,
+      :host(.movi-pip-active) .movi-rotate-btn,
+      :host(.movi-pip-active) .movi-aspect-ratio-btn,
+      :host(.movi-pip-active) .movi-fullscreen-btn {
+        display: none !important;
+      }
+
       .movi-empty-state {
         position: absolute;
         top: 0;
@@ -20220,6 +20378,8 @@ export class MoviElement extends HTMLElement {
       }
       this._pipWindow = null;
     }
+    // …and the timer that was keeping this element's UI alive for it.
+    this.setPipUiTimer(false);
 
     // Drop any pending self-healing reconnect so a stale timer can't recreate a
     // player after the element is gone.
