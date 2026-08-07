@@ -484,7 +484,7 @@ export class MoviElement extends HTMLElement {
    * way through, so a source change landing inside either window starts a
    * SECOND init while the first is still running. Both then own a player and
    * a live source: the superseded one kept streaming its rendition in the
-   * background, and when its demux failed it painted "Can't Play This File"
+   * background, and when its demux failed it painted "Can't Play This"
    * over the load that was about to play fine. Each init captures the
    * generation it started with and drops itself the moment it no longer
    * matches — silently, since whoever superseded it owns the screen now.
@@ -18876,7 +18876,7 @@ export class MoviElement extends HTMLElement {
         -webkit-text-fill-color: transparent;
         text-align: center;
         /* Same reasoning as the message below — a three-word title that wraps
-           to "Can't Play This" / "Video" reads badly. */
+           after its second word reads badly. */
         text-wrap: balance;
       }
       
@@ -21565,7 +21565,7 @@ export class MoviElement extends HTMLElement {
     // _lastOsdRate: restores and attribute replays re-enter with the same one).
     // …but never over the error screen. A recreate re-applies the rate to the
     // fresh player, and on the failure path that surfaced a "1x" OSD floating
-    // on top of "Can't Play This File" — an announcement about playback speed
+    // on top of "Can't Play This" — an announcement about playback speed
     // for a file that isn't playing.
     if (
       rateChanged &&
@@ -22223,7 +22223,7 @@ export class MoviElement extends HTMLElement {
       // An ABORT is not a failure — it is this load being superseded. A quality
       // switch, a source change, or a disconnect cancels the init in flight,
       // and its fetch rejects with "signal is aborted without reason" /
-      // AbortError. Reported as fatal, that put "Can't Play This File" on the
+      // AbortError. Reported as fatal, that put "Can't Play This" on the
       // screen while the load that replaced it went on to play perfectly:
       // overlay stuck on, video running underneath it. Nothing to tell the
       // viewer here — whoever superseded this load owns what happens next.
@@ -22265,8 +22265,8 @@ export class MoviElement extends HTMLElement {
       // like a crash report. Say what they experienced and what to try.
       // No "pick another file" here either — on an embed there is nothing for
       // the viewer to pick. One sentence, which also breaks cleanly.
-      let message = "Something went wrong while loading this file.";
-      let title = "Can't Play This File";
+      let message = "Something went wrong while loading this.";
+      let title = "Can't Play This";
 
       if (error instanceof Error) {
         // The raw message is DIAGNOSTIC text — byte offsets, timeouts, WASM
@@ -22296,20 +22296,20 @@ export class MoviElement extends HTMLElement {
           // — the viewer just has to choose it again, so say exactly that.
           /file handle|FileSource read timeout|revoked/i.test(raw)
         ) {
-          title = "Can't Read This File";
+          title = "Can't Read This";
           message =
-            "The browser no longer has access to this file. Choose it again to keep watching.";
+            "The browser no longer has access to it. Choose it again to keep watching.";
         } else if (
           // CORS errors — these typically show as a "Load failed" TypeError
           raw.includes("Load failed") ||
           raw.toLowerCase().includes("cors") ||
           raw.toLowerCase().includes("access-control-allow-origin")
         ) {
-          title = "Can't Load File";
+          title = "Can't Load This";
           message =
             "Couldn't load it from where it's hosted. Check your connection, then try again.";
         } else if (raw.includes("fetch")) {
-          title = "Can't Load File";
+          title = "Can't Load This";
           message =
             "Couldn't load it. Check your connection, then try again.";
         } else if (/^HTTP (401|403)\b/.test(raw) || /Access denied|Authentication required/i.test(raw)) {
@@ -22318,16 +22318,16 @@ export class MoviElement extends HTMLElement {
           // perfectly well. Saying "can't play this file" there is both untrue
           // and unhelpful: the file was playing, and reloading usually fixes it.
           title = "Access Expired";
-          message = "The link to this file is no longer valid.";
+          message = "The link to it is no longer valid.";
         } else if (/^HTTP (404|410)\b/.test(raw) || /Video not found/i.test(raw)) {
-          title = "File Not Found";
+          title = "Not Found";
           message = "It isn't at that address any more.";
         } else if (/^HTTP 5\d\d\b/.test(raw)) {
           title = "Server Problem";
           message =
-            "The server hosting this file stopped responding. Try again in a moment.";
+            "The server hosting it stopped responding. Try again in a moment.";
         } else if (raw.includes("does not support range requests")) {
-          title = "Can't Play This File";
+          title = "Can't Play This";
           message =
             "This is hosted in a way the player can't stream from. Try a different source.";
         } else if (
@@ -22338,7 +22338,7 @@ export class MoviElement extends HTMLElement {
           // the broken-source overlay drives the fallback for this.
           title = "Playback Error";
           message =
-            "This file was too heavy to open the usual way. Try software decoding — it handles files like this.";
+            "This was too heavy to open the usual way. Try software decoding — it handles more.";
         } else if (/timeout at \d+|read timeout|timed out/i.test(raw)) {
           // HttpSource gives up on a byte range as "Timeout at 0" — a file
           // offset, which means nothing to anyone but us. From the viewer's
@@ -22349,9 +22349,9 @@ export class MoviElement extends HTMLElement {
         } else if (/corrupt|unsupported format/i.test(raw)) {
           // The demuxer couldn't make sense of the bytes — a damaged file, or
           // something that isn't the video it claims to be.
-          title = "Can't Play This File";
+          title = "Can't Play This";
           message =
-            "The player can't read this file. It may be damaged, or in a format that isn't supported.";
+            "The player can't read it. It may be damaged, or in a format that isn't supported.";
         } else if (/not found/i.test(raw)) {
           title = "Not Found";
           message = "This is no longer available at that link.";
@@ -22365,7 +22365,7 @@ export class MoviElement extends HTMLElement {
           // the request (HTTP 403)"), so they carry the useful specifics.
           // "Initialization Failed" reads like a player bug — use a neutral
           // title and let that message speak.
-          title = "Can't Play This File";
+          title = "Can't Play This";
           message = raw;
         }
       }
@@ -23028,7 +23028,7 @@ export class MoviElement extends HTMLElement {
         // viewer needs is which of the three situations this is: gone, not
         // allowed, or the server having a bad day.
         const code = httpMatch[1];
-        title = "Can't Play This File";
+        title = "Can't Play This";
         if (code === "404") message = "This is no longer available.";
         else if (code === "403" || code === "401")
           message = "You don't have permission to open this.";
@@ -23036,9 +23036,9 @@ export class MoviElement extends HTMLElement {
           message = "The server isn't responding. Try again in a bit.";
         else message = "Couldn't load it. Check your connection, then try again.";
       } else if (/file handle|FileSource read timeout|revoked/i.test(raw)) {
-        title = "Can't Read This File";
+        title = "Can't Read This";
         message =
-          "The browser no longer has access to this file. Choose it again to keep watching.";
+          "The browser no longer has access to it. Choose it again to keep watching.";
       } else if (/timeout at \d+|read timeout|timed out/i.test(raw)) {
         title = "Taking Too Long";
         message =
@@ -23050,11 +23050,11 @@ export class MoviElement extends HTMLElement {
         raw.toLowerCase().includes("cors") ||
         raw.includes("Failed to fetch video resource")
       ) {
-        title = "Can't Load File";
+        title = "Can't Load This";
         message =
           "Couldn't load it. Check your connection, then try again.";
       } else if (raw.includes("does not support range requests")) {
-        title = "Can't Play This File";
+        title = "Can't Play This";
         message =
           "This is hosted in a way the player can't stream from. Try a different source.";
       } else if (
@@ -23068,7 +23068,7 @@ export class MoviElement extends HTMLElement {
       ) {
         title = "Playback Error";
         message =
-          "This was too heavy to decode the usual way. Try software decoding — it handles files like this.";
+          "This was too heavy to decode the usual way. Try software decoding — it handles more.";
       }
 
       // If we got here after cycling every rendition (recovery exhausted), the
