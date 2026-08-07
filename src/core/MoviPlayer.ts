@@ -9930,6 +9930,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * WHY the picture is being decoded on the CPU — see
+   * MoviVideoDecoder.softwareReason. "hardware-refused" is a trade worth
+   * offering the viewer; the other two are simply how this codec plays.
+   */
+  softwareDecodeReason(): "unmapped" | "no-webcodecs" | "hardware-refused" | null {
+    return this.videoDecoder?.softwareReason ?? null;
+  }
+
+  /**
    * Is the CPU carrying the decode? True for the WASM decoder, for a browser
    * with no WebCodecs at all, and — the case that hid for a while — for a
    * WebCodecs decoder that had to drop `prefer-hardware` because the rung has

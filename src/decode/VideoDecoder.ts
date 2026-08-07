@@ -19,6 +19,25 @@ export class MoviVideoDecoder {
   private _configuredCodecString: string = "";
   /** Set when configure() had to drop `prefer-hardware` to get a supported
    *  config — WebCodecs is decoding, but on the CPU. See isSoftwareBacked. */
+  /**
+   * WHY this decoder is in software, when it is.
+   *
+   * "The picture is being decoded on the CPU" is one fact with two very
+   * different meanings. A codec WebCodecs can do, that this machine's hardware
+   * refused, is a trade the viewer might want a say in — it costs battery and
+   * can stutter, and there may be a lower rung that does decode. A codec
+   * WebCodecs has never heard of (Motion JPEG in an AVI, say) is not a trade at
+   * all: software is the only way it will ever play, and offering "Try Software
+   * Decoding" for it is offering the thing already happening.
+   */
+  private _softwareReason: "unmapped" | "no-webcodecs" | "hardware-refused" | null =
+    null;
+
+  /** See _softwareReason. Null when the hardware path is in use. */
+  get softwareReason(): "unmapped" | "no-webcodecs" | "hardware-refused" | null {
+    return this._softwareReason;
+  }
+
   private hardwareUnavailable: boolean = false;
 
 
@@ -168,6 +187,7 @@ export class MoviVideoDecoder {
         "WebCodecs VideoDecoder not supported — falling back to software decoder",
       );
       this.useSoftware = true;
+      this._softwareReason = "no-webcodecs";
       return this.initSoftwareDecoder();
     }
 
@@ -192,6 +212,7 @@ export class MoviVideoDecoder {
     // Re-decided per configure: a different rendition (or codec) may well have
     // a hardware path where this one didn't.
     this.hardwareUnavailable = false;
+    this._softwareReason = null;
 
     // const codecString = this.mapCodecToWebCodecs(track.codec, track.width, track.height, track.profile, track.level);
     if (!codecString) {
@@ -202,6 +223,7 @@ export class MoviVideoDecoder {
         TAG,
         `No WebCodecs codec string for ${track.codec}; using software decoder.`,
       );
+      this._softwareReason = "unmapped";
       return this.initSoftwareDecoder();
     }
 
@@ -489,6 +511,10 @@ export class MoviVideoDecoder {
 
     Logger.info(TAG, "Initializing software decoder fallback");
     this.useSoftware = true;
+    // Anything that reached here without saying why is the hardware path
+    // failing — a rejected config, a decode error, a resurrection that did not
+    // take. Those ARE a trade the viewer can be asked about.
+    this._softwareReason ??= "hardware-refused";
 
     // Close HW
     if (this.decoder) {

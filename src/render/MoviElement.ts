@@ -22044,6 +22044,14 @@ export class MoviElement extends HTMLElement {
       if (
         this.player instanceof MoviPlayer &&
         this.player.isSoftwareDecoding() &&
+        // …because the HARDWARE refused, which is a trade the viewer can weigh:
+        // it costs battery, it can stutter, and a lower rung may decode. A codec
+        // WebCodecs has never heard of (Motion JPEG in an AVI) is not a trade —
+        // software is the only way it will ever play, and there is no hardware
+        // path to offer instead. Prompting there dead-ends a file that was
+        // already decoding: the overlay went up, `_isUnsupported` with it, and
+        // play() returned at its first line while frames sat ready.
+        this.player.softwareDecodeReason() === "hardware-refused" &&
         this._sw !== "software" &&
         this.getAttribute("sw") !== "auto" && // Silent fallback for explicit "auto"
         !this._userAcceptedSoftwareFallback // ...or once accepted for this video: keep the auto software fallback silent
