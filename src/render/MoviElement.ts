@@ -22318,8 +22318,7 @@ export class MoviElement extends HTMLElement {
           // perfectly well. Saying "can't play this file" there is both untrue
           // and unhelpful: the file was playing, and reloading usually fixes it.
           title = "Access Expired";
-          message =
-            "The link to this file is no longer valid. Reload the page to get a fresh one.";
+          message = "The link to this file is no longer valid.";
         } else if (/^HTTP (404|410)\b/.test(raw) || /Video not found/i.test(raw)) {
           title = "File Not Found";
           message = "It isn't at that address any more.";

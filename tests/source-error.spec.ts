@@ -91,12 +91,22 @@ test("a source that starts refusing mid-playback is asked a few times, then repo
     console.log(`the viewer is told: ${shown || "(nothing)"}`);
     console.log(`settled on: ${JSON.stringify(settled)}`);
 
+    // Headed, the window stays until it is closed by hand. The assertions below
+    // take microseconds, and the interesting part of this test is the thing on
+    // screen: the message, and what the Retry button does with a source that is
+    // still refusing. Close the window to let the run finish.
+    if (test.info().project.use.headless === false) {
+      test.setTimeout(0);
+      console.log("--- headed: press Retry, look around, then CLOSE THE WINDOW to end the run ---");
+      await page.waitForEvent("close", { timeout: 0 });
+    }
+
     // The storm is the regression.
     expect(refused.length).toBeLessThan(STORM_CEILING);
     // And it does not end in silence.
     expect(shown.length).toBeGreaterThan(0);
   } finally {
-    await page.close();
+    if (!page.isClosed()) await page.close();
     await host.close();
     await media.close();
   }
