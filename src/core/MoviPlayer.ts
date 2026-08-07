@@ -5107,6 +5107,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
 
         if (!packet) {
+          // No bytes can mean two very different things, and they arrive
+          // identically. The demuxer reads through a C callback that answers
+          // with a byte count, so a read that FAILED looks exactly like the end
+          // of the file: FFmpeg reports EOF either way. A source that had been
+          // refused mid-file therefore ended the video — the picture stopped,
+          // the clock jumped to the duration, and anything watching for "ended"
+          // (an autoplay-next, a playlist) moved on as though the video had
+          // simply finished. Ask the source which of the two this was.
+          const sourceFailure = (
+            this.source as { getFatalError?: () => Error | null } | null
+          )?.getFatalError?.();
+          if (sourceFailure) {
+            Logger.error(
+              TAG,
+              `Read returned nothing because the source failed, not because the file ended: ${sourceFailure.message}`,
+            );
+            throw sourceFailure;
+          }
           // EOF reached - mark it but don't stop immediately
           // Let the decoders finish processing
           if (!this.eofReached) this.eofSince = performance.now();

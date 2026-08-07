@@ -2223,6 +2223,21 @@ export class HttpSource implements SourceAdapter {
    * Callers that want "everything from here to the end is in hand" have to ask
    * where the window STARTS as well.
    */
+  /**
+   * The failure this source will not come back from, if there has been one.
+   *
+   * Asked at EOF. The demuxer reads through a C callback that can only answer
+   * with a byte count, so a read that FAILED and a read that reached the end of
+   * the file arrive as the same thing: no bytes. FFmpeg calls that EOF, the
+   * packet loop ends the video, and a source that had been refused mid-file
+   * looked exactly like a file that had finished — the picture stopped, the
+   * clock jumped to the duration, and anything watching for "ended" (an
+   * autoplay-next, a playlist) moved on as though nothing had gone wrong.
+   */
+  getFatalError(): Error | null {
+    return this.fatalError;
+  }
+
   getBufferedStart(): number {
     if (this.fullyBuffered) return 0;
     return this.atomicGetBufferStart();

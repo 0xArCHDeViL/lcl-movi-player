@@ -7457,6 +7457,23 @@ export class MoviElement extends HTMLElement {
   // we auto-retry with backoff (a "Reconnecting…" that resumes once the link
   // steadies). Bounded; only after these also fail is the permanent error shown.
   private _connectionRetries = 0;
+  /**
+   * How many times THIS source has been recovered from, in total.
+   *
+   * The per-attempt budgets are refilled once playback gets 20 seconds past a
+   * recovery, on the reasoning that a recovery which fails never progresses. It
+   * does here: a source that starts refusing mid-file still has a window of
+   * bytes in hand, so the recreated player resumes, plays out of that window
+   * for half a minute, refills every budget on the way, and hits the same wall
+   * — for as long as anyone is watching. What the viewer sees is a spinner that
+   * keeps coming back and a clock that keeps climbing, and never a word about
+   * what is wrong.
+   *
+   * This one is not refilled by progress. Playing for a while between failures
+   * is what the failure LOOKS like; it is not evidence that it is over.
+   */
+  private _sourceRecoveriesThisSource = 0;
+  private static readonly MAX_SOURCE_RECOVERIES = 6;
   private static readonly MAX_CONNECTION_RETRIES = 4;
   private _connectionRetryTimer: ReturnType<typeof setTimeout> | null = null;
   // Frozen-video watchdog: the clock/audio keeps advancing but no new video frame
@@ -8074,6 +8091,16 @@ export class MoviElement extends HTMLElement {
     if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
       return false;
     }
+    // The same source failing over and over is an answer, not a run of bad
+    // luck. Stop recovering and let the caller say so.
+    if (this._sourceRecoveriesThisSource >= MoviElement.MAX_SOURCE_RECOVERIES) {
+      Logger.error(
+        TAG,
+        `Source failed ${this._sourceRecoveriesThisSource} times — reporting it instead of recovering again`,
+      );
+      return false;
+    }
+    this._sourceRecoveriesThisSource++;
     const player = this.player as unknown as {
       getActiveDashRendition?: () => string;
       getDashRenditions?: () => { url: string; bandwidth?: number }[];
@@ -22285,6 +22312,21 @@ export class MoviElement extends HTMLElement {
           title = "Can't Load File";
           message =
             "Couldn't load it. Check your connection, then try again.";
+        } else if (/^HTTP (401|403)\b/.test(raw) || /Access denied|Authentication required/i.test(raw)) {
+          // Most often a signed URL whose signature has run out — which is why
+          // this can arrive in the middle of a video that had been playing
+          // perfectly well. Saying "can't play this file" there is both untrue
+          // and unhelpful: the file was playing, and reloading usually fixes it.
+          title = "Access Expired";
+          message =
+            "The link to this file is no longer valid. Reload the page to get a fresh one.";
+        } else if (/^HTTP (404|410)\b/.test(raw) || /Video not found/i.test(raw)) {
+          title = "File Not Found";
+          message = "It isn't at that address any more.";
+        } else if (/^HTTP 5\d\d\b/.test(raw)) {
+          title = "Server Problem";
+          message =
+            "The server hosting this file stopped responding. Try again in a moment.";
         } else if (raw.includes("does not support range requests")) {
           title = "Can't Play This File";
           message =
@@ -23137,6 +23179,7 @@ export class MoviElement extends HTMLElement {
     // Left standing, a 4K video's "4K HDR" chip sat on the next 1080p one.
     this._qualityBadge = "";
     this._qualityBadgeReported = false;
+    this._sourceRecoveriesThisSource = 0;
     // A deliberate mute belonged to the video it was chosen on; the next one
     // negotiates its own audio with the browser from scratch.
     this._userChoseMute = false;
