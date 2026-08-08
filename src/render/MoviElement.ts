@@ -14350,14 +14350,29 @@ export class MoviElement extends HTMLElement {
         justify-content: space-between;
         width: 100%;
         gap: 16px;
+        /* The anchor for the settings panel: the row's right edge is the frame's
+           inset edge, the same line the fullscreen button ends on. */
+        position: relative;
       }
 
       .movi-controls-left,
       .movi-controls-right {
         display: flex;
         align-items: center;
-        gap: 12px;
+        /* Small on purpose. Each button is already a 44px box around a 22px
+           glyph, so 11px of its own padding sits on either side — a 12px gap
+           on top of that put 34px of nothing between two icons and left the
+           bar looking like scattered marks rather than a row of controls. The
+           box keeps the touch target; the gap only decides how far apart the
+           MARKS read, and the padding is doing that job already. */
+        gap: 2px;
         flex-shrink: 0;
+      }
+
+      /* The clock is text, not a 44px box, so it has no padding of its own to
+         hold it off the button beside it. */
+      .movi-controls-left .movi-time {
+        margin-left: 6px;
       }
 
       .movi-btn {
@@ -14431,8 +14446,8 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-btn svg {
-        width: 22px;
-        height: 22px;
+        width: 20px;
+        height: 20px;
         transition: transform var(--movi-transition-fast);
       }
       
@@ -17268,15 +17283,25 @@ export class MoviElement extends HTMLElement {
         .movi-controls-bar {
           padding: 16px 24px 7px;
         }
-        /* A 22px glyph that reads fine in a 640px pane looks undersized across
-           a fullscreen TV — the box stays 44px, only the mark inside grows. */
+        /* A 20px glyph that reads fine in a 640px pane looks undersized across
+           a fullscreen TV — the mark grows a little, and the box grows with it
+           so the padding around each glyph stays proportional instead of the
+           icons swelling to fill their frames. */
         .movi-btn svg {
-          width: 26px;
-          height: 26px;
+          width: 22px;
+          height: 22px;
         }
+        .movi-btn {
+          width: 46px;
+          height: 46px;
+        }
+        /* Room comes from the box, not from pushing the boxes apart: at this
+           width the old 16px gap plus the button's own padding put 34px of
+           empty bar between neighbouring glyphs, and the row read as scattered
+           marks rather than a set of controls. */
         .movi-controls-left,
         .movi-controls-right {
-          gap: 16px;
+          gap: 2px;
         }
         .movi-settings-menu {
           min-width: 290px;
