@@ -13957,8 +13957,10 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-settings-back {
         border-color: rgba(0, 0, 0, 0.12) !important;
       }
+      /* The dark theme's divider is a gap now, and a light one has no more
+         reason to be a line than a dark one. */
       :host([theme="light"]) .movi-settings-divider {
-        background: rgba(0, 0, 0, 0.12) !important;
+        background: transparent !important;
       }
       /* Off-state track needs to read as a track, not as the surface. */
       :host([theme="light"]) .movi-settings-switch {
@@ -18289,10 +18291,18 @@ export class MoviElement extends HTMLElement {
          player means the "more" tray folds the aspect button away and the
          audio button stays on the bar. */
 
+      /* Static on purpose. The panel inside it is anchored to the BUTTON ROW,
+         not to the gear — see .movi-settings-menu — and a positioned container
+         here would capture it and pin its right edge to a 46px button sitting
+         three controls in from the frame. The badge keeps its corner by
+         anchoring to the button itself. */
       .movi-settings-container {
-        position: relative;
+        position: static;
         display: flex;
         align-items: center;
+      }
+      .movi-settings-btn {
+        position: relative;
       }
       /* The resolution chip, on the gear and on the standalone quality button.
          One rule for both: they say the same thing in the same place and had
@@ -18399,6 +18409,11 @@ export class MoviElement extends HTMLElement {
         transition: transform 0.2s ease;
       }
 
+      /* Anchored to the button ROW, so its right edge lands on the frame's
+         inset — flush with the fullscreen button, the way a settings panel
+         belongs to the player rather than to the gear. Hanging off the gear put
+         it three controls in from the edge, with a strip of picture to its
+         right and nothing explaining why it stopped there. */
       .movi-settings-menu {
         position: absolute;
         bottom: calc(100% + 12px);
@@ -18503,12 +18518,16 @@ export class MoviElement extends HTMLElement {
         color: inherit;
         font: inherit;
         font-size: 14.5px;
-        line-height: 1.35;
+        line-height: 1.3;
         text-align: left;
         cursor: pointer;
+        /* Every other control in the player fades its hover; these rows
+           switched instantly, which on a list you run the pointer down reads
+           as a block snapping from row to row. */
+        transition: background var(--movi-transition-fast);
       }
       .movi-settings-row:hover {
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.08);
       }
       /* Informational, not interactive: same type, quieter, no affordances. */
       .movi-settings-row.is-static,
@@ -18519,9 +18538,11 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-icon {
         flex: 0 0 auto;
-        width: 17px;
-        height: 17px;
-        opacity: 0.72;
+        width: 18px;
+        height: 18px;
+        /* Brighter as well as bigger: at 0.72 the marks read as decoration
+           beside the label rather than as part of the row. */
+        opacity: 0.88;
       }
       /* The HDR mark is a word, not a glyph — same trick the context menu uses
          so it lines up with the icons above and below it. */
@@ -18529,8 +18550,8 @@ export class MoviElement extends HTMLElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 17px;
-        height: 17px;
+        width: 18px;
+        height: 18px;
         font-size: 8.5px;
         font-weight: 700;
         letter-spacing: 0.3px;
@@ -18574,10 +18595,15 @@ export class MoviElement extends HTMLElement {
         height: 15px;
         opacity: 0.55;
       }
+      /* A gap, not a line. The rows either side of it are already told apart by
+         what they carry — a value and a chevron on one side, a switch on the
+         other — so the hairline was drawing a border around a distinction the
+         content had already made. Space says the same thing without adding an
+         edge to a panel that has one already. */
       .movi-settings-divider {
-        height: 1px;
-        margin: 5px 8px;
-        background: var(--movi-glass-border);
+        height: 6px;
+        margin: 0;
+        background: transparent;
       }
 
       /* Switch: reads as on/off at a glance, unlike a tick that only says
@@ -18587,11 +18613,13 @@ export class MoviElement extends HTMLElement {
         /* Same pinning as the value rows — a toggle row has no value span to
            push it across. */
         margin-left: auto;
-        width: 30px;
-        height: 17px;
+        width: 32px;
+        height: 18px;
         padding: 2px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.22);
+        /* A groove, not a lighter patch of the panel — at 0.22 over a
+           translucent surface the off state read as nothing at all. */
+        background: rgba(255, 255, 255, 0.3);
         transition: background 0.16s ease;
       }
       .movi-settings-switch.is-on {
@@ -18599,14 +18627,14 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-knob {
         display: block;
-        width: 13px;
-        height: 13px;
+        width: 14px;
+        height: 14px;
         border-radius: 50%;
         background: #fff;
         transition: transform 0.16s ease;
       }
       .movi-settings-switch.is-on .movi-settings-knob {
-        transform: translateX(13px);
+        transform: translateX(14px);
       }
 
       .movi-settings-choice {
