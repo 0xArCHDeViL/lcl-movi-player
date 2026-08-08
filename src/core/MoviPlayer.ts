@@ -2052,6 +2052,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // …and none of that applies to a seamless handover: no indicator went up,
     // because the picture never stopped to need one.
     if (!primed) void this.clearSwitchIndicatorOnResumedPlayback(endSwitch);
+    // Re-stamp the anti-thrash clock at the LANDING, not the request. Every
+    // settle in the ABR — the ordinary gate, the upshift hold, the emergency
+    // downshift's "a fresh rung has nothing buffered yet BY DEFINITION" — is
+    // measuring the new rung's first seconds, and the new rung does not exist
+    // until here. Opening it costs a demuxer, a WASM instance and a byte range,
+    // which on the link this was written for took the better part of a minute:
+    // the settle expired while the OLD rung was still on screen, so the new one
+    // landed with an empty buffer and no protection, froze during its own
+    // refill, and was rescued off — 1080p → 720p → 480p → 360p, each step
+    // "rescuing" the fill of the step before, on a link that then measured
+    // 24Mbps and climbed straight back.
+    this._lastAbrSwitchAt = performance.now();
     return true;
   }
 
@@ -3114,6 +3126,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * to switch to (Auto off, no ladder, already lowest) — then the caller falls
    * back to its own recovery.
    */
+  /**
+   * Milliseconds since a rendition switch last LANDED (Infinity if none has).
+   * The picture is legitimately still for a moment after one — the queue was
+   * emptied at the swap and the new decoder has not filled it yet — so the
+   * element's frozen-video watchdog needs to know the difference between that
+   * and a stall.
+   */
+  msSinceRenditionSwitch(): number {
+    return performance.now() - this._lastAbrSwitchAt;
+  }
+
   async abrEmergencyDownshift(reason: string): Promise<string | null> {
     if (!this._autoQuality || this._abrSwitchInProgress) return null;
     // A rung that was only just switched to has nothing buffered yet BY

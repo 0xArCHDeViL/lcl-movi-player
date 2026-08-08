@@ -7521,6 +7521,12 @@ export class MoviElement extends HTMLElement {
   private static readonly RESTORE_STEADY_MS = 30000;
   private static readonly STARVED_RESCUE_MS = 6000;
   private static readonly VISIBILITY_SETTLE_MS = 4000;
+  /** How long a freshly landed rendition is left alone by the frozen-video
+   *  watchdog while its queue refills. Longer than the visibility settle: this
+   *  one starts from an empty buffer AND an empty frame queue, and it is the
+   *  window a slow link needs to prove the rung is actually unaffordable rather
+   *  than merely new. */
+  private static readonly SWITCH_SETTLE_MS = 6000;
   // A rescue switch has to open a new source and re-prime; firing another one
   // inside that window would tear down the rescue in progress.
   private static readonly RUNG_RESCUE_COOLDOWN_MS = 8000;
@@ -13076,6 +13082,22 @@ export class MoviElement extends HTMLElement {
     // "time moving, no new frames" is true by construction for a moment. Let the
     // pipeline re-prime before judging it.
     if (now - this._becameVisibleAt < MoviElement.VISIBILITY_SETTLE_MS) {
+      this._frozenSince = 0;
+      this._starvedSince = 0;
+      this._frozenLastFrames = p.getRenderHealth?.()?.framesPresented ?? -1;
+      this._frozenLastTime = p.getCurrentTime?.() ?? -1;
+      return;
+    }
+    // A rendition that just landed is in the same position: the queue was
+    // emptied at the swap, framesPresented restarted at zero, and audio — which
+    // never stopped — carries the clock forward over the refill. "Clock moving,
+    // no new frames" is true by construction there, and reading it as a stall
+    // is how one downshift became four: each new rung rescued off the rung
+    // before it had filled a single second.
+    const sinceSwitch =
+      (p as { msSinceRenditionSwitch?: () => number }).msSinceRenditionSwitch?.() ??
+      Infinity;
+    if (sinceSwitch < MoviElement.SWITCH_SETTLE_MS) {
       this._frozenSince = 0;
       this._starvedSince = 0;
       this._frozenLastFrames = p.getRenderHealth?.()?.framesPresented ?? -1;
