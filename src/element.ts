@@ -187,8 +187,11 @@ export interface MoviPlayerAttributes {
    *  `{ title, start, end? }` (seconds). Use the `chapters` property to pass
    *  the array directly. */
   chapters?: string;
-  /** Enable ±10s fast-seek controls. */
-  fastseek?: boolean | "";
+  /** Enable ±10s fast-seek. Bare = every affordance; a token list narrows it to
+   *  `buttons` (the bottom-bar pair), `keys` (arrow keys) and/or `gestures`
+   *  (double-tap and drag-to-seek) — e.g. `fastseek="keys gestures"`. Aliases:
+   *  `touch`, `nontouch`, `keyonly`, `controls`, `none`. */
+  fastseek?: boolean | "" | string;
   /** Enable the double-tap-to-seek gesture. */
   doubletap?: boolean | "";
   /** Disable all keyboard shortcuts. */

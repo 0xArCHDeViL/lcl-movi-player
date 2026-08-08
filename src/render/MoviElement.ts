@@ -626,7 +626,13 @@ export class MoviElement extends HTMLElement {
   private _gesturefs: boolean = false;
   private _noHotkeys: boolean = false; // Disable keyboard shortcuts if true
   private _startAt: number = 0; // Start time in seconds
-  private _fastSeek: boolean = false; // Enable skip controls (buttons, keys, gestures) if true
+  private _fastSeek: boolean = false; // Any skip affordance at all — see _fastSeekModes
+  /** WHICH skip affordances are on. The attribute began as a plain boolean and
+   *  still reads that way (bare `fastseek` = all three), but the three are not
+   *  one feature: a touch build wants the double-tap without two more buttons
+   *  crowding a phone-width bar, a kiosk wants the buttons and nothing a
+   *  keyboard can reach, and a page with its own ⏪/⏩ wants only the keys. */
+  private _fastSeekModes = { buttons: false, keys: false, gestures: false };
   private _doubleTap: boolean = true; // Enable/disable double tap to seek
   private _themeColor: string | null = null; // Custom theme color
   private _bufferSize: number = 0; // Custom buffer size in seconds
@@ -2038,9 +2044,9 @@ export class MoviElement extends HTMLElement {
           <div class="movi-shortcut-row" data-video-only><kbd>P</kbd><span>Picture-in-Picture</span></div>
           <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
           <div class="movi-shortcut-row"><kbd>&uarr; / &darr;</kbd><span>Volume</span></div>
-          <div class="movi-shortcut-row"><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
+          <div class="movi-shortcut-row" data-fastseek-keys><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
           <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
+          <div class="movi-shortcut-row" data-video-only data-fastseek-keys><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
           <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd>V</kbd><span>Cycle Subtitles</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
@@ -3558,7 +3564,7 @@ export class MoviElement extends HTMLElement {
         let didSeek = false;
 
         // Check if fast seek is enabled
-        if (this._fastSeek) {
+        if (this._fastSeekModes.gestures) {
           if (xPos < width * 0.3) {
             this.performRelativeSeek("left");
             didSeek = true;
@@ -3817,8 +3823,8 @@ export class MoviElement extends HTMLElement {
                 this.volume = newVolume;
               }
             } else if (isHorizontalGesture) {
-              // Only enabled if fastseek is true
-              if (!this._fastSeek) return;
+              // Only when fastseek names the gesture channel
+              if (!this._fastSeekModes.gestures) return;
 
               if (e.cancelable) e.preventDefault();
 
@@ -4406,9 +4412,9 @@ export class MoviElement extends HTMLElement {
         }
         case "ArrowLeft":
           // Left Arrow: Seek backward 5 seconds or single frame (if Ctrl)
-          // Only enabled if fastseek is true. In linear mode the seek clamps to
-          // the buffered RAM window.
-          if (!this._fastSeek) break;
+          // Only when fastseek names the key channel. In linear mode the seek
+          // clamps to the buffered RAM window.
+          if (!this._fastSeekModes.keys) break;
 
           e.preventDefault();
           if (e.ctrlKey || e.metaKey) {
@@ -4430,9 +4436,9 @@ export class MoviElement extends HTMLElement {
           break;
         case "ArrowRight":
           // Right Arrow: Seek forward 5 seconds or single frame (if Ctrl)
-          // Only enabled if fastseek is true. In linear mode the seek clamps to
-          // the buffered RAM window.
-          if (!this._fastSeek) break;
+          // Only when fastseek names the key channel. In linear mode the seek
+          // clamps to the buffered RAM window.
+          if (!this._fastSeekModes.keys) break;
 
           e.preventDefault();
           {
@@ -20169,7 +20175,7 @@ export class MoviElement extends HTMLElement {
 
     this._gesturefs = this.hasAttribute("gesturefs");
     this._noHotkeys = this.hasAttribute("nohotkeys");
-    this._fastSeek = this.hasAttribute("fastseek");
+    this.applyFastSeek(this.getAttribute("fastseek"));
     this._doubleTap =
       !this.hasAttribute("doubletap") ||
       this.getAttribute("doubletap") !== "false"; // Default true unless explicitly false
@@ -20589,8 +20595,7 @@ export class MoviElement extends HTMLElement {
         this._startAt = newValue ? parseFloat(newValue) : 0;
         break;
       case "fastseek":
-        this._fastSeek = newValue !== null;
-        this.updateFastSeek();
+        this.applyFastSeek(newValue);
         break;
       case "doubletap":
         // usage: doubletap="false" to disable. Check existence? Or value?
@@ -28572,18 +28577,44 @@ export class MoviElement extends HTMLElement {
     this.setAttribute("startat", value.toString());
   }
 
+  /** True when ANY skip affordance is on — the shape this property has always
+   *  had, so `if (el.fastseek)` keeps meaning what it meant. Read
+   *  `fastseekModes` for which ones. */
   get fastseek(): boolean {
     return this._fastSeek;
   }
-  set fastseek(value: boolean) {
-    this._fastSeek = value;
+  /** Accepts the boolean it always did, or the attribute's token list
+   *  ("keys gestures", "touch", "none") — see applyFastSeek. */
+  set fastseek(value: boolean | string) {
+    if (typeof value === "string") {
+      this.setAttribute("fastseek", value);
+      // The attribute callback parses it; setting the same value twice is a
+      // no-op there, so do it here for the case where it didn't change.
+      this.applyFastSeek(value);
+      this.updatePoster();
+      return;
+    }
     if (value) {
       this.setAttribute("fastseek", "");
+      this.applyFastSeek("");
     } else {
       this.removeAttribute("fastseek");
+      this.applyFastSeek(null);
     }
-    this.updateFastSeek();
     this.updatePoster();
+  }
+
+  /** Which skip affordances are on, as the canonical token list — "" when none
+   *  are. Assigning is the same as assigning to `fastseek`. */
+  get fastseekModes(): string {
+    const on: string[] = [];
+    if (this._fastSeekModes.buttons) on.push("buttons");
+    if (this._fastSeekModes.keys) on.push("keys");
+    if (this._fastSeekModes.gestures) on.push("gestures");
+    return on.join(" ");
+  }
+  set fastseekModes(value: string) {
+    this.fastseek = value;
   }
 
   private updatePoster() {
@@ -29844,6 +29875,98 @@ export class MoviElement extends HTMLElement {
     );
   }
 
+  /**
+   * Read the `fastseek` attribute into the three channels it now names.
+   *
+   * Bare `fastseek` (or `fastseek=""`, or any of on/true/yes/all) keeps its
+   * original meaning — every affordance — so nothing written against the
+   * boolean form changes. A value narrows it to a list, separated by spaces,
+   * commas or pipes:
+   *
+   *   buttons   the ⏪/⏩ pair in the bottom bar
+   *   keys      ArrowLeft / ArrowRight (Ctrl+arrow frame-stepping rides along)
+   *   gestures  double-tap either edge, and the horizontal drag-to-seek
+   *
+   * Aliases exist for the way people reach for this: `touch` = gestures,
+   * `nontouch`/`desktop`/`mouse` = buttons + keys, `keyonly`/`keyboard` = keys,
+   * `controls`/`bar` = buttons, `none`/`off` = nothing. An unrecognised value
+   * is a typo, not an intent to disable, so it warns and leaves all three on.
+   */
+  private applyFastSeek(raw: string | null): void {
+    const modes = { buttons: false, keys: false, gestures: false };
+    const all = () => {
+      modes.buttons = modes.keys = modes.gestures = true;
+    };
+    if (raw !== null) {
+      const tokens = raw
+        .trim()
+        .toLowerCase()
+        .split(/[\s,|]+/)
+        .filter(Boolean);
+      if (!tokens.length) {
+        all(); // bare attribute — the original boolean form
+      } else {
+        let understood = false;
+        for (const token of tokens) {
+          switch (token) {
+            case "all":
+            case "true":
+            case "on":
+            case "yes":
+              all();
+              break;
+            case "none":
+            case "off":
+            case "false":
+            case "no":
+              modes.buttons = modes.keys = modes.gestures = false;
+              break;
+            case "buttons":
+            case "button":
+            case "controls":
+            case "bar":
+              modes.buttons = true;
+              break;
+            case "keys":
+            case "key":
+            case "keyboard":
+            case "keyonly":
+            case "keysonly":
+            case "arrows":
+              modes.keys = true;
+              break;
+            case "gestures":
+            case "gesture":
+            case "touch":
+            case "swipe":
+            case "tap":
+            case "taps":
+            case "doubletap":
+            case "double-tap":
+              modes.gestures = true;
+              break;
+            case "nontouch":
+            case "non-touch":
+            case "desktop":
+            case "mouse":
+            case "pointer":
+              modes.buttons = true;
+              modes.keys = true;
+              break;
+            default:
+              Logger.warn(TAG, `fastseek: ignoring unknown value "${token}"`);
+              continue;
+          }
+          understood = true;
+        }
+        if (!understood) all();
+      }
+    }
+    this._fastSeekModes = modes;
+    this._fastSeek = modes.buttons || modes.keys || modes.gestures;
+    this.updateFastSeek();
+  }
+
   private updateFastSeek() {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
@@ -29852,7 +29975,17 @@ export class MoviElement extends HTMLElement {
       ".movi-seek-backward, .movi-seek-forward",
     );
     seekButtons.forEach((btn) => {
-      (btn as HTMLElement).style.display = this._fastSeek ? "" : "none";
+      (btn as HTMLElement).style.display = this._fastSeekModes.buttons
+        ? ""
+        : "none";
+    });
+    // The panel is a promise about what the keyboard does. Arrow-seek and its
+    // frame-step companion only answer when the key channel is on, and a
+    // shortcut listed but dead is worse than one not listed.
+    shadowRoot.querySelectorAll("[data-fastseek-keys]").forEach((row) => {
+      (row as HTMLElement).style.display = this._fastSeekModes.keys
+        ? ""
+        : "none";
     });
   }
 }
