@@ -22394,8 +22394,22 @@ export class MoviElement extends HTMLElement {
       // also how browsers gate background autoplay. _onVisibilityChange starts
       // it via _startAutoplay() once shown. The center play button stays visible
       // meanwhile (autoplayStarting unset), so a manual start works too.
+      //
+      // …unless the picture is in a Document-PiP window, where "the tab is
+      // hidden" is the normal state and says nothing about whether anyone is
+      // watching — the whole point of PiP is that the video plays on while the
+      // page it came from is behind something else. Deferring there is how an
+      // auto-advanced track went silent in the PiP window and only started when
+      // you came back to the tab or closed PiP. The throttling the deferral
+      // guards against does not apply either: the player keeps decoding while
+      // backgrounded when isPiPActive, and the PiP document has its own
+      // unthrottled rAF.
+      const hiddenAndNotInPip =
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible" &&
+        !this._pipWindow;
       if (this._autoplay && this.player) {
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        if (hiddenAndNotInPip) {
           this._autoplayPendingVisible = true;
           Logger.info(TAG, "Autoplay deferred — tab hidden; will start when visible");
         } else {
