@@ -13486,8 +13486,21 @@ export class MoviElement extends HTMLElement {
         --movi-gradient: var(--movi-primary);
         
         /* Glass-morphism */
-        --movi-glass-bg: rgba(15, 15, 20, 0.85);
-        --movi-glass-border: rgba(255, 255, 255, 0.08);
+        /* The same surface the keyboard-shortcuts panel is drawn on. Every
+           floating thing in the player — settings, the context menu and its
+           submenus, the track lists — is the same kind of object, so they share
+           one shade rather than each carrying its own. Nearly opaque on
+           purpose: there is no backdrop-filter to lean on (see the note by the
+           controls bar — some mobile GPUs flash white on it), and a thinner
+           black over a bright, moving picture makes the rows hard to read. */
+        --movi-glass-bg: rgba(0, 0, 0, 0.92);
+        --movi-glass-border: rgba(255, 255, 255, 0.1);
+        /* The OTHER surface family: chrome that floats over the picture for a
+           moment — the OSD capsule, the seek readout, the unmute pill. They are
+           read at a glance and must not block the frame the way a panel you act
+           on is allowed to. (Not --movi-overlay-bg: that name is taken by the
+           controls overlay's gradient, further down.) */
+        --movi-osd-bg: rgba(0, 0, 0, 0.55);
         --movi-glass-blur: 20px;
 
         /* Corners. Two values for the whole chrome: the SURFACE a menu is
@@ -14112,7 +14125,7 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         gap: 8px;
         padding: 8px 14px;
-        background: rgba(0, 0, 0, 0.75);
+        background: var(--movi-osd-bg);
         color: var(--movi-chrome-fg, #fff);
         font-size: 13px;
         font-weight: 600;
@@ -14124,7 +14137,7 @@ export class MoviElement extends HTMLElement {
         font-family: inherit;
       }
       .movi-unmute-overlay:hover {
-        background: rgba(0, 0, 0, 0.9);
+        background: var(--movi-glass-bg);
         transform: scale(1.03);
       }
       .movi-unmute-overlay svg {
@@ -15954,8 +15967,8 @@ export class MoviElement extends HTMLElement {
         top: 12px;
         left: 12px;
         z-index: 9;
-        background: rgba(0, 0, 0, 0.82);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--movi-glass-bg);
+        border: 1px solid var(--movi-glass-border);
         border-radius: var(--movi-radius-panel);
         padding: 0;
         min-width: 280px;
@@ -16168,8 +16181,8 @@ export class MoviElement extends HTMLElement {
         transition: bottom 0.3s ease;
         right: 12px;
         z-index: 11;
-        background: rgba(0, 0, 0, 0.88);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--movi-glass-bg);
+        border: 1px solid var(--movi-glass-border);
         border-radius: var(--movi-radius-panel);
         padding: 0;
         flex-direction: column;
@@ -16373,8 +16386,12 @@ export class MoviElement extends HTMLElement {
         left: 50%;
         transform: translate(-50%, -50%);
         z-index: 100;
-        background: rgba(0, 0, 0, 0.92);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        /* The shared floating-surface shade — see --movi-glass-bg. This panel
+           is where that shade came from; it reads it now rather than repeating
+           it, so the settings panel, the context menu and this one cannot drift
+           apart again. */
+        background: var(--movi-glass-bg);
+        border: 1px solid var(--movi-glass-border);
         border-radius: var(--movi-radius-panel);
         padding: 0;
         flex-direction: column;
@@ -16460,7 +16477,7 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         inset: 0;
         z-index: 200;
-        background: rgba(0, 0, 0, 0.78);
+        background: var(--movi-glass-bg);
         display: flex;
         flex-direction: column;
         font-family: 'Inter', -apple-system, sans-serif;
@@ -16633,8 +16650,8 @@ export class MoviElement extends HTMLElement {
         bottom: 90px;
         right: 16px;
         z-index: 50;
-        background: rgba(0, 0, 0, 0.9);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: var(--movi-glass-bg);
+        border: 1px solid var(--movi-glass-border);
         border-radius: var(--movi-radius-panel);
         padding: 14px 20px;
         display: flex;
@@ -17869,7 +17886,7 @@ export class MoviElement extends HTMLElement {
       /* Context Menu */
       .movi-context-menu {
         position: absolute;
-        background: rgba(15, 15, 22, 0.95);
+        background: var(--movi-glass-bg);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: var(--movi-radius-surface);
         padding: 8px 4px; /* Consistent with submenus */
@@ -18058,7 +18075,7 @@ export class MoviElement extends HTMLElement {
 
       .movi-context-menu-submenu {
         position: absolute;
-        background: rgba(15, 15, 22, 0.95);
+        background: var(--movi-glass-bg);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: var(--movi-radius-surface);
         padding: 8px 4px;
@@ -18088,7 +18105,7 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu-submenu-audio,
       .movi-context-menu-submenu-subtitle {
         position: absolute;
-        background: rgba(15, 15, 22, 0.95);
+        background: var(--movi-glass-bg);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: var(--movi-radius-surface);
         padding: 8px 4px;
