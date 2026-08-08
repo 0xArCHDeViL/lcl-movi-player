@@ -628,11 +628,15 @@
             },
             {
               "name": "--movi-glass-bg",
-              "description": "Movi Player theme variable.\n\nDefault: `rgba(15, 15, 20, 0.85)`"
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.92)`"
             },
             {
               "name": "--movi-glass-border",
-              "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.08)`"
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.1)`"
+            },
+            {
+              "name": "--movi-osd-bg",
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.55)`"
             },
             {
               "name": "--movi-glass-blur",
@@ -676,15 +680,19 @@
             },
             {
               "name": "--movi-radius-osd",
-              "description": "Movi Player theme variable.\n\nDefault: `22px`"
+              "description": "Movi Player theme variable.\n\nDefault: `var(--movi-radius-surface)`"
             },
             {
               "name": "--movi-preview-radius",
-              "description": "Movi Player theme variable.\n\nDefault: `4px`"
+              "description": "Movi Player theme variable.\n\nDefault: `var(--movi-radius-surface)`"
             },
             {
               "name": "--movi-preview-img-radius",
-              "description": "Movi Player theme variable.\n\nDefault: `2px`"
+              "description": "Movi Player theme variable.\n\nDefault: `var(--movi-radius-surface)`"
+            },
+            {
+              "name": "--movi-preview-caption-bg",
+              "description": "Movi Player theme variable.\n\nDefault: `var(--movi-osd-bg)`"
             },
             {
               "name": "--movi-controls-color",
@@ -728,7 +736,7 @@
             },
             {
               "name": "--movi-progress-height-hover",
-              "description": "Movi Player theme variable.\n\nDefault: `6px`"
+              "description": "Movi Player theme variable.\n\nDefault: `8px`"
             },
             {
               "name": "--movi-btn-size",

@@ -9191,22 +9191,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // audio); the processLoop's _audioOnly check skips only the video decode.
     } else {
       // Re-enabling video. Resume the video source prefetch that audio-only
-      // paused (idempotent no-op if it wasn't paused), then seek to the current
-      // playhead to recover a keyframe and resync; for a split source the demux
-      // loop was stopped, so restart it.
+      // paused (idempotent no-op if it wasn't paused), then bring the picture
+      // back to where the sound already is.
+      //
+      // This used to be a plain seek() to the playhead, and a seek serves BOTH
+      // pipelines: the audio renderer's scheduled buffers were dropped and
+      // rebuilt, so the sound broke at the exact moment the viewer asked for
+      // the picture back. Nothing about audio needs to move here — it never
+      // stopped. This is the same situation as returning from a backgrounded
+      // tab, where video decode was skipped while audio played on, and it takes
+      // the same video-only recovery.
       this.setVideoSourcePrefetchPaused(false);
-      const t = this.getCurrentTime();
-      this.seek(t)
-        .then(() => {
-          if (
-            splitSource &&
-            this.animationFrameId === null &&
-            this.stateManager.getState() === "playing"
-          ) {
-            this.processLoop();
-          }
-        })
-        .catch((e) => Logger.warn(TAG, "Audio-only → video resync seek failed", e));
+      if (this.stateManager.getState() === "playing") {
+        void this.resyncVideoToAudio("Audio-only → video");
+      } else {
+        // Paused: there is no audio clock to catch up to and no loop to
+        // restart, so put a frame back on screen the ordinary way.
+        this.seek(this.getCurrentTime()).catch((e) =>
+          Logger.warn(TAG, "Audio-only → video resync seek failed", e),
+        );
+      }
     }
   }
 
@@ -9403,88 +9407,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
 
         if (!this.isPiPActive) {
-          // Video-only recovery via demuxer seek — audio stays completely untouched.
-          // In background, video decoding was skipped so video decoder has stale state.
-          // We seek the demuxer to the nearest keyframe near current audio position,
-          // flush only the video decoder, and set seekTargetTime to skip any
-          // re-demuxed audio packets that were already played.
-          //
-          // clock.getTime() falls back to wall-clock when the audio output is
-          // suspended in background, so it can race far ahead of the audio
-          // that has actually been rendered. Resolve the real audio position
-          // from the AudioRenderer's clock / buffer end, and fall back to the
-          // wall clock when there is no audio at all.
-          const audioClock = this.audioRenderer.getAudioClock();
-          const audioBufferEnd = this.audioRenderer.getMaxScheduledMediaTime();
-          const audioTime =
-            audioClock >= 0
-              ? audioClock
-              : audioBufferEnd > 0
-                ? audioBufferEnd
-                : this.clock.getTime();
-          Logger.debug(TAG, `Foreground recovery: video-only seek to ${audioTime.toFixed(2)}s`);
-
-          // Cancel any in-flight processLoop to avoid demux conflicts during seek
-          if (this.animationFrameId !== null) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-          }
-          const mySessionId = ++this.seekSessionId;
-          // Release a superseded seek's video-sync flag (this recovery seek is
-          // filter-only and owns its own resume) so the pipeline can't strand in
-          // a permanent wait — see notifySeekCompletion's superseded branch.
-          this.waitingForVideoSync = false;
-
-          try {
-            // Flush video decoder only — audio decoder and renderer untouched
-            if (this.videoDecoder) {
-              await this.videoDecoder.flush();
-            }
-            if (this.videoRenderer) {
-              this.videoRenderer.clearQueue();
-            }
-
-            if (this.seekSessionId !== mySessionId) return; // Superseded
-
-            // Reset EOF flag — demuxer is being repositioned. For audio-less
-            // video, background processLoop may have raced to EOF; without this
-            // reset, processLoop would early-return and playback stalls.
-            this.eofReached = false;
-            this.eofSince = 0;
-
-            // Seek demuxer to nearest keyframe before current audio position
-            if (this.demuxer) {
-              await this.demuxer.seek(audioTime + this.startTime);
-            }
-
-            if (this.seekSessionId !== mySessionId) return; // Superseded
-
-            // Re-anchor the wall clock to audio. While backgrounded the wall
-            // clock advanced freely while audio output was suspended; without
-            // this re-sync, getTime() will continue reporting the inflated
-            // value and Clock's drift correction will snap the wall clock
-            // back at 50%/sample, causing time-update jitter on resume.
-            this.clock.seek(audioTime + this.startTime);
-
-            // Skip pre-target packets: use audio buffer end (not clock time) so
-            // already-scheduled audio isn't re-decoded — prevents fast-forward sound.
-            this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
-            this.seekingToKeyframe = true;
-            this.seekingToKeyframeStartTime = performance.now();
-            this.seekKeyframeScanned = 0;
-            this.seekCraSeen = 0;
-            this.videoChainBrokenUntilKeyframe = false;
-
-            // Restart video pipeline
-            if (this.videoRenderer) {
-              this.videoRenderer.startPresentationLoop();
-            }
-            this.processLoop();
-          } catch (err) {
-            Logger.error(TAG, "Foreground recovery failed", err);
-            // Fall back to processLoop restart so playback doesn't stall
-            this.processLoop();
-          }
+          await this.resyncVideoToAudio("Foreground recovery");
         } else {
           // PiP was active — just restart processLoop, video was rendering in PiP
           this.processLoop();
@@ -9496,6 +9419,99 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
   };
+
+  /**
+   * Bring the PICTURE back to where the sound already is, without touching the
+   * sound.
+   *
+   * Used wherever video decode was stopped while audio kept running — a
+   * backgrounded tab, and the audio-only toggle being switched back off. An
+   * ordinary seek() would serve both, but it re-seeks the audio too: the
+   * renderer's scheduled buffers are dropped and rebuilt, which is a hole in
+   * the sound at the exact moment the viewer asked for the picture back. Here
+   * only the video decoder is flushed and only the demuxer is repositioned;
+   * the audio decoder, the renderer and everything it has already scheduled are
+   * left alone, and the re-demuxed audio packets that were already played are
+   * skipped by seekTargetTime.
+   */
+  private async resyncVideoToAudio(reason: string): Promise<void> {
+    // clock.getTime() falls back to wall-clock when the audio output is
+    // suspended in background, so it can race far ahead of the audio that has
+    // actually been rendered. Resolve the real audio position from the
+    // AudioRenderer's clock / buffer end, and fall back to the wall clock when
+    // there is no audio at all.
+    const audioClock = this.audioRenderer?.getAudioClock() ?? -1;
+    const audioBufferEnd = this.audioRenderer?.getMaxScheduledMediaTime() ?? 0;
+    const audioTime =
+      audioClock >= 0
+        ? audioClock
+        : audioBufferEnd > 0
+          ? audioBufferEnd
+          : this.clock.getTime();
+    Logger.debug(TAG, `${reason}: video-only seek to ${audioTime.toFixed(2)}s`);
+
+    // Cancel any in-flight processLoop to avoid demux conflicts during seek
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    const mySessionId = ++this.seekSessionId;
+    // Release a superseded seek's video-sync flag (this recovery seek is
+    // filter-only and owns its own resume) so the pipeline can't strand in
+    // a permanent wait — see notifySeekCompletion's superseded branch.
+    this.waitingForVideoSync = false;
+
+    try {
+      // Flush video decoder only — audio decoder and renderer untouched
+      if (this.videoDecoder) {
+        await this.videoDecoder.flush();
+      }
+      if (this.videoRenderer) {
+        this.videoRenderer.clearQueue();
+      }
+
+      if (this.seekSessionId !== mySessionId) return; // Superseded
+
+      // Reset EOF flag — demuxer is being repositioned. For audio-less
+      // video, background processLoop may have raced to EOF; without this
+      // reset, processLoop would early-return and playback stalls.
+      this.eofReached = false;
+      this.eofSince = 0;
+
+      // Seek demuxer to nearest keyframe before current audio position
+      if (this.demuxer) {
+        await this.demuxer.seek(audioTime + this.startTime);
+      }
+
+      if (this.seekSessionId !== mySessionId) return; // Superseded
+
+      // Re-anchor the wall clock to audio. While backgrounded the wall
+      // clock advanced freely while audio output was suspended; without
+      // this re-sync, getTime() will continue reporting the inflated
+      // value and Clock's drift correction will snap the wall clock
+      // back at 50%/sample, causing time-update jitter on resume.
+      this.clock.seek(audioTime + this.startTime);
+
+      // Skip pre-target packets: use audio buffer end (not clock time) so
+      // already-scheduled audio isn't re-decoded — prevents fast-forward sound.
+      this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
+      this.seekingToKeyframe = true;
+      this.seekingToKeyframeStartTime = performance.now();
+      this.seekKeyframeScanned = 0;
+      this.seekCraSeen = 0;
+      this.videoChainBrokenUntilKeyframe = false;
+
+      // Restart video pipeline
+      if (this.videoRenderer) {
+        this.videoRenderer.startPresentationLoop();
+      }
+      this.processLoop();
+    } catch (err) {
+      Logger.error(TAG, `${reason} failed`, err);
+      // Fall back to processLoop restart so playback doesn't stall
+      this.processLoop();
+    }
+  }
 
   /**
    * Start background timer using Web Worker (Safari-safe, not throttled)

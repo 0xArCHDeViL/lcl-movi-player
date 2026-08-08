@@ -135,7 +135,7 @@
       "name": "--movi-glass-bg",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `rgba(15, 15, 20, 0.85)`"
+        "value": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.92)`"
       },
       "references": [
         {
@@ -148,7 +148,20 @@
       "name": "--movi-glass-border",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.08)`"
+        "value": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.1)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-osd-bg",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.55)`"
       },
       "references": [
         {
@@ -291,7 +304,7 @@
       "name": "--movi-radius-osd",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `22px`"
+        "value": "Movi Player theme variable.\n\nDefault: `var(--movi-radius-surface)`"
       },
       "references": [
         {
@@ -304,7 +317,7 @@
       "name": "--movi-preview-radius",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `4px`"
+        "value": "Movi Player theme variable.\n\nDefault: `var(--movi-radius-surface)`"
       },
       "references": [
         {
@@ -317,7 +330,20 @@
       "name": "--movi-preview-img-radius",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `2px`"
+        "value": "Movi Player theme variable.\n\nDefault: `var(--movi-radius-surface)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-preview-caption-bg",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `var(--movi-osd-bg)`"
       },
       "references": [
         {
@@ -460,7 +486,7 @@
       "name": "--movi-progress-height-hover",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `6px`"
+        "value": "Movi Player theme variable.\n\nDefault: `8px`"
       },
       "references": [
         {
