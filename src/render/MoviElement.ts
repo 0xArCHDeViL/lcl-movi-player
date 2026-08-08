@@ -18872,8 +18872,6 @@ export class MoviElement extends HTMLElement {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        padding: 0 4px;
-        margin-bottom: 1px;
         position: relative;
         z-index: 2;
       }
