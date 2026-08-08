@@ -359,6 +359,9 @@ export class MoviElement extends HTMLElement {
   private pendingSeekTarget: number | null = null; // Coalesces rapid currentTime sets while a seek is in flight
   private _pendingSeek: number | null = null; // Seek requested before the player was ready; applied on the next seekable state
   private isDragging: boolean = false;
+  /** The chapter section currently raised under the pointer, so the playback
+   *  tick can keep its paint current without re-scanning every segment. */
+  private _hoveredChapter: HTMLElement | null = null;
   private isTouchDragging: boolean = false;
 
   // Gesture tracking
@@ -2420,6 +2423,8 @@ export class MoviElement extends HTMLElement {
 
       const time = this.barFractionToTime(percent);
       thumbnailTime.textContent = this.formatTime(time);
+      // Raise the section the pointer is over (no-op without chapters).
+      this.paintChapterHover(time);
 
       // Show chapter title if hovering over a chapter
       const chapterTitleEl = shadowRoot.querySelector(".movi-seek-chapter-title") as HTMLElement;
@@ -2777,6 +2782,10 @@ export class MoviElement extends HTMLElement {
           clearTimeout(hoverIntentTimer);
           hoverIntentTimer = null;
         }
+        // The raised section drops with the cursor, not with the preview's
+        // 300ms grace — it is part of the bar, and a chapter left standing
+        // proud of a bar nobody is pointing at reads as a stuck control.
+        this.paintChapterHover();
         hideThumbnail(300); // 300ms delay for mouse leave
       });
     }
@@ -13557,7 +13566,12 @@ export class MoviElement extends HTMLElement {
            the pointer, which is what marks it as grabbable. YouTube runs the
            same 3 → 5 pair. */
         --movi-progress-height: 4px;
-        --movi-progress-height-hover: 6px;
+        /* 4 → 8 is the whole point of the hover: the bar is a 4px line at rest
+           and has to become something you can aim at. Two extra pixels read as
+           the line thickening slightly; double reads as the control waking up
+           — and with chapters it is one section that rises, so the step has to
+           be large enough to say WHICH one. */
+        --movi-progress-height-hover: 8px;
         --movi-btn-size: 44px;
         --movi-btn-size-mobile: 40px;
         
@@ -14769,6 +14783,32 @@ export class MoviElement extends HTMLElement {
         top: 0;
         height: 100%;
         pointer-events: none;
+      }
+
+      /* With chapters, hovering does NOT swell the whole track. The bar is cut
+         into sections, and growing all of them says the whole timeline reacted
+         when only one section is under the pointer. The hovered chapter rises;
+         its neighbours stay where they are, which is what makes the sections
+         read as separate things you can aim at. */
+      .movi-progress-bar.movi-has-chapters:hover {
+        height: var(--movi-progress-height);
+      }
+      /* The raised section repaints its own slice of the three layers, because
+         the real ones are still the thin bar underneath: a gradient with the
+         played and buffered edges expressed as percentages WITHIN this chapter
+         (set from JS, since only the player knows where the playhead is). */
+      .movi-chapter-segment.movi-chapter-hover {
+        top: 50%;
+        height: var(--movi-progress-height-hover);
+        transform: translateY(-50%);
+        border-radius: 2px;
+        background-image: linear-gradient(
+          to right,
+          var(--movi-primary) 0 var(--movi-seg-played, 0%),
+          rgba(255, 255, 255, 0.25) var(--movi-seg-played, 0%) var(--movi-seg-buffered, 0%),
+          var(--movi-progress-bg) var(--movi-seg-buffered, 0%) 100%
+        );
+        transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       .movi-progress-buffer {
@@ -24295,17 +24335,27 @@ export class MoviElement extends HTMLElement {
    */
   /** Paint (or clear) the chapter gaps across the track's three painted
    *  layers. See the note at the call site for why the bar itself is spared. */
+  /**
+   * @param hole Percent range to cut out of the track ENTIRELY, on top of the
+   *   chapter gaps. The raised chapter under the pointer paints its own copy of
+   *   the three layers, and it is translucent white over the picture — so with
+   *   the real track still painted underneath, the 4px it overlapped came out
+   *   brighter than the 2px above and below it, and the section read as an
+   *   outlined box rather than a thicker bar. Cutting the track there leaves
+   *   exactly one layer of paint again.
+   */
   private applyChapterGaps(
     root: ShadowRoot,
     chapters: Array<{ start: number }>,
     duration: number,
+    hole?: { from: number; to: number },
   ): void {
     const bar = root.querySelector(".movi-progress-bar") as HTMLElement | null;
     const layers = [
       root.querySelector(".movi-progress-paint") as HTMLElement | null,
     ];
 
-    if (chapters.length < 2 || duration <= 0) {
+    if ((chapters.length < 2 && !hole) || duration <= 0) {
       if (bar) {
         bar.style.removeProperty("background-image");
         bar.style.removeProperty("background-color");
@@ -24337,15 +24387,31 @@ export class MoviElement extends HTMLElement {
       if (pct > 0 && pct < 100) cuts.push(pct);
     }
 
+    // Every hole in the track as a percent range, boundary gaps and the raised
+    // chapter alike. A boundary is a zero-width range that the ±half px below
+    // opens into a gap; the raised chapter is a real one. Merged so a hole that
+    // starts where a boundary sits (which is always, since chapters begin at
+    // boundaries) yields ONE window instead of two overlapping ones — the
+    // gradient's stops have to stay in order.
+    const windows = cuts.map((pct) => ({ a: pct, b: pct }));
+    if (hole && hole.to > hole.from) windows.push({ a: hole.from, b: hole.to });
+    windows.sort((x, y) => x.a - y.a);
+    const merged: Array<{ a: number; b: number }> = [];
+    for (const w of windows) {
+      const last = merged[merged.length - 1];
+      if (last && w.a <= last.b) last.b = Math.max(last.b, w.b);
+      else merged.push({ ...w });
+    }
+
     // The groove IS the bar, so percentages land where they should.
     if (bar) {
       const stops = ["var(--movi-progress-bg) 0"];
-      for (const pct of cuts) {
+      for (const w of merged) {
         stops.push(
-          `var(--movi-progress-bg) calc(${pct}% - ${half}px)`,
-          `transparent calc(${pct}% - ${half}px)`,
-          `transparent calc(${pct}% + ${half}px)`,
-          `var(--movi-progress-bg) calc(${pct}% + ${half}px)`,
+          `var(--movi-progress-bg) calc(${w.a}% - ${half}px)`,
+          `transparent calc(${w.a}% - ${half}px)`,
+          `transparent calc(${w.b}% + ${half}px)`,
+          `var(--movi-progress-bg) calc(${w.b}% + ${half}px)`,
         );
       }
       stops.push("var(--movi-progress-bg) 100%");
@@ -24367,12 +24433,12 @@ export class MoviElement extends HTMLElement {
     const paint = layers[0];
     if (!paint) return;
     const stops = ["#000 0"];
-    for (const pct of cuts) {
+    for (const w of merged) {
       stops.push(
-        `#000 calc(${pct}% - ${half}px)`,
-        `transparent calc(${pct}% - ${half}px)`,
-        `transparent calc(${pct}% + ${half}px)`,
-        `#000 calc(${pct}% + ${half}px)`,
+        `#000 calc(${w.a}% - ${half}px)`,
+        `transparent calc(${w.a}% - ${half}px)`,
+        `transparent calc(${w.b}% + ${half}px)`,
+        `#000 calc(${w.b}% + ${half}px)`,
       );
     }
     stops.push("#000 100%");
@@ -24392,6 +24458,11 @@ export class MoviElement extends HTMLElement {
 
     const chapters = this.player.getChapters();
     const duration = this.player.getDuration();
+    const bar = shadowRoot.querySelector(".movi-progress-bar");
+    bar?.classList.toggle(
+      "movi-has-chapters",
+      chapters.length > 0 && duration > 0,
+    );
     if (chapters.length === 0 || duration <= 0) {
       // No chapters (or a new source that has none): clear the cuts, or the
       // track keeps gaps that belong to a video that is no longer playing.
@@ -24436,12 +24507,80 @@ export class MoviElement extends HTMLElement {
 
       const segment = document.createElement("div");
       segment.className = "movi-chapter-segment";
-      segment.style.left = `${startPct}%`;
-      segment.style.width = `${endPct - startPct}%`;
+      // Inset by the gap it sits between, so the raised section covers its own
+      // slice of track and not half the cut either side of it. The outer edges
+      // of the first and last sections have no gap to clear.
+      const padLeft = i > 0 ? 1.5 : 0;
+      const padRight = i < chapters.length - 1 ? 1.5 : 0;
+      segment.style.left = `calc(${startPct}% + ${padLeft}px)`;
+      segment.style.width = `calc(${endPct - startPct}% - ${padLeft + padRight}px)`;
       segment.setAttribute("data-title", ch.title);
+      segment.dataset.startPct = String(startPct);
+      segment.dataset.endPct = String(endPct);
+      // The raised-section paint needs this chapter's own span to place the
+      // played/buffered edges inside it — see paintChapterHover.
+      segment.dataset.start = String(ch.start);
+      segment.dataset.end = String(
+        i < chapters.length - 1 ? chapters[i + 1].start : duration,
+      );
 
       container.appendChild(segment);
     }
+  }
+
+  /**
+   * Raise the chapter under the pointer and paint its slice of the track.
+   *
+   * Pass a time to choose the section; pass nothing to lower whatever is up.
+   * The bar underneath keeps its own (thin) fill and buffer — this repaints
+   * only the raised section, because a taller strip drawn over the thin one
+   * would otherwise show a chapter-shaped hole in the progress.
+   */
+  private paintChapterHover(time?: number): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const segments = sr.querySelectorAll<HTMLElement>(".movi-chapter-segment");
+    if (!segments.length) return;
+    const played = this._posterSeekActive ? 0 : this._uiCurrentTime();
+    const buffered = this._posterSeekActive
+      ? 0
+      : (this.player?.getBufferEndTime?.() ?? 0);
+    let hovered: HTMLElement | null = null;
+    segments.forEach((seg) => {
+      const start = Number(seg.dataset.start ?? 0);
+      const end = Number(seg.dataset.end ?? 0);
+      const inside =
+        time !== undefined && end > start && time >= start && time < end;
+      seg.classList.toggle("movi-chapter-hover", inside);
+      if (!inside) return;
+      hovered = seg;
+      const span = end - start;
+      const pct = (t: number) =>
+        `${Math.max(0, Math.min(100, ((t - start) / span) * 100))}%`;
+      seg.style.setProperty("--movi-seg-played", pct(played));
+      // Never behind the playhead: the buffer bar is drawn from where the
+      // current run began, and a buffered edge to the LEFT of the played one
+      // would invert the gradient's stops and paint the section solid.
+      seg.style.setProperty("--movi-seg-buffered", pct(Math.max(played, buffered)));
+    });
+    // Cut the track under the raised section — see applyChapterGaps. Only when
+    // the section CHANGES: rebuilding a gradient on every pointer move is work
+    // for a picture that did not change.
+    if (hovered !== this._hoveredChapter) {
+      const raised = hovered as HTMLElement | null;
+      this.applyChapterGaps(
+        sr,
+        this.player?.getChapters() ?? [],
+        this.player?.getDuration() ?? 0,
+        raised
+          ? {
+              from: Number(raised.dataset.startPct ?? 0),
+              to: Number(raised.dataset.endPct ?? 0),
+            }
+          : undefined,
+      );
+    }
+    this._hoveredChapter = hovered;
   }
 
   /**
@@ -24501,6 +24640,15 @@ export class MoviElement extends HTMLElement {
         progressBuffer.style.width = `${bufPct}%`;
       }
       return;
+    }
+
+    // A raised chapter paints its own copy of the fill and buffer, so it has
+    // to move with them — otherwise the section under the pointer freezes at
+    // whatever the progress was when the cursor arrived.
+    if (this._hoveredChapter) {
+      const start = Number(this._hoveredChapter.dataset.start ?? 0);
+      const end = Number(this._hoveredChapter.dataset.end ?? 0);
+      if (end > start) this.paintChapterHover((start + end) / 2);
     }
 
     if (this.duration > 0) {
