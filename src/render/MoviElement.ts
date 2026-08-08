@@ -5035,6 +5035,30 @@ export class MoviElement extends HTMLElement {
         contextMenu.style.top = "";
         contextMenu.style.display = "flex";
         contextMenu.style.visibility = "visible";
+        // Strip mode: the drawer grows out of a ~78px host into the page around
+        // it (see the strip rule in the stylesheet), so both how tall it may be
+        // and which WAY it opens are questions about the page, not the player —
+        // the stylesheet can only guess at the viewport. Take whichever side of
+        // the strip has more room and cap to it, so a strip docked at the
+        // bottom opens upward (the usual case) and one near the top of the
+        // screen opens downward instead of off it.
+        //
+        // Set with priority: the rules being overridden are !important, and an
+        // ordinary inline style loses to those.
+        if (this.classList.contains("movi-audio-strip")) {
+          const host = this.getBoundingClientRect();
+          const above = host.bottom - 16;
+          const below = window.innerHeight - host.top - 16;
+          const openUp = above >= below;
+          const room = Math.max(180, Math.min(460, openUp ? above : below));
+          contextMenu.style.setProperty("max-height", `${room}px`, "important");
+          contextMenu.style.setProperty("top", openUp ? "auto" : "0", "important");
+          contextMenu.style.setProperty("bottom", openUp ? "0" : "auto", "important");
+        } else {
+          for (const p of ["max-height", "top", "bottom"]) {
+            contextMenu.style.removeProperty(p);
+          }
+        }
 
         // Show backdrop
         const backdrop = shadowRoot.querySelector(
@@ -5118,7 +5142,16 @@ export class MoviElement extends HTMLElement {
 
         // Flip to the left of / above the cursor near the viewport edge.
         if (x + menuWidth > window.innerWidth - 10) x -= menuWidth;
-        if (y + menuHeight > window.innerHeight - 10) y -= menuHeight;
+        if (y + menuHeight > window.innerHeight - 10) {
+          y -= menuHeight;
+          // A menu long enough that flipping puts its head off the top has no
+          // room to open from the cursor at all, and the clamp below would then
+          // push it down until it sat flush against the TOP of the screen —
+          // the far end from the pointer, with the page's own chrome right
+          // above it. Rest it on the bottom edge instead: same list, but it
+          // meets the cursor's side of the screen.
+          if (y < 10) y = window.innerHeight - 10 - menuHeight;
+        }
 
         contextMenu.style.left = `${x}px`;
         contextMenu.style.top = `${y}px`;
@@ -19358,7 +19391,22 @@ export class MoviElement extends HTMLElement {
            closed. Non-strip (full-size) players keep the normal slide drawer. */
         :host(.movi-audio-strip) .movi-context-menu.movi-context-menu-mobile {
           bottom: 0 !important;
+          /* The drawer has to escape the strip, the same way the non-touch
+             strip path escapes it by going position:fixed. The base rule above
+             pins top:0, and top:0 + bottom:0 on an absolutely positioned box
+             makes height:auto mean "as tall as the containing block" — which
+             here is a 78px bar. Every row past the first two then lived inside
+             a 78px scroll box. Releasing the top lets it grow upward instead,
+             over the page the strip sits on (the host's overflow is visible for
+             exactly this).
+             …which is what makes the ceiling necessary: unpinned, the height is
+             the row count, and the row count is the host's to decide —
+             addControl takes as many as it likes. Measured against the VIEWPORT,
+             since --movi-player-height is the strip's own 78px here and would
+             cap it back to nothing. */
+          top: auto !important;
           height: auto !important;
+          max-height: min(calc(100vh - 32px), 460px) !important;
           max-width: min(350px, 100%) !important;
           margin: 0 !important;
           transform: none !important;
