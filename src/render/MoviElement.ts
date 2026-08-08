@@ -224,6 +224,22 @@ export interface MoviControlSpec {
   after?: string;
   /** Where it appears. Default "bar". */
   placement?: "bar" | "menu" | "both";
+  /** WHICH kind of media it belongs to. Default "both".
+   *
+   *  The player collapses to an audio presentation when the media has no
+   *  picture — cover art in place of the canvas, or the compact strip — and the
+   *  built-ins that mean nothing there (captions, quality, aspect, PiP,
+   *  fullscreen) take themselves out of the bar and the menu. A host control is
+   *  no different: "Cast to TV" has no business on a podcast, and "Sleep timer"
+   *  is the one control an album view wants and a film does not.
+   *
+   *    "video"  only while a picture is playing
+   *    "audio"  only in the audio presentation
+   *    "both"   always (the default)
+   *
+   *  Enforced in CSS against the host's audio class, so it follows a source
+   *  swap from video to audio with no work from the host. */
+  media?: "video" | "audio" | "both";
   /** A toggle carries state: pressed styling, On/Off in the menu, and the
    *  boolean handed to onSelect. Without it, a plain button. */
   toggle?: boolean;
@@ -19758,6 +19774,19 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-mode) .movi-fullscreen-btn {
         display: none !important;
       }
+      /* Host controls registered with media:"video" / media:"audio" — the
+         same idea as the built-ins above, but the player has no idea what the
+         control does, so the scope has to be declared. The whole node goes,
+         menu row and bar button alike: an empty flex item still takes its share
+         of the row's gap. */
+      :host(.movi-audio-mode) .movi-custom-btn[data-video-only],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-video-only] {
+        display: none !important;
+      }
+      :host(:not(.movi-audio-mode)) .movi-custom-btn[data-audio-only],
+      :host(:not(.movi-audio-mode)) .movi-context-menu-item[data-audio-only] {
+        display: none !important;
+      }
       /* In audio mode the album art is painted by the cover-art canvas (which
          persists through playback, unlike the pre-play poster overlay) — hide
          the raw poster <img> so it doesn't double up over the canvas. The
@@ -19794,6 +19823,9 @@ export class MoviElement extends HTMLElement {
         transform: translate(-50%, -50%) !important;
       }
       :host(.movi-audio-mode) .movi-shortcut-row[data-video-only] {
+        display: none !important;
+      }
+      :host(:not(.movi-audio-mode)) .movi-shortcut-row[data-audio-only] {
         display: none !important;
       }
       /* Same treatment for the Stats-for-Nerds panel — its default
@@ -26843,6 +26875,9 @@ export class MoviElement extends HTMLElement {
       if (!key) continue;
       const row = document.createElement("div");
       row.className = "movi-shortcut-row movi-custom-shortcut";
+      // The panel promises what the keyboard does, and a scoped-out control's
+      // key does nothing — see customHotkeyFor.
+      this.markCustomMediaScope(row, entry.spec);
       const kbd = document.createElement("kbd");
       kbd.textContent = key;
       const label = document.createElement("span");
@@ -26909,9 +26944,15 @@ export class MoviElement extends HTMLElement {
     ]
       .filter(Boolean)
       .join("+");
+    const audio = this.classList.contains("movi-audio-mode");
     for (const [id, entry] of this._customControls) {
       const want = entry.spec.hotkey;
       if (!want) continue;
+      // A control scoped out of the current presentation is not on screen, and
+      // its key should be as absent as its button — otherwise "Cast to TV"
+      // still fires on a podcast, invisibly.
+      const scope = entry.spec.media ?? "both";
+      if ((scope === "video" && audio) || (scope === "audio" && !audio)) continue;
       if (this.normaliseHotkey(want) === pressed) return id;
     }
     return null;
@@ -26999,6 +27040,7 @@ export class MoviElement extends HTMLElement {
         btn.className = "movi-btn movi-custom-btn";
         btn.type = "button";
         btn.dataset.customControl = id;
+        this.markCustomMediaScope(btn, spec);
         btn.setAttribute("aria-label", spec.label);
         if (spec.title !== null) btn.title = spec.title ?? spec.label;
         if (spec.toggle) btn.setAttribute("aria-pressed", String(entry.active));
@@ -27031,6 +27073,7 @@ export class MoviElement extends HTMLElement {
         item.className = "movi-context-menu-item";
         item.dataset.action = `custom:${id}`;
         item.dataset.customControl = id;
+        this.markCustomMediaScope(item, spec);
         const icon = this.buildCustomIcon(spec.icon);
         if (icon) {
           // An SVG gets the menu's icon class, which sizes it to the column the
@@ -27094,6 +27137,15 @@ export class MoviElement extends HTMLElement {
         this.insertAtAnchor(menu, item, spec, true);
       }
     }
+  }
+
+  /** Stamp a control's media scope onto the node the CSS reads. Reuses
+   *  `data-video-only`, which the shortcuts panel already marks its rows with,
+   *  and adds its mirror for audio. Both are inert until the host class says
+   *  which presentation is on screen — see the rules by the audio-mode block. */
+  private markCustomMediaScope(node: HTMLElement, spec: MoviControlSpec): void {
+    if (spec.media === "video") node.setAttribute("data-video-only", "");
+    else if (spec.media === "audio") node.setAttribute("data-audio-only", "");
   }
 
   /** Place a node before/after a named built-in, or at the end of the row. */

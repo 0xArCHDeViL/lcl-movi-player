@@ -667,6 +667,31 @@ Enables fast seek controls for quick ±10s navigation.
 - Double-tap on left/right sides to seek
 - Arrow Left/Right keyboard shortcuts (±10s)
 
+Those three are separable. Give the attribute a value to keep only the ones you
+want — space, comma or pipe separated:
+
+```html
+<!-- gestures only: the double-tap, no extra pair of buttons on a phone bar -->
+<movi-player src="video.mp4" fastseek="gestures"></movi-player>
+
+<!-- the page draws its own skip buttons; keep the keys and the double-tap -->
+<movi-player src="video.mp4" fastseek="keys gestures"></movi-player>
+```
+
+| Token | Turns on |
+| --- | --- |
+| `buttons` | The ⏪/⏩ pair in the bottom bar (aliases: `button`, `controls`, `bar`) |
+| `keys` | Arrow Left/Right, and Ctrl+arrow frame stepping (aliases: `keyboard`, `keyonly`, `arrows`) |
+| `gestures` | Double-tap either edge, and horizontal drag-to-seek (aliases: `touch`, `swipe`, `doubletap`) |
+| `nontouch` | `buttons` + `keys` (aliases: `desktop`, `mouse`, `pointer`) |
+| `all` | All three — the same as the bare attribute (aliases: `on`, `true`, `yes`) |
+| `none` | Nothing — the same as omitting the attribute (aliases: `off`, `false`, `no`) |
+
+The bare attribute (`fastseek` / `fastseek=""`) means all three, so existing
+markup keeps working. An unrecognised token warns and is ignored; a value with
+nothing recognisable in it falls back to all three rather than silently
+disabling the feature.
+
 **Use Case:** Better navigation experience for longer videos (podcasts, lectures, movies).
 
 ---
@@ -1326,11 +1351,25 @@ player.startat = 30; // Start at 30 seconds
 
 #### `fastseek: boolean`
 
-Gets/sets whether fast seek controls are enabled.
+Gets whether ANY fast-seek affordance is on. Assign a boolean as before, or the
+attribute's token list to pick channels.
 
 ```typescript
 player.fastseek = true; // Enable ±10s skip buttons
 player.fastseek = false; // Disable fast seek
+player.fastseek = "keys gestures"; // No buttons in the bar
+```
+
+---
+
+#### `fastseekModes: string`
+
+The channels currently on, as the canonical token list (`"buttons keys
+gestures"`, `""` when none). Assigning is the same as assigning to `fastseek`.
+
+```typescript
+player.fastseekModes; // "keys gestures"
+player.fastseekModes = "touch"; // gestures only
 ```
 
 ---
@@ -1793,6 +1832,74 @@ Leaves fullscreen by whichever route the player entered it — native, host-driv
 ```typescript
 player.addEventListener("back", () => player.exitFullscreen());
 ```
+
+---
+
+### Custom Controls
+
+#### `addControl(spec)`
+
+Puts a control of your own in the player's own chrome — the bottom bar, the
+right-click menu, or both — so it sits with the built-ins instead of beside
+them.
+
+```typescript
+player.addControl({
+  id: "autoplay-next",
+  label: "Autoplay",
+  icon: '<svg viewBox="0 0 24 24">…</svg>',
+  before: "cc",
+  placement: "both",
+  toggle: true,
+  hotkey: "shift+a",
+  onSelect: (on) => setAutoplay(on),
+});
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique; the handle for `updateControl` / `removeControl`, and the token `controlslist` uses to switch it off |
+| `label` | Accessible name, tooltip, and the text on the menu row |
+| `icon` | Inline SVG markup or an element to clone. Without one the label is drawn as text |
+| `title` | Tooltip override; `null` for none |
+| `side` | `"left"` / `"right"` (default) end of the bar |
+| `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, … |
+| `placement` | `"bar"` (default), `"menu"`, `"both"` |
+| `media` | `"video"`, `"audio"`, or `"both"` (default) — see below |
+| `toggle` / `active` | Carries state: pressed styling, On/Off on the menu row, and the boolean handed to `onSelect` |
+| `hotkey` | e.g. `"shift+a"`. Checked after the player's own shortcuts, so it can't take over Space or the arrows; appears on the menu row and in the shortcuts panel |
+| `shortcutHint` | Right-hand text on the menu row for a non-toggle |
+| `items` / `onPick` / `value` | Turn the menu row into a submenu of choices (nests) |
+| `persist` | Remember a toggle's state under the element's `persistkey` |
+| `osd` | Set `false` to stay silent when used by its hotkey |
+| `onSelect` | Called with the state AFTER the toggle flipped; also emitted as a `movi-control` event |
+
+**`media` — video-only or audio-only.** The player collapses to an audio
+presentation when the media has no picture (cover art, or the compact strip),
+and the built-ins that mean nothing there — captions, quality, aspect, PiP,
+fullscreen — take themselves out of the bar and the menu. Say which kind of
+media your control belongs to and it does the same:
+
+```typescript
+player.addControl({ id: "cast", label: "Cast to TV", media: "video", … });
+player.addControl({ id: "sleep", label: "Sleep timer", media: "audio", … });
+```
+
+A scoped-out control leaves the bar, the context menu **and** the shortcuts
+panel, and its hotkey stops firing — an invisible control with a live key is
+worse than no control. Enforced against the player's own audio class, so it
+follows a source swap from video to audio with no work from the host.
+
+#### `updateControl(id, patch)` · `removeControl(id)`
+
+`updateControl` merges a partial spec and re-renders — `{ active: true }` to
+reflect state the host owns, `{ value: "720p" }` to move a submenu's tick.
+`removeControl` takes it back down; unknown ids are ignored.
+
+#### `isControlActive(id): boolean` · `isControlDisabled(id): boolean`
+
+The current state of a custom toggle, and whether a control (custom or
+built-in) has been switched off by [`controlslist`](#controlslist).
 
 ---
 
