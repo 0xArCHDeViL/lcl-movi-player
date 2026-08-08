@@ -1545,8 +1545,10 @@ export class MoviElement extends HTMLElement {
           <div class="movi-seek-thumbnail" style="display: none;">
              <div class="movi-thumbnail-placeholder" style="display: none;"></div>
              <img class="movi-thumbnail-img" style="display: none;">
-             <span class="movi-seek-chapter-title"></span>
-             <span class="movi-seek-time">0:00</span>
+             <div class="movi-seek-caption">
+               <span class="movi-seek-time">0:00</span>
+               <span class="movi-seek-chapter-title"></span>
+             </div>
           </div>
         </div>
         
@@ -13509,13 +13511,20 @@ export class MoviElement extends HTMLElement {
         --movi-radius-badge-sm: 3px;
         --movi-radius-subtitle: 4px;
         --movi-radius-scrollbar: 3px;
-        --movi-radius-osd: 22px;
+        /* The OSD capsule and the seek card sit on the SAME surface family as
+           the context menu and the settings panel, so they take the same
+           corner. A pill-round OSD over a 10px menu read as two different
+           design languages sharing a player. */
+        --movi-radius-osd: var(--movi-radius-surface);
         /* The seek-bar hover card and the frame inside it. Declared here
            rather than only referenced at the use site so they show up in the
            generated custom-elements/vscode data — a token an embedder cannot
            discover is not really exposed. */
-        --movi-preview-radius: 4px;
-        --movi-preview-img-radius: 2px;
+        --movi-preview-radius: var(--movi-radius-surface);
+        --movi-preview-img-radius: var(--movi-radius-surface);
+        /* The pill under the frame. Lighter than the menus it shares a corner
+           with — it floats over the picture rather than in front of it. */
+        --movi-preview-caption-bg: var(--movi-osd-bg);
 
         /* Text Colors */
         --movi-controls-color: #FFFFFF;
@@ -13714,12 +13723,20 @@ export class MoviElement extends HTMLElement {
          against the dark gradient, so the previous "dark thumb on
          light track" overrides would just disappear the thumb. */
 
-      /* Light Theme Tooltip */
+      /* Light Theme Tooltip. The pill is what carries the surface now — the
+         stack around it is transparent, so colouring that would tint nothing
+         and shadow the frame twice. */
       :host([theme="light"]) .movi-seek-thumbnail {
-        background-color: rgba(255, 255, 255, 0.65) !important;
         color: #11142d !important;
+      }
+      :host([theme="light"]) .movi-seek-caption {
+        background-color: rgba(255, 255, 255, 0.55) !important;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
         border: 1px solid rgba(255, 255, 255, 0.4) !important;
+      }
+      :host([theme="light"]) .movi-thumbnail-img,
+      :host([theme="light"]) .movi-thumbnail-placeholder {
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
       }
 
       /* Chapter title inside the seek tooltip has its own hardcoded
@@ -18641,18 +18658,19 @@ export class MoviElement extends HTMLElement {
          rather than its own opaque grey, so the one piece of chrome that
          appears OVER the picture isn't also the one that looks unlike the
          rest. */
+      /* Not a card — a stack. The frame carries its own edge and the readout
+         sits in its own pill BELOW it, the two separated by a gap. One box
+         around both meant the picture always arrived inside a dark frame with
+         a strip of chrome hanging off its bottom, and on a video with no
+         thumbnails that frame collapsed to a badge-sized lump of padding
+         around four digits. Split, each piece is only ever what it needs to
+         be: no thumbnail is simply no frame, and the pill is unchanged. */
       .movi-seek-thumbnail {
         position: absolute;
         bottom: 25px;
         left: 0;
         transform: translateX(-50%) translateY(4px);
-        background: var(--movi-glass-bg, rgba(28, 28, 28, 0.9));
-        border: 1px solid var(--movi-glass-border, transparent);
         color: var(--movi-chrome-fg, #fff);
-        padding: 5px 5px 6px;
-        /* Overridable from the host page: the card is inside the shadow root,
-           so a var is the only handle an embedder has on its corner. */
-        border-radius: var(--movi-preview-radius, 4px);
         font-size: 13px;
         font-weight: 500;
         pointer-events: none;
@@ -18662,14 +18680,33 @@ export class MoviElement extends HTMLElement {
            tracks the pointer horizontally, so there is no scale here — growing
            from a corner while sliding sideways reads as two movements. */
         transition: opacity 0.1s ease, transform 0.12s ease;
-        box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
-        overflow: hidden;
         z-index: 20;
         display: none;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-end;
+        gap: 6px;
         text-align: center;
+      }
+
+      /* The readout: time first, because that is what the pointer is being
+         aimed with, then the chapter it lands in. */
+      .movi-seek-caption {
+        display: inline-flex;
+        align-items: baseline;
+        justify-content: center;
+        gap: 8px;
+        max-width: 260px;
+        padding: 4px 11px;
+        border-radius: var(--movi-preview-radius);
+        /* Lighter than the menus it shares a corner with. Those are surfaces
+           you read and act on; this one floats over the picture for as long as
+           the pointer is moving, and at menu opacity it read as a solid slab
+           following the cursor. The OSD capsule — the other thing that lives
+           over the video rather than in front of it — sits at the same weight. */
+        background: var(--movi-preview-caption-bg);
+        border: 1px solid var(--movi-glass-border, transparent);
+        box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
       }
       .movi-thumbnail-img {
         display: block;
@@ -18692,11 +18729,11 @@ export class MoviElement extends HTMLElement {
            player. */
         max-height: 158px;
         object-fit: contain;
-        margin-bottom: 5px;
-        /* No outline. The card's own padding already separates the frame from
-           the chrome, and a hairline around a moving picture is one edge too
-           many at this size. */
-        border-radius: var(--movi-preview-img-radius, 2px);
+        /* No outline. The frame stands off the picture on its shadow alone —
+           a hairline around a moving image at this size reads as a stray edge
+           drawn over the video rather than as the border of a card. */
+        border-radius: var(--movi-preview-img-radius);
+        box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
         pointer-events: none;
       }
       .movi-seek-thumbnail.visible {
@@ -18763,12 +18800,13 @@ export class MoviElement extends HTMLElement {
         overflow: hidden;
         width: var(--movi-preview-w, 168px);
         height: var(--movi-preview-h, 95px);
-        margin-bottom: 5px;
-        /* Tracks the image's corner — the placeholder stands in its place
-           while a frame is fetched, so a different radius would visibly pop. */
-        border-radius: var(--movi-preview-img-radius, 2px);
+        /* Tracks the image's frame — the placeholder stands in its place while
+           a frame is fetched, so a different corner or lift would visibly pop
+           the moment the picture arrives. */
+        border-radius: var(--movi-preview-img-radius);
         padding: 0;
         border: none;
+        box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
         background: rgba(255, 255, 255, 0.07);
       }
       /* A sweep across the gap while the frame is being fetched. Held flat, the
@@ -18821,9 +18859,9 @@ export class MoviElement extends HTMLElement {
         left: 50%;
         transform: translateX(-50%) translateY(-12px) scale(0.96);
         transform-origin: top center;
-        background: rgba(0, 0, 0, 0.55);
+        background: var(--movi-osd-bg);
         padding: 10px 20px;
-        border-radius: 999px;
+        border-radius: var(--movi-radius-osd);
         display: none; /* Flex when visible */
         align-items: center;
         justify-content: center;
