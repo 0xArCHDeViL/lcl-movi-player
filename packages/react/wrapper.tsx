@@ -54,6 +54,10 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
     const elRef = React.useRef<MoviElement | null>(null);
     React.useImperativeHandle(ref, () => elRef.current as MoviElement, []);
 
+    // Attributes THIS wrapper wrote, so a prop that goes away can take its
+    // attribute with it — see the undefined branch below.
+    const writtenRef = React.useRef<Set<string>>(new Set());
+
     // Reflect declarative attributes onto the element every render. Booleans
     // become presence/absence; everything else becomes a string attribute.
     //
@@ -68,14 +72,33 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
       const el = elRef.current;
       if (!el) return;
       for (const [key, value] of Object.entries(props)) {
-        if (EVENT_PROPS.has(key) || value === undefined || value === null) continue;
+        if (EVENT_PROPS.has(key)) continue;
         const attr = key.toLowerCase();
+        if (value === undefined || value === null) {
+          // A prop that USED to have a value and now has none means the host
+          // is describing a different video — `chapters={list?.length ? … :
+          // undefined}` on a video with no chapters, a `poster` that resolved
+          // to nothing. Skipping it left the last video's attribute in place,
+          // so its chapter marks stayed on the scrubber of the next one.
+          //
+          // Only attributes this wrapper set are cleared. The player writes
+          // some of its own — `src` moves rung by rung on a premuxed ladder —
+          // and a host that passes `src={undefined}` because it uses
+          // <MoviSource> children would otherwise have every re-render tear
+          // the current rung off the element mid-play.
+          if (!writtenRef.current.has(attr)) continue;
+          writtenRef.current.delete(attr);
+          if (el.hasAttribute(attr)) el.removeAttribute(attr);
+          continue;
+        }
         if (typeof value === "boolean") {
+          writtenRef.current.add(attr);
           if (value === el.hasAttribute(attr)) continue;
           if (value) el.setAttribute(attr, "");
           else el.removeAttribute(attr);
         } else {
           const next = String(value);
+          writtenRef.current.add(attr);
           if (el.getAttribute(attr) === next) continue;
           el.setAttribute(attr, next);
         }

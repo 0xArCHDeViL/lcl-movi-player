@@ -47,17 +47,37 @@ export const MoviPlayer = defineComponent({
     const elRef = ref<MoviElement | null>(null);
     expose({ element: elRef });
 
+    // Attributes THIS wrapper wrote, so a prop that goes away can take its
+    // attribute with it — see the undefined branch below.
+    const written = new Set<string>();
+
     // Reflect props + passthrough attrs onto the element.
     watchEffect(() => {
       const el = elRef.value;
       if (!el) return;
       const all: Record<string, unknown> = { ...attrs, ...props };
       for (const [key, value] of Object.entries(all)) {
-        if (value === undefined || value === null) continue;
+        const attr = key.toLowerCase();
+        if (value === undefined || value === null) {
+          // A prop that USED to have a value and now has none means the host is
+          // describing a different video — chapters that the next video doesn't
+          // have, a poster that resolved to nothing. Skipping it left the last
+          // video's attribute in place, so its chapter marks stayed on the
+          // scrubber of the next one.
+          //
+          // Only attributes this wrapper set are cleared. The player writes some
+          // of its own — `src` moves rung by rung on a premuxed ladder — and a
+          // host that leaves `src` unset because it uses <source> children would
+          // otherwise have every re-render tear the current rung off mid-play.
+          if (!written.has(attr)) continue;
+          written.delete(attr);
+          if (el.hasAttribute(attr)) el.removeAttribute(attr);
+          continue;
+        }
         // Reflect only primitives — a fallthrough event listener (onFoo) or an
         // object/array would otherwise be String()'d into a bogus attribute.
         if (typeof value === "function" || typeof value === "object") continue;
-        const attr = key.toLowerCase();
+        written.add(attr);
         if (typeof value === "boolean") {
           if (value) el.setAttribute(attr, "");
           else el.removeAttribute(attr);
