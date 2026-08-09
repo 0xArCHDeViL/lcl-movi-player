@@ -289,6 +289,94 @@ export interface MoviControlSpec {
  *  purpose: the bars sit beside the picture and are meant to be felt, not
  *  looked at — anything approaching the frame's own level pulls the eye off it.
  */
+/**
+ * A hotkey as it should be READ. Hosts write them the way the matcher wants
+ * them — "shift+c", "ctrl+alt+p" — and that is the right shape for matching and
+ * the wrong one for a tooltip, where it sits beside a capitalised name.
+ */
+function formatHotkey(hotkey: string): string {
+  const NAMES: Record<string, string> = {
+    " ": "Space",
+    arrowleft: "←",
+    arrowright: "→",
+    arrowup: "↑",
+    arrowdown: "↓",
+    escape: "Esc",
+  };
+  return hotkey
+    .split("+")
+    .map((part) => NAMES[part] || part.charAt(0).toUpperCase() + part.slice(1))
+    .join("+");
+}
+
+/**
+ * Every keyboard action the player performs, the keys it answers to out of the
+ * box, and the key its own handler is written against.
+ *
+ * The handler is a switch over the pressed key, which is a fine way to write
+ * twenty shortcuts and a hopeless way to let a host move one: the key and the
+ * behaviour are the same line of code. This table separates them. A press is
+ * resolved to an ACTION here, and the action's canonical key is what the switch
+ * is handed — so rebinding fullscreen to J is a change to this map and nothing
+ * else, and every surface that PRINTS a shortcut reads it from the same place
+ * rather than carrying its own copy of the letter.
+ *
+ * Digits are deliberately absent: 1-9 seek to a percentage of the duration and
+ * 0 to the start, which is one behaviour spread over ten keys rather than a
+ * shortcut anyone would move. Home and End likewise — those are the platform's.
+ */
+const SHORTCUT_ACTIONS: Record<
+  string,
+  { keys: string[]; canonical: string; label: string }
+> = {
+  playpause: { keys: [" ", "k"], canonical: " ", label: "Play / Pause" },
+  seekback: { keys: ["arrowleft"], canonical: "ArrowLeft", label: "Seek back" },
+  seekforward: {
+    keys: ["arrowright"],
+    canonical: "ArrowRight",
+    label: "Seek forward",
+  },
+  volumeup: { keys: ["arrowup"], canonical: "ArrowUp", label: "Volume up" },
+  volumedown: {
+    keys: ["arrowdown"],
+    canonical: "ArrowDown",
+    label: "Volume down",
+  },
+  mute: { keys: ["m"], canonical: "m", label: "Mute / Unmute" },
+  fullscreen: { keys: ["f"], canonical: "f", label: "Fullscreen" },
+  pip: { keys: ["p"], canonical: "p", label: "Picture-in-Picture" },
+  aspect: { keys: ["a"], canonical: "a", label: "Aspect ratio" },
+  rotate: { keys: ["r"], canonical: "r", label: "Rotate" },
+  loop: { keys: ["l"], canonical: "l", label: "Loop" },
+  stableaudio: { keys: ["u"], canonical: "u", label: "Stable volume" },
+  hdr: { keys: ["h"], canonical: "h", label: "HDR" },
+  snapshot: { keys: ["s"], canonical: "s", label: "Snapshot" },
+  stats: { keys: ["i"], canonical: "i", label: "Stats for nerds" },
+  timeline: { keys: ["t"], canonical: "t", label: "Timeline" },
+  subtitles: { keys: ["v"], canonical: "v", label: "Cycle subtitles" },
+  subtitledelayback: {
+    keys: ["z"],
+    canonical: "z",
+    label: "Subtitle delay back",
+  },
+  subtitledelayforward: {
+    keys: ["x"],
+    canonical: "x",
+    label: "Subtitle delay forward",
+  },
+  audiotrack: { keys: ["b"], canonical: "b", label: "Cycle audio" },
+  ambient: { keys: ["g"], canonical: "g", label: "Ambient mode" },
+  speedup: { keys: ["+", "="], canonical: "+", label: "Speed up" },
+  speeddown: { keys: ["-"], canonical: "-", label: "Speed down" },
+  shortcuts: { keys: ["?"], canonical: "?", label: "Shortcuts panel" },
+};
+
+/** Every key the table above claims by default, for deciding whether a press
+ *  that now matches nothing used to mean something — see resolveShortcutKey. */
+const DEFAULT_SHORTCUT_KEYS = new Set(
+  Object.values(SHORTCUT_ACTIONS).flatMap((a) => a.keys),
+);
+
 const AMBIENT_TARGET_LUM = 38;
 /** …and no single channel past this, so a saturated shot cannot ride one
  *  channel up into white. The cap has to sit far enough above the target that
@@ -1299,7 +1387,7 @@ export class MoviElement extends HTMLElement {
           <rect x="14" y="4" width="4" height="16"></rect>
         </svg>
         <span class="movi-context-menu-label">Play</span>
-        <span class="movi-context-menu-shortcut">Space</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="playpause">Space</span>
       </div>
       <div class="movi-context-menu-item" data-action="speed">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1307,6 +1395,7 @@ export class MoviElement extends HTMLElement {
           <path d="m12 12 4-4"></path>
         </svg>
         <span class="movi-context-menu-label">Playback Speed</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-pair="speedup,speeddown">+ / -</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu" data-submenu="speed">
@@ -1330,6 +1419,7 @@ export class MoviElement extends HTMLElement {
           <rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>
         </svg>
         <span class="movi-context-menu-label">Aspect Ratio</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="aspect">A</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu" data-submenu="fit">
@@ -1364,6 +1454,7 @@ export class MoviElement extends HTMLElement {
           <circle cx="18" cy="16" r="3"></circle>
         </svg>
         <span class="movi-context-menu-label">Audio Track</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="audiotrack">B</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu movi-context-menu-submenu-audio" data-submenu="audio-track" style="display: none;"></div>
@@ -1388,6 +1479,7 @@ export class MoviElement extends HTMLElement {
            <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
         </svg>
         <span class="movi-context-menu-label">Subtitle Track</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="subtitles">V</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu movi-context-menu-submenu-subtitle" data-submenu="subtitle-track" style="display: none;"></div>
@@ -1395,7 +1487,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-icon" style="font-weight:700;font-size:10px;letter-spacing:0.5px;width:16px;text-align:center;overflow:visible;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;">HDR</span>
         <span class="movi-context-menu-label">HDR Mode</span>
         <span class="movi-context-menu-status movi-hdr-status">On</span>
-        <span class="movi-context-menu-shortcut">H</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="hdr">H</span>
       </div>
       <div class="movi-context-menu-divider movi-hdr-divider" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-pip" data-action="pip" style="display: none;">
@@ -1403,14 +1495,14 @@ export class MoviElement extends HTMLElement {
           <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1"/>
         </svg>
         <span class="movi-context-menu-label">Picture in Picture</span>
-        <span class="movi-context-menu-shortcut">P</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="pip">P</span>
       </div>
       <div class="movi-context-menu-item" data-action="fullscreen">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
         </svg>
         <span class="movi-context-menu-label">Fullscreen</span>
-        <span class="movi-context-menu-shortcut">F</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="fullscreen">F</span>
       </div>
       <div class="movi-context-menu-item" data-action="rotate-video">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1419,7 +1511,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Rotate Video</span>
         <span class="movi-context-menu-status movi-rotate-status">0°</span>
-        <span class="movi-context-menu-shortcut">R</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="rotate">R</span>
       </div>
       <div class="movi-context-menu-item" data-action="loop-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1433,7 +1525,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Loop</span>
         <span class="movi-context-menu-status movi-loop-status">Off</span>
-        <span class="movi-context-menu-shortcut">L</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="loop">L</span>
       </div>
       <div class="movi-context-menu-item" data-action="stable-audio-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -1449,7 +1541,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Stable Volume</span>
         <span class="movi-context-menu-status movi-stable-audio-status">Off</span>
-        <span class="movi-context-menu-shortcut">U</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="stableaudio">U</span>
       </div>
       <div class="movi-context-menu-item" data-action="ambient-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1472,7 +1564,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Ambient Mode</span>
         <span class="movi-context-menu-status movi-ambient-status">Off</span>
-        <span class="movi-context-menu-shortcut">G</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="ambient">G</span>
       </div>
       <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
@@ -1481,7 +1573,7 @@ export class MoviElement extends HTMLElement {
           <circle cx="12" cy="13" r="4"></circle>
         </svg>
         <span class="movi-context-menu-label">Snapshot</span>
-        <span class="movi-context-menu-shortcut">S</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="snapshot">S</span>
       </div>
       <div class="movi-context-menu-item" data-action="timeline">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1495,7 +1587,7 @@ export class MoviElement extends HTMLElement {
           <line x1="2" y1="21" x2="22" y2="21"></line>
         </svg>
         <span class="movi-context-menu-label">Timeline</span>
-        <span class="movi-context-menu-shortcut">T</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="timeline">T</span>
       </div>
       <div class="movi-context-menu-item" data-action="nerd-stats">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1504,7 +1596,7 @@ export class MoviElement extends HTMLElement {
           <path d="M6 20v-4"></path>
         </svg>
         <span class="movi-context-menu-label">Stats for nerds</span>
-        <span class="movi-context-menu-shortcut">I</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="stats">I</span>
       </div>
       <div class="movi-context-menu-item" data-action="keyboard-shortcuts">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1512,7 +1604,7 @@ export class MoviElement extends HTMLElement {
           <path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 14h12"></path>
         </svg>
         <span class="movi-context-menu-label">Keyboard Shortcuts</span>
-        <span class="movi-context-menu-shortcut">?</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="shortcuts">?</span>
       </div>
     `;
     shadowRoot.appendChild(contextMenu);
@@ -1769,7 +1861,7 @@ export class MoviElement extends HTMLElement {
                  work — their menus are borrowed into this panel a page at a
                  time — but only this one is on the bar. -->
             <div class="movi-settings-container">
-              <button class="movi-btn movi-settings-btn" aria-label="Settings" title="Settings">
+              <button class="movi-btn movi-settings-btn" aria-label="Settings">
                 <svg class="movi-icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
                   <circle cx="12" cy="12" r="3"></circle>
@@ -1833,10 +1925,19 @@ export class MoviElement extends HTMLElement {
             </button>
           </div>
         </div>
+
+        <!-- One tooltip for the whole row, moved to whichever button the
+             cursor is on. Sixteen of them, each parked under its own button,
+             is sixteen elements laid out for a thing only one of which is ever
+             on screen. -->
+        <div class="movi-btn-tip" role="tooltip" aria-hidden="true">
+          <span class="movi-btn-tip-text"></span><kbd class="movi-btn-tip-key"></kbd>
+        </div>
       </div>
     `;
     shadowRoot.appendChild(container);
     this.controlsContainer = container;
+    this.setupControlTooltips(container);
 
     // 360° on-screen pan joystick (YouTube-style compass), top-left. CSS only
     // reveals it when 360 is active AND the controls are visible AND the device
@@ -2070,29 +2171,29 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-shortcuts-body">
         <div class="movi-shortcuts-col">
-          <div class="movi-shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>F</kbd><span>Fullscreen</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>P</kbd><span>Picture-in-Picture</span></div>
-          <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
-          <div class="movi-shortcut-row"><kbd>&uarr; / &darr;</kbd><span>Volume</span></div>
-          <div class="movi-shortcut-row" data-fastseek-keys><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="playpause">Space</kbd><span>Play / Pause</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="fullscreen">F</kbd><span>Fullscreen</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="pip">P</kbd><span>Picture-in-Picture</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="mute">M</kbd><span>Mute / Unmute</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-pair="volumeup,volumedown">&uarr; / &darr;</kbd><span>Volume</span></div>
+          <div class="movi-shortcut-row" data-fastseek-keys><kbd data-shortcut-pair="seekback,seekforward">&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
           <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
           <div class="movi-shortcut-row" data-video-only data-fastseek-keys><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
-          <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>V</kbd><span>Cycle Subtitles</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
-          <div class="movi-shortcut-row"><kbd>B</kbd><span>Cycle Audio</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-pair="speedup,speeddown">+/-</kbd><span>Speed Up/Down</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="subtitles">V</kbd><span>Cycle Subtitles</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-pair="subtitledelayback,subtitledelayforward">Z / X</kbd><span>Subtitle Delay</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="audiotrack">B</kbd><span>Cycle Audio</span></div>
         </div>
         <div class="movi-shortcuts-col">
-          <div class="movi-shortcut-row" data-video-only><kbd>A</kbd><span>Aspect Ratio</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>R</kbd><span>Rotate Video</span></div>
-          <div class="movi-shortcut-row"><kbd>L</kbd><span>Loop</span></div>
-          <div class="movi-shortcut-row"><kbd>U</kbd><span>Stable Volume</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>H</kbd><span>HDR Mode</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>S</kbd><span>Snapshot</span></div>
-          <div class="movi-shortcut-row"><kbd>I</kbd><span>Stats for Nerds</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd>T</kbd><span>Timeline</span></div>
-          <div class="movi-shortcut-row"><kbd>?</kbd><span>This Panel</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="aspect">A</kbd><span>Aspect Ratio</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="rotate">R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="loop">L</kbd><span>Loop</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="stableaudio">U</kbd><span>Stable Volume</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="hdr">H</kbd><span>HDR Mode</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="snapshot">S</kbd><span>Snapshot</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="stats">I</kbd><span>Stats for Nerds</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="timeline">T</kbd><span>Timeline</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="shortcuts">?</kbd><span>This Panel</span></div>
         </div>
       </div>
     `;
@@ -2135,6 +2236,212 @@ export class MoviElement extends HTMLElement {
     // Setup control handlers
     this.setupControlHandlers(shadowRoot);
     this.setupSettingsPanel(shadowRoot);
+  }
+
+  /** The single tooltip element, and the button it is currently describing. */
+  private controlTipEl: HTMLElement | null = null;
+  private controlTipFor: HTMLElement | null = null;
+
+  /**
+   * Name every button on hover. An icon row is only legible to someone who
+   * already knows the icons, and the native title attribute is not the answer:
+   * it waits about a second, paints in the OS style rather than the player's,
+   * and cannot show the key that does the same thing.
+   *
+   * One listener on the row rather than three per button — the row is rebuilt
+   * whenever a host adds or removes a control, and delegated handlers survive
+   * that on their own.
+   */
+  private setupControlTooltips(container: HTMLElement): void {
+    const row = container.querySelector(
+      ".movi-buttons-row",
+    ) as HTMLElement | null;
+    const tip = container.querySelector(".movi-btn-tip") as HTMLElement | null;
+    if (!row || !tip) return;
+    this.controlTipEl = tip;
+
+    row.addEventListener("pointerover", (e) => {
+      const ev = e as PointerEvent;
+      // Touch has no hover: the tooltip would appear under a finger already on
+      // its way to a tap, and stay there with nothing to dismiss it.
+      if (ev.pointerType === "touch") return;
+      // The slider is not a button and is named separately below — it sits
+      // right beside mute and shares the row, so it needs a tooltip of its own
+      // rather than inheriting the one from the control next to it.
+      const btn = (ev.target as HTMLElement | null)?.closest?.(
+        ".movi-btn, .movi-volume-slider, .movi-time",
+      ) as HTMLElement | null;
+      // Over neither — the clock, the gaps between controls. Hovering those has
+      // to CLEAR the tooltip rather than leave the last one standing.
+      if (!btn || !row.contains(btn)) {
+        this.hideControlTip();
+        return;
+      }
+      if (btn === this.controlTipFor) return;
+      this.showControlTip(btn);
+    });
+
+    // pointerleave on the ROW, not pointerout on the button: out fires on every
+    // crossing into a child svg and on every hop between neighbours, so the
+    // tooltip would blink its way along the bar.
+    row.addEventListener("pointerleave", () => this.hideControlTip());
+
+    // Keeps it over its button while the row reflows underneath — see
+    // positionControlTip. Two rect reads on a pointer that is already moving.
+    row.addEventListener("pointermove", () => {
+      if (this.controlTipFor) this.positionControlTip();
+    });
+
+    // Capture, because the buttons stop this event: nearly every handler on
+    // this row calls stopPropagation to keep the click off the video, so a
+    // listener waiting on the bubble never hears about it.
+    row.addEventListener(
+      "click",
+      () => {
+        const btn = this.controlTipFor;
+        if (!btn) return;
+        // A click either changes what the button says — Play becomes Pause — or
+        // opens a panel this would sit on top of. Let it settle, then re-read.
+        requestAnimationFrame(() => {
+          if (this.controlTipFor !== btn) return;
+          if (this.isAnyMenuOpen()) this.hideControlTip();
+          else this.showControlTip(btn);
+        });
+      },
+      true,
+    );
+  }
+
+  private showControlTip(btn: HTMLElement): void {
+    const tip = this.controlTipEl;
+    const bar = tip?.parentElement;
+    if (!tip || !bar) return;
+    const info = this.controlTipInfo(btn);
+    if (!info) {
+      this.hideControlTip();
+      return;
+    }
+    const text = tip.querySelector(".movi-btn-tip-text") as HTMLElement | null;
+    const key = tip.querySelector(".movi-btn-tip-key") as HTMLElement | null;
+    if (text) text.textContent = info.text;
+    if (key) key.textContent = info.key;
+    this.controlTipFor = btn;
+    tip.classList.add("movi-btn-tip-on");
+    tip.setAttribute("aria-hidden", "false");
+    this.positionControlTip();
+  }
+
+  /**
+   * Put the tooltip over its button. Separate from showing it because the row
+   * moves under a still cursor: Picture-in-Picture appears once support is
+   * confirmed, the clock widens crossing ten minutes, quality arrives with the
+   * ladder. Each shifts every button beside it, and a tooltip placed once ends
+   * up naming its neighbour.
+   */
+  private positionControlTip(): void {
+    const tip = this.controlTipEl;
+    const btn = this.controlTipFor;
+    const bar = tip?.parentElement;
+    if (!tip || !btn || !bar) return;
+    // Centred on the button, then pulled back inside the bar. The first and
+    // last buttons sit within half a tooltip of the edge, so centring alone
+    // hangs Play off the left of the player.
+    const barRect = bar.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    const half = tip.offsetWidth / 2;
+    const centre = btnRect.left + btnRect.width / 2 - barRect.left;
+    const limit = Math.max(half + 4, barRect.width - half - 4);
+    tip.style.left = Math.max(half + 4, Math.min(limit, centre)).toFixed(1) + "px";
+    // Clear of the seek bar, not just of the button. Sitting directly over the
+    // row it covered the progress track, and the track is the one thing on this
+    // bar a viewer watches while reaching for a button.
+    const above = (
+      bar.querySelector(".movi-progress-container") || btn
+    ).getBoundingClientRect();
+    tip.style.bottom = (barRect.bottom - above.top + 6).toFixed(1) + "px";
+  }
+
+  private hideControlTip(): void {
+    const tip = this.controlTipEl;
+    this.controlTipFor = null;
+    if (!tip) return;
+    tip.classList.remove("movi-btn-tip-on");
+    tip.setAttribute("aria-hidden", "true");
+  }
+
+  /**
+   * What a button is called right now, and the key that does the same thing.
+   *
+   * The labels are not the aria-labels: those name the CONTROL and stay put
+   * ("Play/Pause", "Mute/Unmute"), which is right for a screen reader reading a
+   * button and wrong for a tooltip, which is read as what the click is about to
+   * do. The keys are the ones the shortcuts sheet lists — one set of answers.
+   */
+  private controlTipInfo(
+    btn: HTMLElement,
+  ): { text: string; key: string } | null {
+    // A host control brings its own, and an empty one means the host asked for
+    // no tooltip at all (title: null).
+    const own = btn.dataset.tip;
+    if (own !== undefined) {
+      return own ? { text: own, key: btn.dataset.tipKey || "" } : null;
+    }
+    const is = (cls: string) => btn.classList.contains(cls);
+    // The key comes from the binding, never from a letter written here: a host
+    // that moved a shortcut moved what the tooltip should say with it.
+    const k = (action: string) => this.shortcutLabel(action);
+    if (is("movi-play-pause"))
+      return { text: this.paused ? "Play" : "Pause", key: k("playpause") };
+    if (is("movi-seek-backward"))
+      return { text: "Back 10 seconds", key: k("seekback") };
+    if (is("movi-seek-forward"))
+      return { text: "Forward 10 seconds", key: k("seekforward") };
+    if (is("movi-volume-btn"))
+      return { text: this.muted ? "Unmute" : "Mute", key: k("mute") };
+    if (is("movi-time")) {
+      // What the click will DO, the way Play and Mute read — the clock is a
+      // toggle between elapsed and remaining, and naming the state it is
+      // already in tells nobody anything.
+      return {
+        text: this._timeShowsRemaining
+          ? "Show elapsed time"
+          : "Show remaining time",
+        key: "",
+      };
+    }
+    if (is("movi-volume-slider")) {
+      // Both directions on one chip, the way the shortcuts sheet prints them —
+      // the slider is one control and the keys are the two ends of it.
+      const pair = [k("volumeup"), k("volumedown")].filter(Boolean);
+      return { text: "Volume", key: pair.join(" / ") };
+    }
+    if (is("movi-audio-track-btn"))
+      return { text: "Audio track", key: k("audiotrack") };
+    if (is("movi-hdr-btn")) return { text: "HDR", key: k("hdr") };
+    if (is("movi-subtitle-track-btn"))
+      return { text: "Subtitles", key: k("subtitles") };
+    if (is("movi-quality-btn")) return { text: "Quality", key: "" };
+    if (is("movi-speed-btn")) {
+      // Both directions, like the panel row and the shortcuts sheet: one
+      // control, one key each way.
+      const pair = [k("speedup"), k("speeddown")].filter(Boolean);
+      return { text: "Playback speed", key: pair.join(" / ") };
+    }
+    if (is("movi-stable-audio-btn"))
+      return { text: "Stable volume", key: k("stableaudio") };
+    if (is("movi-loop-btn")) return { text: "Loop", key: k("loop") };
+    if (is("movi-settings-btn")) return { text: "Settings", key: "" };
+    if (is("movi-aspect-ratio-btn"))
+      return { text: "Aspect ratio", key: k("aspect") };
+    if (is("movi-pip-btn")) return { text: "Picture-in-picture", key: k("pip") };
+    if (is("movi-more-btn")) return { text: "More", key: "" };
+    if (is("movi-fullscreen-btn"))
+      return {
+        text: document.fullscreenElement ? "Exit full screen" : "Full screen",
+        key: k("fullscreen"),
+      };
+    const label = btn.getAttribute("aria-label");
+    return label ? { text: label, key: "" } : null;
   }
 
   private setupControlHandlers(shadowRoot: ShadowRoot): void {
@@ -2231,7 +2538,9 @@ export class MoviElement extends HTMLElement {
     ].filter(Boolean) as HTMLElement[];
     for (const el of timeEls) {
       el.style.cursor = "pointer";
-      el.title = "Switch between elapsed and remaining time";
+      // Named by the player's own tooltip (see controlTipInfo), not by the
+      // browser's — this is a control on the bar like any other, and it was the
+      // last one still waiting a second to paint a label in the OS style.
       el.addEventListener("click", (e) => {
         e.stopPropagation();
         this._timeShowsRemaining = !this._timeShowsRemaining;
@@ -4428,7 +4737,10 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      switch (e.key) {
+      // Resolved, not raw: a press becomes the ACTION it means, expressed as
+      // the key this switch was written against, so a host that moved a
+      // shortcut moves what happens here with it. See resolveShortcutKey.
+      switch (this.resolveShortcutKey(e)) {
         case " ":
         case "k":
         case "K": {
@@ -11883,6 +12195,21 @@ export class MoviElement extends HTMLElement {
     aspect: { title: "Aspect", list: "", owner: "" },
   };
 
+  /** Which ACTION each panel row also answers to. Not the letter: the letter is
+   *  whatever the binding says today, and a row carrying its own copy would go
+   *  stale the moment a host moved it. Rows absent from here have no key —
+   *  Quality is a ladder the player picks from, and there is no key for a
+   *  ladder. */
+  private static readonly SETTINGS_ACTIONS: Record<string, string> = {
+    speed: "speedup,speeddown",
+    audio: "audiotrack",
+    subtitles: "subtitles",
+    hdr: "hdr",
+    stable: "stableaudio",
+    loop: "loop",
+    aspect: "aspect",
+  };
+
   /** Row icons, drawn to match the context menu's (16px, 1.8-2 stroke). A list
    *  of bare words is slower to scan than a list with marks against it — and
    *  these are the same marks the context menu already trained people on. */
@@ -12115,16 +12442,32 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!root) return;
     const chevron = `<svg class="movi-settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
+    // The key that reaches this row without opening the panel at all. The rows
+    // that HAVE one were the bar buttons before the gear collected them, and
+    // their keys still work — the panel was simply the one surface that never
+    // said so, while the context menu and the shortcuts sheet both did.
+    const key = (rowKey: string) => {
+      // A row can name a PAIR — speed is one row and two keys, one each way.
+      // shortcutLabel is empty for an unbound action and for a player with
+      // hotkeys switched off, so a pair with one half gone prints the half that
+      // is left, and naming a key that does nothing never happens.
+      const k = (MoviElement.SETTINGS_ACTIONS[rowKey] || "")
+        .split(",")
+        .map((action) => this.shortcutLabel(action))
+        .filter(Boolean)
+        .join(" / ");
+      return k ? `<kbd class="movi-settings-key">${k}</kbd>` : "";
+    };
     const rows: string[] = [];
     const page = (
-      key: string,
+      pageKey: string,
       label: string,
       container: string,
       item: string,
     ) => {
       if (!this.settingsRowAvailable(container, item)) return;
       rows.push(
-        `<button type="button" class="movi-settings-row" data-page="${key}">${MoviElement.SETTINGS_ICONS[key] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue(key))}</span>${chevron}</button>`,
+        `<button type="button" class="movi-settings-row" data-page="${pageKey}">${MoviElement.SETTINGS_ICONS[pageKey] || ""}<span class="movi-settings-row-label">${label}</span>${key(pageKey)}<span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue(pageKey))}</span>${chevron}</button>`,
       );
     };
     // Refresh first: these menus only rebuild when their own (now hidden)
@@ -12163,7 +12506,7 @@ export class MoviElement extends HTMLElement {
       }
     }
     rows.push(
-      `<button type="button" class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
+      `<button type="button" class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span>${key("speed")}<span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
     );
     page(
       "audio",
@@ -12178,8 +12521,8 @@ export class MoviElement extends HTMLElement {
       ".movi-subtitle-track-item",
     );
 
-    const toggle = (key: string, label: string, on: boolean) =>
-      `<button type="button" class="movi-settings-row" data-toggle="${key}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[key] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
+    const toggle = (toggleKey: string, label: string, on: boolean) =>
+      `<button type="button" class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span>${key(toggleKey)}<span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
     rows.push(`<div class="movi-settings-divider"></div>`);
     // HDR: defer to the decision the bar's own logic already made.
     // updateHdrVisibility writes "flex" on the container only when HDR is
@@ -12208,7 +12551,7 @@ export class MoviElement extends HTMLElement {
     // button is already absent there; this row was the one that wasn't.
     if (!audioOnly && this.isControlAvailable("aspect")) {
       rows.push(
-      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
+      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span>${key("aspect")}<span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
       );
     }
     root.innerHTML = rows.join("");
@@ -12550,6 +12893,9 @@ export class MoviElement extends HTMLElement {
     if (container) {
       container.classList.remove("movi-controls-visible");
       container.classList.add("movi-controls-hidden");
+      // The bar going away takes its tooltip with it: the cursor never leaves
+      // the button (the bar is pulled out from under it), so nothing else would.
+      this.hideControlTip();
       this.syncBarCollapsedClass();
 
       // Collapse the touch-expanded volume slider along with the bar — leaving
@@ -14471,6 +14817,66 @@ export class MoviElement extends HTMLElement {
         /* No hairline top accent: the bar background already fades out
            into the picture, and a hard 1px line across that fade drew a
            visible edge where the gradient is meant to have none. */
+      }
+
+      /* The name that appears over a hovered button. Placed by script against
+         the bar, which is why left and bottom are set inline; everything about
+         how it LOOKS lives here. Same surface family as the menus that open off
+         this row, so the bar names its buttons in the chrome it already uses. */
+      .movi-btn-tip {
+        position: absolute;
+        left: 0;
+        bottom: 100%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 9px;
+        background: var(--movi-chrome-bg);
+        color: var(--movi-chrome-fg);
+        border: 1px solid var(--movi-chrome-border);
+        border-radius: var(--movi-radius-control);
+        font-size: 12px;
+        line-height: 1.2;
+        white-space: nowrap;
+        /* It follows the cursor around the row; it must never be under it. */
+        pointer-events: none;
+        z-index: 20;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 90ms ease;
+      }
+
+      .movi-btn-tip-on {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .movi-btn-tip-key {
+        padding: 1px 5px;
+        border: 1px solid var(--movi-chrome-border);
+        border-radius: var(--movi-radius-badge-sm);
+        /* The chrome foreground held back, NOT --movi-text-secondary: that one
+           flips to near-black for menus on a light surface, and this surface is
+           always dark — the key came out black on black under the light theme. */
+        color: var(--movi-chrome-fg);
+        opacity: 0.75;
+        font-family: inherit;
+        font-size: 11px;
+      }
+
+      /* No key for this button, no chip: an empty box beside the name reads as
+         a shortcut nobody printed. */
+      .movi-btn-tip-key:empty {
+        display: none;
+      }
+
+      /* Hover is a mouse idea. A device without one has no way to see this and
+         no way to dismiss it. */
+      @media (hover: none), (pointer: coarse) {
+        .movi-btn-tip {
+          display: none;
+        }
       }
 
       .movi-progress-container {
@@ -18632,6 +19038,22 @@ export class MoviElement extends HTMLElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      /* The key chip on a row. Sits with the label rather than at the row's end
+         — the end is where the VALUE is, and a key is not a value. Follows the
+         panel's own foreground (the panel flips to a light surface under the
+         light theme, unlike the always-dark bar), so it is legible in both. */
+      .movi-settings-key {
+        flex: 0 0 auto;
+        margin-left: 8px;
+        padding: 1px 5px;
+        border: 1px solid var(--movi-glass-border);
+        border-radius: var(--movi-radius-badge-sm);
+        font-family: inherit;
+        font-size: 11px;
+        line-height: 1.5;
+        opacity: 0.6;
+      }
+
       .movi-settings-row-value {
         flex: 0 1 auto;
         /* Right-aligned by the margin, not by growing: the trailing element of
@@ -27365,6 +27787,167 @@ export class MoviElement extends HTMLElement {
    * put the KEY first — indexOf returns -1 for anything that is not a modifier
    * — and nothing ever matched. Empty when there is no single key.
    */
+  /** Only what the host has CHANGED. The defaults live in SHORTCUT_ACTIONS and
+   *  are not copied in here, so a player that was never re-bound carries no
+   *  per-instance shortcut state at all. */
+  private _shortcutOverrides = new Map<string, string[]>();
+
+  /**
+   * Rebind a shortcut. One key or several; null or an empty array takes the
+   * action off the keyboard entirely.
+   *
+   *   player.setShortcut("fullscreen", "j");
+   *   player.setShortcut("mute", ["m", "shift+m"]);
+   *   player.setShortcut("loop", null);
+   *
+   * The action is either a built-in (see SHORTCUT_ACTIONS — "playpause",
+   * "seekforward", "mute", …) or the id of a control the host added, in which
+   * case this is the same as updateControl with a new hotkey, except that a
+   * control may now answer to more than one key.
+   *
+   * Rebinding is a MOVE, not an addition: the old key stops doing anything
+   * rather than continuing to work alongside the new one, which is the whole
+   * point of moving it. Returns false for an unknown action.
+   */
+  setShortcut(action: string, keys: string | string[] | null): boolean {
+    const list = (keys === null ? [] : Array.isArray(keys) ? keys : [keys])
+      .map((k) => (k === "+" ? "+" : this.normaliseHotkey(k)))
+      .filter(Boolean);
+    const custom = this._customControls.get(action);
+    if (custom) {
+      // A custom control keeps its own hotkey field — one string, because that
+      // is what the spec exposes — and the extra keys ride alongside it.
+      custom.spec.hotkey = list[0];
+      this._shortcutOverrides.set(action, list);
+      this.refreshShortcutLabels();
+      return true;
+    }
+    if (!SHORTCUT_ACTIONS[action]) {
+      Logger.warn(TAG, `setShortcut: no action named "${action}"`);
+      return false;
+    }
+    this._shortcutOverrides.set(action, list);
+    this.refreshShortcutLabels();
+    return true;
+  }
+
+  /** The keys this action currently answers to, normalised. Empty when it has
+   *  been unbound or the action does not exist. */
+  getShortcut(action: string): string[] {
+    const override = this._shortcutOverrides.get(action);
+    if (override) return [...override];
+    const custom = this._customControls.get(action);
+    if (custom) return custom.spec.hotkey ? [custom.spec.hotkey] : [];
+    return [...(SHORTCUT_ACTIONS[action]?.keys ?? [])];
+  }
+
+  /** Every action and the keys it answers to right now — built-ins first, then
+   *  whatever the host has added. A snapshot; editing it changes nothing. */
+  get shortcuts(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const action of Object.keys(SHORTCUT_ACTIONS)) {
+      out[action] = this.getShortcut(action);
+    }
+    for (const id of this._customControls.keys()) out[id] = this.getShortcut(id);
+    return out;
+  }
+
+  /** Put every action's keys back the way they shipped. */
+  resetShortcuts(): void {
+    this._shortcutOverrides.clear();
+    this.refreshShortcutLabels();
+  }
+
+  /** The first key of an action, ready to print. Empty when unbound, or when
+   *  the host has switched hotkeys off entirely. */
+  private shortcutLabel(action: string): string {
+    if (this._noHotkeys) return "";
+    const keys = this.getShortcut(action);
+    return keys.length ? this.formatHotkey(keys[0]) : "";
+  }
+
+  /**
+   * Which action a press means, expressed as the key the switch below is
+   * written against.
+   *
+   * Three outcomes. The press belongs to an action, and its canonical key comes
+   * back — this is the ordinary path, and with no rebinding at all it hands the
+   * switch exactly the key that was pressed. Or the press is a key that USED to
+   * mean something and has since been moved away, and it comes back empty so it
+   * matches no case. Or it is none of our business — a digit, Home, Escape —
+   * and it passes straight through.
+   */
+  private resolveShortcutKey(e: KeyboardEvent): string {
+    const bare = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+    const combo = [
+      e.ctrlKey ? "ctrl" : "",
+      e.metaKey ? "meta" : "",
+      e.altKey ? "alt" : "",
+      e.shiftKey ? "shift" : "",
+      bare,
+    ]
+      .filter(Boolean)
+      .join("+");
+    for (const action of Object.keys(SHORTCUT_ACTIONS)) {
+      const keys = this.getShortcut(action);
+      // The full combination first, so a host can bind Shift+M. Then the bare
+      // key, but only when nothing beyond Shift is held: Shift is how "+" and
+      // "?" are typed in the first place, and the switch has always treated a
+      // shifted letter as its lowercase self.
+      if (
+        keys.includes(combo) ||
+        (!e.ctrlKey && !e.metaKey && !e.altKey && keys.includes(bare))
+      ) {
+        return SHORTCUT_ACTIONS[action].canonical;
+      }
+    }
+    // Claimed by nobody. If it is a key the player ships with, the host has
+    // moved that action elsewhere and this press is now dead — returning it
+    // unchanged would fire the built-in the rebinding was meant to move.
+    if (DEFAULT_SHORTCUT_KEYS.has(bare) && this._shortcutOverrides.size > 0) {
+      return "";
+    }
+    return e.key;
+  }
+
+  /**
+   * Rewrite every printed shortcut from the current bindings — the context
+   * menu, the shortcuts sheet, the settings rows and the bar's tooltips all
+   * name keys, and a rebinding that only changed what the keyboard did would
+   * leave four surfaces lying about it.
+   */
+  private refreshShortcutLabels(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const write = (el: HTMLElement, label: string) => {
+      el.textContent = label;
+      // An action with no key left leaves the sheet entirely — a row naming a
+      // behaviour with nothing to press is not a shortcut. Elsewhere only the
+      // key disappears; the menu item itself still works by click.
+      const row = el.closest(".movi-shortcut-row") as HTMLElement | null;
+      (row ?? el).style.display = label ? "" : "none";
+    };
+    for (const el of Array.from(
+      sr.querySelectorAll("[data-shortcut-action]"),
+    ) as HTMLElement[]) {
+      write(el, this.shortcutLabel(el.dataset.shortcutAction || ""));
+    }
+    // Rows that name a PAIR — seek back and forward, volume up and down. Both
+    // halves come from their own binding, and a pair with one half unbound
+    // prints the half that is left.
+    for (const el of Array.from(
+      sr.querySelectorAll("[data-shortcut-pair]"),
+    ) as HTMLElement[]) {
+      const halves = (el.dataset.shortcutPair || "")
+        .split(",")
+        .map((a) => this.shortcutLabel(a))
+        .filter(Boolean);
+      write(el, halves.join(" / "));
+    }
+    this.buildSettingsRoot();
+    if (this.controlTipFor) this.showControlTip(this.controlTipFor);
+  }
+
   private normaliseHotkey(hotkey: string): string {
     const parts = hotkey
       .split("+")
@@ -27380,15 +27963,8 @@ export class MoviElement extends HTMLElement {
   /** "shift+a" → "Shift+A", for the menu row. Empty for no hotkey. */
   private formatHotkey(hotkey?: string): string {
     if (!hotkey) return "";
-    return hotkey
-      .split("+")
-      .map((part) => {
-        const p = part.trim();
-        if (!p) return "";
-        return p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1).toLowerCase();
-      })
-      .filter(Boolean)
-      .join("+");
+    if (hotkey === "+") return "+";
+    return formatHotkey(hotkey);
   }
 
   /**
@@ -27508,7 +28084,13 @@ export class MoviElement extends HTMLElement {
         btn.dataset.customControl = id;
         this.markCustomMediaScope(btn, spec);
         btn.setAttribute("aria-label", spec.label);
-        if (spec.title !== null) btn.title = spec.title ?? spec.label;
+        // Through the player's own tooltip rather than the browser's, so a host
+        // control is named the same way, in the same style, at the same moment
+        // as every built-in beside it. title: null still means none — recorded
+        // as an EMPTY tip rather than an absent one, since absent falls back to
+        // the aria-label, which every control has.
+        btn.dataset.tip = spec.title === null ? "" : (spec.title ?? spec.label);
+        if (spec.hotkey) btn.dataset.tipKey = formatHotkey(spec.hotkey);
         if (spec.toggle) btn.setAttribute("aria-pressed", String(entry.active));
         const icon = this.buildCustomIcon(spec.icon);
         if (icon) btn.appendChild(icon);

@@ -1861,7 +1861,7 @@ player.addControl({
 | `id` | Unique; the handle for `updateControl` / `removeControl`, and the token `controlslist` uses to switch it off |
 | `label` | Accessible name, tooltip, and the text on the menu row |
 | `icon` | Inline SVG markup or an element to clone. Without one the label is drawn as text |
-| `title` | Tooltip override; `null` for none |
+| `title` | Tooltip override; `null` for none. Drawn by the player over the bar, like every built-in's, with the `hotkey` beside it — not the browser's native tooltip |
 | `side` | `"left"` / `"right"` (default) end of the bar |
 | `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, … |
 | `placement` | `"bar"` (default), `"menu"`, `"both"` |
@@ -1900,6 +1900,55 @@ reflect state the host owns, `{ value: "720p" }` to move a submenu's tick.
 
 The current state of a custom toggle, and whether a control (custom or
 built-in) has been switched off by [`controlslist`](#controlslist).
+
+---
+
+### Keyboard Shortcuts
+
+Every built-in shortcut can be moved, given extra keys, or taken off the
+keyboard entirely — and so can the hotkey of a control you added yourself.
+
+#### `setShortcut(action, keys)`
+
+```typescript
+player.setShortcut("fullscreen", "j");            // move it
+player.setShortcut("mute", ["m", "shift+m"]);     // more than one key
+player.setShortcut("loop", null);                 // off the keyboard
+player.setShortcut("cast", "shift+c");            // a control you added, by id
+```
+
+`keys` takes one key, an array of them, or `null`. Returns `false` for an
+unknown action.
+
+Rebinding **moves** a shortcut: the old key stops doing anything rather than
+continuing to work beside the new one. Everything that PRINTS the key follows
+along — the button tooltips, the settings panel rows, the context menu, and the
+keyboard shortcuts sheet, which drops a row whose action you unbound.
+
+#### `getShortcut(action): string[]` · `shortcuts` · `resetShortcuts()`
+
+```typescript
+player.getShortcut("mute");     // ["m", "shift+m"]
+player.shortcuts;               // every action → its keys, built-ins and yours
+player.resetShortcuts();        // back to the defaults
+```
+
+**Actions.** `playpause`, `seekback`, `seekforward`, `volumeup`, `volumedown`,
+`mute`, `fullscreen`, `pip`, `aspect`, `rotate`, `loop`, `stableaudio`, `hdr`,
+`snapshot`, `stats`, `timeline`, `subtitles`, `subtitledelayback`,
+`subtitledelayforward`, `audiotrack`, `ambient`, `speedup`, `speeddown`,
+`shortcuts` — plus the `id` of any control you added.
+
+Keys are written the way `hotkey` is: a single key, optionally with
+`ctrl` / `meta` / `alt` / `shift` in front — `"j"`, `"shift+m"`, `"ctrl+alt+p"`.
+
+Two groups are deliberately not remappable. The digits seek to a percentage of
+the duration (`0` to the start, `1`–`9` to 10%–90%), which is one behaviour
+spread over ten keys rather than a shortcut anyone moves; `Home` and `End`
+belong to the platform.
+
+[`nohotkeys`](#nohotkeys) still switches the whole keyboard off; while it is set
+the tooltips and the settings rows stop naming keys.
 
 ---
 
