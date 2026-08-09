@@ -4937,10 +4937,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const skipVideoDecodeForAudio =
       audioInPipeline && (videoBufferFull || videoDecoderFull) && audioStarving;
 
+    // Audio's cushion must not hold the loop shut while the PICTURE has
+    // nothing at all. Coming back from a backgrounded tab the two are at
+    // opposite extremes by construction: the background timer kept decoding
+    // audio, so its buffer is seconds over target, while video was skipped
+    // entirely and its queues are empty. The single "audio is full → read
+    // nothing" gate then stopped every read — audio AND video — until the
+    // cushion drained back under target in real time. Measured: a 12-second
+    // background stint returned with ~3.8s of audio buffered and the first
+    // packet was not read for 1.5s, the whole of it with an empty video queue.
+    // That was the frozen picture.
+    //
+    // Narrow on purpose: only while a video-only catch-up is in flight (see
+    // _videoResumeTarget), which ends as soon as the first frame lands. The
+    // audio DECODER's own queue gate above still applies, so this cannot flood
+    // it; all it allows is reading ahead by the few hundred ms the catch-up
+    // takes.
+    const catchingUpVideo = this._videoResumeTarget !== -1;
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
       (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
-      (gateOnAudio && audioBuffered > maxAudioBuffered) ||
+      (gateOnAudio && !catchingUpVideo && audioBuffered > maxAudioBuffered) ||
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && videoBuffered > maxVideoBuffered)
     ) {
       if (
