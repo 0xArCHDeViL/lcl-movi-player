@@ -18877,10 +18877,11 @@ export class MoviElement extends HTMLElement {
            The fallback is the 16:9 box this used to be. */
         width: var(--movi-preview-w, 168px);
         height: var(--movi-preview-h, auto);
-        /* Only reachable before the track is known, where the height is auto
+        /* Only meant for before the track is known, where the height is auto
            and a tall frame would otherwise size the card off the top of the
-           player. */
-        max-height: 158px;
+           player. Follows the box once there IS one — as a flat 158 it silently
+           clipped the taller frames a wide player now asks for. */
+        max-height: var(--movi-preview-h, 158px);
         object-fit: contain;
         /* No outline. The frame stands off the picture on its shadow alone —
            a hairline around a moving image at this size reads as a stray edge
@@ -28143,10 +28144,50 @@ export class MoviElement extends HTMLElement {
    * Apply rotation transform + margin to a seek thumbnail image
    */
   /** The preview frame's box, as wide and as tall as the SOURCE's proportions
-   *  allow inside these caps. */
+   *  allow inside these caps — the floor, for a player small enough that the
+   *  frame is competing with the picture for room. See previewCaps. */
   private static readonly PREVIEW_MAX_W = 168;
   private static readonly PREVIEW_MAX_H = 158;
   private _previewBoxKey = "";
+
+  /**
+   * How big the preview frame may be, measured against the PLAYER.
+   *
+   * 168px is a readable thumbnail on a 700px embed and a postage stamp on a
+   * 2560px one: the frame is there to be recognised at a glance while the
+   * pointer moves, and on a wide player it had stopped carrying enough of the
+   * shot to do that. So it grows with the player — a share of the width rather
+   * than a breakpoint, since a player is any size its page makes it.
+   *
+   * The share is YouTube's, measured rather than guessed: their preview is a
+   * flat 240px, which on their ~1145px watch player is 21% of it. Taking that
+   * as a share instead of a number keeps the same proportion on a player their
+   * fixed size was never sized for — theirs stays 240px in theatre mode, where
+   * it reads small against a 1710px frame.
+   *
+   * Both ends are held: never below the small-player size (on a 700px embed a
+   * fifth of the width is a card competing with the picture), and never past
+   * 300px. The share is right at the size it was measured on and keeps growing
+   * past it; on a 1700px frame a fifth is a 360px slab that stops reading as a
+   * preview of the picture and starts reading as a second picture.
+   */
+  private previewCaps(): { w: number; h: number } {
+    const w = Math.round(
+      Math.min(300, Math.max(MoviElement.PREVIEW_MAX_W, this.clientWidth * 0.21)),
+    );
+    // Keep the box's own proportions, so a portrait source is capped by height
+    // in the same ratio it always was…
+    const byWidth = Math.round(
+      w * (MoviElement.PREVIEW_MAX_H / MoviElement.PREVIEW_MAX_W),
+    );
+    // …but a player is a shape, not a width. On a phone-sized frame (390×220,
+    // say) a card sized off the width alone stood 126px tall — more than half
+    // the picture — and climbed most of the way up it. Hold the frame to a share
+    // of the HEIGHT as well, with a floor so a very short player still gets
+    // something worth looking at rather than a sliver.
+    const byHeight = Math.max(56, Math.round(this.clientHeight * 0.3));
+    return { w, h: Math.min(byWidth, byHeight) };
+  }
 
   /**
    * Publish the preview frame's box as CSS custom properties.
@@ -28171,10 +28212,8 @@ export class MoviElement extends HTMLElement {
     let h = track?.height || this.video?.videoHeight || 0;
     if (w <= 0 || h <= 0) return; // nothing known yet — the 16:9 fallback stands
     if (this._currentManualRotation % 180 !== 0) [w, h] = [h, w];
-    const scale = Math.min(
-      MoviElement.PREVIEW_MAX_W / w,
-      MoviElement.PREVIEW_MAX_H / h,
-    );
+    const caps = this.previewCaps();
+    const scale = Math.min(caps.w / w, caps.h / h);
     const boxW = Math.round(w * scale);
     const boxH = Math.round(h * scale);
     const key = `${boxW}x${boxH}`;
