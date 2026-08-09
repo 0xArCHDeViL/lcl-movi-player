@@ -1625,11 +1625,6 @@ export class MoviElement extends HTMLElement {
                 </button>
                 <div class="movi-audio-track-menu" style="display: none;">
                   <div class="movi-track-menu-header">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M9 18V5l12-2v13"></path>
-                      <circle cx="6" cy="18" r="3"></circle>
-                      <circle cx="18" cy="16" r="3"></circle>
-                    </svg>
                     <span>Audio Track</span>
                   </div>
                   <div class="movi-audio-track-list"></div>
@@ -1657,10 +1652,6 @@ export class MoviElement extends HTMLElement {
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
                   <div class="movi-track-menu-header movi-subtitle-track-header">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect width="20" height="16" x="2" y="4" rx="2" ry="2"></rect>
-                      <path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"></path>
-                    </svg>
                     <span>Subtitles</span>
                     <button type="button"
                             class="movi-subtitle-browse-btn"
@@ -15187,11 +15178,21 @@ export class MoviElement extends HTMLElement {
         letter-spacing: 0.04em;
         text-transform: uppercase;
         color: var(--movi-text-tertiary);
-        border-bottom: 1px solid var(--movi-glass-border);
+        /* No rule under it. The label is already set apart by what it is —
+           smaller, uppercase, tertiary — and drawing a line as well boxes a
+           heading that was doing its job on its own. Same reasoning as the
+           settings panel, where the divider between its two kinds of row became
+           a gap: the space says it, and the panel keeps one edge (its own)
+           instead of three. */
+        padding-bottom: 6px;
         flex-shrink: 0;
       }
 
-      .movi-track-menu-header svg {
+      /* The header is its words now — the leading icon said "audio track" a
+         second time, next to the words "Audio Track". What is left in here are
+         the header's own action buttons (transcript, subtitle settings), and
+         this is their size. */
+      .movi-track-menu-header button svg {
         width: 14px;
         height: 14px;
         opacity: 0.85;
@@ -15247,10 +15248,12 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-track-menu-footer {
-        padding: 8px 16px 10px;
+        /* Same again: a count in small tertiary type is not going to be
+           mistaken for a track, so the line above it was drawing a border
+           around a distinction the type had already made. */
+        padding: 10px 16px 10px;
         font-size: 11px;
         color: var(--movi-text-tertiary);
-        border-top: 1px solid var(--movi-glass-border);
         flex-shrink: 0;
         text-align: center;
         opacity: 0.75;
@@ -18712,10 +18715,12 @@ export class MoviElement extends HTMLElement {
         gap: 10px;
         width: 100%;
         padding: 10px 12px;
-        margin-bottom: 6px;
+        /* A little more room instead of a rule under it — see the track menu's
+           header. The back arrow and the page's own title already say this row
+           is not one of the choices below it. */
+        margin-bottom: 8px;
         border: none;
-        border-bottom: 1px solid var(--movi-glass-border);
-        border-radius: var(--movi-radius-tile) var(--movi-radius-tile) 0 0;
+        border-radius: var(--movi-radius-tile);
         background: transparent;
         color: inherit;
         font: inherit;
