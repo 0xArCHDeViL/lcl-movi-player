@@ -3150,6 +3150,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * back to its own recovery.
    */
   /**
+   * How long the picture has been catching up to the sound, in ms — null when
+   * it is not. The wait is normally under a tenth of a second, so the UI can
+   * hold its spinner back for a moment rather than flashing one on every
+   * return from a background tab.
+   */
+  videoCatchUpElapsedMs(): number | null {
+    if (this._videoResumeTarget < 0) return null; // -1 none, -Infinity finished
+    return performance.now() - this._videoCatchUpStartedAt;
+  }
+
+  /**
    * Milliseconds since a rendition switch last LANDED (Infinity if none has).
    * The picture is legitimately still for a moment after one — the queue was
    * emptied at the swap and the new decoder has not filled it yet — so the

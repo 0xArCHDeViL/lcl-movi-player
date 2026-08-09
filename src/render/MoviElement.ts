@@ -7587,6 +7587,9 @@ export class MoviElement extends HTMLElement {
   private static readonly RESTORE_STEADY_MS = 30000;
   private static readonly STARVED_RESCUE_MS = 6000;
   private static readonly VISIBILITY_SETTLE_MS = 4000;
+  /** How long the picture may spend catching up to the sound before the wait
+   *  earns a spinner. See videoCatchUpElapsedMs. */
+  private static readonly CATCHUP_SPINNER_GRACE_MS = 600;
   /** How long a freshly landed rendition is left alone by the frozen-video
    *  watchdog while its queue refills. Longer than the visibility settle: this
    *  one starts from an empty buffer AND an empty frame queue, and it is the
@@ -9607,6 +9610,30 @@ export class MoviElement extends HTMLElement {
     }
     const h = this.player?.getRenderHealth?.();
     if (!h) return;
+    // A hidden tab presents no frames BY DESIGN — decode is skipped there — so
+    // every second of it counted as a second of judder, and two were enough to
+    // latch. The flag then survived the return and put a spinner over a picture
+    // that was already back: measured, the frame arrived at 85ms and the
+    // spinner sat there for about a second after it. The same settle the frozen
+    // watchdog takes: while hidden, and for a moment after coming back, there
+    // is nothing here worth judging.
+    //
+    // (In PiP the tab is hidden and frames ARE presented; skipping the check
+    // there costs only judder detection, which the PiP window's own small
+    // picture would hardly show anyway.)
+    if (
+      (typeof document !== "undefined" && document.visibilityState !== "visible") ||
+      performance.now() - this._becameVisibleAt < MoviElement.VISIBILITY_SETTLE_MS
+    ) {
+      this._stutterLastPresented = h.framesPresented;
+      this._stutterSeconds = 0;
+      this._judderSeconds = 0;
+      if (this._juddering) {
+        this._juddering = false;
+        this.updateLoadingIndicator();
+      }
+      return;
+    }
     // Warm-up grace after a rate change: keep advancing the baseline but don't
     // count these ramp-up windows, so a fresh speed gets headroom to settle
     // before the "Play at 1x" heuristic can judge it.
@@ -24933,6 +24960,23 @@ export class MoviElement extends HTMLElement {
     // ARE arriving — but too few of them to be playback. See sampleStutter.
     if (this._juddering && currentState === "playing") {
       shouldShow = true;
+    }
+
+    // The picture catching up to the sound — coming back from a background tab,
+    // or switching video back on — normally takes well under a tenth of a
+    // second. A spinner for that is a flash the viewer reads as a stall that
+    // wasn't. Hold it back for the first moment and let it through only if the
+    // catch-up is genuinely taking time.
+    const catchUpMs = (
+      this.player as unknown as { videoCatchUpElapsedMs?: () => number | null } | null
+    )?.videoCatchUpElapsedMs?.();
+    if (
+      shouldShow &&
+      catchUpMs !== null &&
+      catchUpMs !== undefined &&
+      catchUpMs < MoviElement.CATCHUP_SPINNER_GRACE_MS
+    ) {
+      shouldShow = false;
     }
 
     if (shouldShow) {
