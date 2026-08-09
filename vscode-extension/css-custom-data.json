@@ -379,6 +379,32 @@
       ]
     },
     {
+      "name": "--movi-chrome-bg",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.92)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-chrome-border",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.1)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-text-secondary",
       "description": {
         "kind": "markdown",

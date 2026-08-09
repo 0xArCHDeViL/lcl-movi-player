@@ -19959,8 +19959,12 @@ export class MoviElement extends HTMLElement {
       }
       /* Video-only buttons. The right cluster mixes container divs (for
          buttons that have flyout menus) with bare <button>s — match both
-         patterns. */
-      :host(.movi-audio-mode) .movi-subtitle-track-container,
+         patterns.
+         Subtitles are NOT on this list: a track of words is as much use over
+         sound as over a picture — lyrics, a translation, a podcast transcript —
+         and hiding the picker also took the row out of the settings panel,
+         which reads its availability from this container. Audio tracks were
+         never hidden here for the same reason. */
       :host(.movi-audio-mode) .movi-quality-container,
       :host(.movi-audio-mode) .movi-hdr-container,
       :host(.movi-audio-mode) .movi-aspect-ratio-btn,
@@ -20275,6 +20279,15 @@ export class MoviElement extends HTMLElement {
       }
       /* The seek thumbnail tooltip is tied to a non-existent video frame
          in strip mode — suppress so the hover preview doesn't pop up. */
+      /* Audio: there is no frame to preview, so the card is just its readout.
+         The FRAME goes (it would shimmer forever waiting for a picture that is
+         never fetched — see applyAudioOnly) and the pill stays, because where
+         the pointer will land, and in which chapter, is worth as much over
+         sound as over a picture. */
+      :host(.movi-audio-mode) .movi-thumbnail-img,
+      :host(.movi-audio-mode) .movi-thumbnail-placeholder {
+        display: none !important;
+      }
       :host(.movi-audio-strip) .movi-seek-thumbnail {
         display: none !important;
       }
@@ -26500,6 +26513,11 @@ export class MoviElement extends HTMLElement {
     // handles every source live: streams pick an audio-only / smallest-video
     // variant; split sources stop the demux loop; muxed skips the video decode.
     this.player.setAudioOnly?.(this._audioOnly);
+    // No picture is being fetched, so there is nothing to make a thumbnail
+    // from: the scrub preview would hover a card that shimmers and never
+    // resolves. Only the attribute path used to sync this, so toggling
+    // audio-only at runtime left previews on.
+    this.player.setPreviewsEnabled?.(this._thumb && !this._audioOnly);
     this.updateCoverArtOverlay();
     this.updateControlsVisibility();
     this.updateLiveState(); // keep the LIVE badge correct (stream stays loaded)

@@ -703,6 +703,14 @@
               "description": "Movi Player theme variable.\n\nDefault: `#ffffff`"
             },
             {
+              "name": "--movi-chrome-bg",
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.92)`"
+            },
+            {
+              "name": "--movi-chrome-border",
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.1)`"
+            },
+            {
               "name": "--movi-text-secondary",
               "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.7)`"
             },
