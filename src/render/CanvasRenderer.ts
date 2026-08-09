@@ -202,6 +202,9 @@ export class CanvasRenderer {
   private lastKnownAudioTime: number = -1;
   private playbackRate: number = 1.0;
   private justSeeked: boolean = false; // Track if we just seeked (for post-seek frame handling)
+  /** When a frame last went up, or when the queue was last cleared. Only used
+   *  to bound how long the picture may be held while pre-roll is dropped. */
+  private _lastPresentAt = 0;
   private framesPresented: number = 0; // Track number of frames presented (for initial sync)
 
   // Current time tracking
@@ -2555,6 +2558,7 @@ export class CanvasRenderer {
         this.lastPresentedPts = frameTime;
         this.currentTime = frameTime;
         this.framesPresented++;
+        this._lastPresentAt = performance.now();
         return;
       }
     }
@@ -2718,6 +2722,7 @@ export class CanvasRenderer {
       this.lastPresentedPts = firstFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
       this.framesPresented = 1; // First frame presented
+      this._lastPresentAt = performance.now();
 
       // Initialize presentation timing
       this.presentationStartTime = performance.now();
@@ -2806,6 +2811,28 @@ export class CanvasRenderer {
       }
     }
 
+    // Pre-roll after a seek is not playback.
+    //
+    // A resync restarts the decoder at the keyframe BEFORE the target, so the
+    // frames that arrive first sit behind the clock. Presenting them plays that
+    // gap at whatever rate the decoder can manage — measured at 3.3x on a 4K60
+    // source, which is the picture visibly racing for a moment before settling.
+    // Dropping them instead holds the last frame a fraction longer and then
+    // resumes at 1x, already in sync. It shows at 60fps first because the same
+    // gap in seconds holds two and a half times the frames.
+    if (bestFrame && this.justSeeked) {
+      const behind = currentTime - bestFrame.timestamp / 1_000_000;
+      const tolerance = Math.max(0.12, frameInterval * 4);
+      // …but never hold for long. A machine that cannot reach the clock at all
+      // would otherwise show a frozen picture over playing audio, which is
+      // worse than a late one — so past this the stale frame goes up anyway.
+      const held = performance.now() - this._lastPresentAt;
+      if (behind > tolerance && held < 500) {
+        for (const f of this.frameQueue.splice(0, bestIndex + 1)) f.close();
+        return null;
+      }
+    }
+
     // Clear justSeeked flag after we've found a frame
     if (bestFrame) {
       this.justSeeked = false;
@@ -2842,6 +2869,7 @@ export class CanvasRenderer {
       this.lastPresentedPts = bestFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
       this.framesPresented++;
+      this._lastPresentAt = performance.now();
 
       return bestFrame;
     }
@@ -4462,6 +4490,10 @@ export class CanvasRenderer {
 
     // Mark that we just seeked - this will make frame selection more forgiving
     this.justSeeked = true;
+    // …and restart the hold allowance. It bounds how long the picture may sit
+    // still while pre-roll is dropped, and the last present was before the
+    // seek — measuring from there would spend the whole allowance at once.
+    this._lastPresentAt = performance.now();
 
     Logger.debug(TAG, "Frame queue cleared and presentation timing reset");
   }
