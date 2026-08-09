@@ -13614,6 +13614,14 @@ export class MoviElement extends HTMLElement {
            dark pills) — stays white in both themes, unlike --movi-controls-color
            which flips to dark for menus on light surfaces. Public theming hook. */
         --movi-chrome-fg: #ffffff;
+        /* …and the surface under it. Some panels are chrome rather than
+           document: the shortcuts sheet, the stats readout, the timeline, the
+           cue list and the resume prompt are drawn over the picture in white on
+           black and have no light-theme treatment of their own, so they must
+           not follow --movi-glass-bg when that flips to a light surface — white
+           text on white is what that costs. Public hook all the same. */
+        --movi-chrome-bg: rgba(0, 0, 0, 0.92);
+        --movi-chrome-border: rgba(255, 255, 255, 0.1);
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
@@ -16029,8 +16037,8 @@ export class MoviElement extends HTMLElement {
         top: 12px;
         left: 12px;
         z-index: 9;
-        background: var(--movi-glass-bg);
-        border: 1px solid var(--movi-glass-border);
+        background: var(--movi-chrome-bg);
+        border: 1px solid var(--movi-chrome-border);
         border-radius: var(--movi-radius-panel);
         padding: 0;
         min-width: 280px;
@@ -16243,8 +16251,8 @@ export class MoviElement extends HTMLElement {
         transition: bottom 0.3s ease;
         right: 12px;
         z-index: 11;
-        background: var(--movi-glass-bg);
-        border: 1px solid var(--movi-glass-border);
+        background: var(--movi-chrome-bg);
+        border: 1px solid var(--movi-chrome-border);
         border-radius: var(--movi-radius-panel);
         padding: 0;
         flex-direction: column;
@@ -16452,8 +16460,8 @@ export class MoviElement extends HTMLElement {
            is where that shade came from; it reads it now rather than repeating
            it, so the settings panel, the context menu and this one cannot drift
            apart again. */
-        background: var(--movi-glass-bg);
-        border: 1px solid var(--movi-glass-border);
+        background: var(--movi-chrome-bg);
+        border: 1px solid var(--movi-chrome-border);
         border-radius: var(--movi-radius-panel);
         padding: 0;
         flex-direction: column;
@@ -16539,7 +16547,7 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         inset: 0;
         z-index: 200;
-        background: var(--movi-glass-bg);
+        background: var(--movi-chrome-bg);
         display: flex;
         flex-direction: column;
         font-family: 'Inter', -apple-system, sans-serif;
@@ -16712,8 +16720,8 @@ export class MoviElement extends HTMLElement {
         bottom: 90px;
         right: 16px;
         z-index: 50;
-        background: var(--movi-glass-bg);
-        border: 1px solid var(--movi-glass-border);
+        background: var(--movi-chrome-bg);
+        border: 1px solid var(--movi-chrome-border);
         border-radius: var(--movi-radius-panel);
         padding: 14px 20px;
         display: flex;
