@@ -909,6 +909,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // When seeking, FFmpeg seeks to the nearest keyframe BEFORE the target time
   // We need to decode but not display/play packets before the target time
   private seekTargetTime: number = -1;
+  /**
+   * A video-only resume point, for when the picture has to catch up to sound
+   * that never stopped (see resyncVideoToAudio).
+   *
+   * seekTargetTime serves both streams, and there it has to sit at the END of
+   * the audio the renderer has already scheduled, or the re-demuxed packets
+   * behind it get decoded a second time and the sound fast-forwards. That end
+   * is seconds ahead of what anyone is hearing — measured at six — and holding
+   * the PICTURE to it meant the frame the viewer asked for waited for a moment
+   * that had not been reached yet. Video has no such history to protect: it
+   * resumes where the sound actually IS.
+   *
+   * -1 means no video-only resume is in flight and the shared target applies.
+   * Otherwise this owns the video gate for the rest of the catch-up, dropping
+   * to -Infinity once the first frame lands — the frames AFTER that one are
+   * still behind the audio schedule's end, and handing the gate back to the
+   * shared target would drop every one of them until the sound caught up to a
+   * point it had only buffered, not played.
+   */
+  private _videoResumeTarget: number = -1;
+  /** When the catch-up above began, so the UI can tell a hitch nobody notices
+   *  from a wait worth putting a spinner on. */
+  private _videoCatchUpStartedAt = 0;
 
   // Buffer audio packets while waiting for video to catch up after seek
   private waitingForVideoSync: boolean = false;
@@ -5383,6 +5406,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 if (!this.trackManager.getActiveVideoTrack()) {
                   this.notifySeekCompletion(packet.timestamp);
                 }
+                // Retire it once audio is past: the guard exists to stop
+                // already-scheduled audio being decoded a second time, and
+                // there is none left behind this packet.
+                //
+                // Only safe to do here when VIDEO is not reading the same
+                // field. On an ordinary seek it is — the pre-target frame
+                // filter is this value — and the video side clears it when a
+                // frame passes. During a video-only catch-up video has its own
+                // gate (_videoResumeTarget) and deliberately leaves this one
+                // armed for audio's sake, so nothing would ever clear it: the
+                // branch above then logged for every audio packet, forever.
+                if (
+                  this._videoResumeTarget !== -1 ||
+                  !this.trackManager.getActiveVideoTrack()
+                ) {
+                  this.seekTargetTime = -1;
+                }
               }
 
               // Software codecs (TrueHD/MLP/DTS) go in as one batch per tick —
@@ -5885,6 +5925,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // We need to skip audio packets before target and decode (but not display) video frames.
       // Normalize target time against startTime offset
       this.seekTargetTime = seconds + this.startTime;
+    this._videoResumeTarget = -1; // a real seek supersedes a video-only catch-up
       this.waitingForVideoSync = true;
       // Tag which seek session armed this completion. notifySeekCompletion
       // bails if a newer seek has since superseded this one, so a stale (e.g.
@@ -7113,6 +7154,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.clock.seek(this.startTime); // paused → pausedTime = startTime
     this.seekKeyframeOffset = 0; // so getCurrentTime() === 0
     this.seekTargetTime = -1; // clear any lingering pre-target frame-drop filter
+    this._videoResumeTarget = -1;
     this.waitingForVideoSync = false; // no stale seek-completion armed
     this._playStartTime = 0; // keep first-play branch eligible
     this._primingAudio = false;
@@ -9527,6 +9569,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Skip pre-target packets: use audio buffer end (not clock time) so
       // already-scheduled audio isn't re-decoded — prevents fast-forward sound.
       this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
+      // …but the PICTURE rejoins where the sound is, not where its schedule
+      // ends. See _videoResumeTarget.
+      this._videoResumeTarget = audioTime + this.startTime;
+      this._videoCatchUpStartedAt = performance.now();
       this.seekingToKeyframe = true;
       this.seekingToKeyframeStartTime = performance.now();
       this.seekKeyframeScanned = 0;
@@ -10221,11 +10267,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // These frames are decoded to build decoder state (reference frames),
         // but we don't display them - we want accurate seeking to the target time
         const frameTime = frame.timestamp / 1_000_000; // Convert to seconds
+        // A video-only resume overrides the shared target, which is parked at
+        // the audio schedule's end for the audio path's sake — see
+        // _videoResumeTarget.
+        const gate =
+          this._videoResumeTarget !== -1 ? this._videoResumeTarget : this.seekTargetTime;
         // CRITICAL: Check seekTargetTime !== -1 instead of >= 0 to support negative start times
         // Some media files have negative PTS offsets (e.g., startTime = -0.105s)
-        if (this.seekTargetTime !== -1 && frameTime < this.seekTargetTime) {
+        if (gate !== -1 && frameTime < gate) {
           // Drop this frame, it's before our target time
           frame.close();
+          return;
+        }
+        // Caught up. The gate stays OURS — opened, not handed back — and
+        // seekTargetTime stays armed for the audio it is protecting: those
+        // packets run seconds ahead of this frame and must not decode twice.
+        if (this._videoResumeTarget !== -1) {
+          this._videoResumeTarget = Number.NEGATIVE_INFINITY;
+          this.videoRenderer.queueFrame(frame);
           return;
         }
 
