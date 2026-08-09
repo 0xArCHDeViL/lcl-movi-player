@@ -20515,13 +20515,7 @@ export class MoviElement extends HTMLElement {
     // layer exists takes, the rest cost a style write each. Not tied to
     // playback — the layer appears with the canvas's first paint, which
     // happens whether or not a frame has decoded yet.
-    for (const delay of [120, 400, 1200, 2500]) {
-      const t = setTimeout(() => {
-        this._roundingTimers.delete(t);
-        this.syncPictureRounding(true);
-      }, delay);
-      this._roundingTimers.add(t);
-    }
+    this.scheduleRoundingReapply();
 
     // Hydrate persisted subtitle appearance settings, then let any
     // explicit attributes override (precedence: attribute >
@@ -22220,6 +22214,11 @@ export class MoviElement extends HTMLElement {
       // Same for host-supplied chapters: the element outlives the player, and a
       // fresh one only knows about the container's own.
       if (this._chapters) this.player.setChapters(this._chapters);
+      // …and the corner rounding, which a fresh renderer does not inherit —
+      // see scheduleRoundingReapply.
+      this.syncPictureRounding(true);
+      this.scheduleRoundingReapply();
+
 
       // …and for Document PiP. The window belongs to the ELEMENT and survives a
       // source change, but `isPiPActive` lives on the player and a fresh one
@@ -25918,6 +25917,31 @@ export class MoviElement extends HTMLElement {
         };
       } | null
     )?.videoRenderer;
+  }
+
+  /**
+   * Put the corner rounding back a few times over the next couple of seconds.
+   *
+   * Needed wherever the PICTURE is rebuilt, not just at connect. Two things are
+   * lost when a new player is built over the same element: the shader's own
+   * corner radius, which lives on the renderer that was just replaced, and —
+   * on Firefox — the CSS clip, which it only reads while building the canvas's
+   * compositing layer and which is therefore dropped when that layer is rebuilt
+   * and never re-read on its own.
+   *
+   * That is why a host that swaps sources on one element (a sidebar of videos,
+   * say) lost its rounded corners on Firefox from the second video on: the
+   * retries existed, but only ever ran at connect, and the element never
+   * disconnects.
+   */
+  private scheduleRoundingReapply(): void {
+    for (const delay of [120, 400, 1200, 2500]) {
+      const t = setTimeout(() => {
+        this._roundingTimers.delete(t);
+        this.syncPictureRounding(true);
+      }, delay);
+      this._roundingTimers.add(t);
+    }
   }
 
   private syncPictureRounding(force = false): void {

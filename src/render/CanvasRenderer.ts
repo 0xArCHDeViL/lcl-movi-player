@@ -2840,8 +2840,20 @@ export class CanvasRenderer {
       this.letterboxColor[0] += (this.letterboxTarget[0] - this.letterboxColor[0]) * f;
       this.letterboxColor[1] += (this.letterboxTarget[1] - this.letterboxColor[1]) * f;
       this.letterboxColor[2] += (this.letterboxTarget[2] - this.letterboxColor[2]) * f;
-      gl.clearColor(this.letterboxColor[0] / 255, this.letterboxColor[1] / 255, this.letterboxColor[2] / 255, 1);
+      // Clear TRANSPARENT and let the canvas ELEMENT's own background carry the
+      // letterbox colour. A clear is a rectangle: it fills the drawing buffer
+      // corner to corner, and the corner cut in the shader only touches what the
+      // shader draws — the video quad. So a letterboxed picture came out as a
+      // rounded frame inside a square opaque slab. Chrome hides that behind the
+      // clip-path on the canvas; Firefox composites the canvas as its own layer
+      // and honours neither that clip nor an ancestor's overflow, so the player
+      // showed square corners there (measured in Firefox 153 over geckodriver —
+      // Playwright's bundled Firefox rounds them and does NOT reproduce it).
+      // As the element's background the same colour is painted by the browser,
+      // which means border-radius applies to it, in every engine, with no clip.
+      gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
+      this.syncLetterboxBackground();
 
       // WebGL viewport needs y from bottom
       // CSS y is from top.
@@ -4193,6 +4205,22 @@ export class CanvasRenderer {
   presentedSinceClear(): number {
     return this.framesPresented;
   }
+
+  /** Push the letterbox colour onto the canvas ELEMENT, so the browser paints
+   *  the bars and rounds them with the element's own corner. Written only when
+   *  it changes — the colour lerps every frame and most frames land on the same
+   *  8-bit triplet. */
+  private syncLetterboxBackground(): void {
+    const el = this.canvas as HTMLCanvasElement | null;
+    if (!el || !el.style) return;
+    const rgb = `rgb(${Math.round(this.letterboxColor[0])}, ${Math.round(
+      this.letterboxColor[1],
+    )}, ${Math.round(this.letterboxColor[2])})`;
+    if (this._letterboxBgCss === rgb) return;
+    this._letterboxBgCss = rgb;
+    el.style.backgroundColor = rgb;
+  }
+  private _letterboxBgCss = "";
 
   /** Radius in DRAWING-BUFFER pixels, which is what the shader measures in. */
   private cornerRadiusBufferPx(): number {
