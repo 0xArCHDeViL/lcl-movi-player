@@ -967,6 +967,186 @@ export class CanvasRenderer {
    * NDC position + camera yaw/pitch/fov, then maps that direction to an
    * equirectangular (longitude/latitude) texture coordinate.
    */
+  /**
+   * The ambient wash, drawn by GL.
+   *
+   * The letterbox is where ambient light belongs, and in fullscreen those bars
+   * are the canvas's own pixels — measured: a bar pixel reads back opaque, so
+   * the element background carrying the wash sits behind them and is never
+   * seen. A flat clear colour DOES reach them, which is what ambient used to
+   * do, and flat is the thing being fixed: it reads as a coloured band stuck to
+   * the picture rather than light coming off it.
+   *
+   * So the wash is drawn: one full-canvas quad, two soft pools of the sampled
+   * colour over black, drifting. No texture, no blur pass, no keyframe
+   * animation running for the whole of playback — a handful of instructions
+   * per pixel on a quad that was already being drawn.
+   */
+  private initWashProgram(): boolean {
+    if (this.washProgram) return true;
+    if (!this.gl) return false;
+    const gl = this.gl;
+
+    const vsSource = `#version 300 es
+    layout(location = 0) in vec2 a_position;
+    out vec2 v_uv;
+    void main() {
+      v_uv = a_position * 0.5 + 0.5;
+      gl_Position = vec4(a_position, 0.0, 1.0);
+    }`;
+
+    const fsSource = `#version 300 es
+    precision highp float;
+    uniform vec3 u_colour;   // the sampled ambient colour, already held down
+    uniform vec3 u_phases;   // three slowly-walking phases, in radians
+    uniform vec3 u_round;    // same corner cut as the picture — see the passthrough program
+    in vec2 v_uv;
+    out vec4 outColor;
+
+    void main() {
+      // Three very slow waves laid over each other, not a blob. A blob has a
+      // centre, and a bar is a narrow window onto it: when the centre drifts
+      // toward the bar the visible slice brightens and widens in place, which
+      // reads as the light SWELLING rather than travelling — and on a portrait
+      // video, where the bars are wide, the circle itself becomes visible as a
+      // shape. These waves are under one cycle across the frame, so there is no
+      // repeating pattern and no edge anywhere, and every part of every bar has
+      // a gradient running along it that slides as the phases walk.
+      float f =
+          0.30 * sin(v_uv.x * 3.7 + u_phases.x)
+        + 0.28 * sin(v_uv.y * 2.9 + u_phases.y)
+        + 0.20 * sin((v_uv.x * 1.6 - v_uv.y * 2.2) + u_phases.z);
+      // Mapped, not clamped. Clamping flattened whole regions to zero, and a
+      // region at zero is a bar with no light in it at all — so the bottom
+      // could glow while the top was simply off. Dividing by the amplitudes
+      // instead keeps the wave intact from trough to crest.
+      float n = 0.5 + f / 1.56;
+      // The floor is the point: the trough still carries some light, so when one
+      // bar is at a crest the far one shows a trace of the same colour rather
+      // than going black. Both bars are always lit, one just far more than the
+      // other, and which one keeps changing as the waves walk.
+      float i = 0.55 + 0.45 * n;
+      // Cubed: the difference between trough and crest stays wide, so this reads
+      // as light with a direction to it rather than an even tint.
+      i = i * i * i;
+      outColor = vec4(u_colour * i, 1.0);
+      if (u_round.x > 0.0) {
+        vec2 halfSizeR = u_round.yz * 0.5;
+        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
+        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
+        outColor *= 1.0 - smoothstep(-0.5, 0.5, dR);
+      }
+    }`;
+
+    const createShader = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        Logger.error(TAG, "Wash shader compile error:", gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+    const vert = createShader(gl.VERTEX_SHADER, vsSource);
+    const frag = createShader(gl.FRAGMENT_SHADER, fsSource);
+    if (!vert || !frag) return false;
+    const program = gl.createProgram();
+    if (!program) return false;
+    gl.attachShader(program, vert);
+    gl.attachShader(program, frag);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      Logger.error(TAG, "Wash program link error:", gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+      return false;
+    }
+    this.washProgram = program;
+    this.washLocs = {
+      colour: gl.getUniformLocation(program, "u_colour"),
+      phases: gl.getUniformLocation(program, "u_phases"),
+      round: gl.getUniformLocation(program, "u_round"),
+    };
+    Logger.info(TAG, "Ambient wash program compiled");
+    return true;
+  }
+
+  /** Colour for the wash above. Null turns it off. The movement is the
+   *  renderer's own — see advanceWash. */
+  setAmbientWash(rgb: [number, number, number] | null): void {
+    this._washRgb = rgb;
+  }
+  private _washRgb: [number, number, number] | null = null;
+  /** Where the three waves currently sit, and how fast each is walking on,
+   *  in radians per second. */
+  private _washPhases = [0.4, 2.1, 4.3];
+  private _washSpeeds = [0.075, -0.055, 0.04];
+  private _washLastT = 0;
+  private washProgram: WebGLProgram | null = null;
+  private washLocs: {
+    colour: WebGLUniformLocation | null;
+    phases: WebGLUniformLocation | null;
+    round: WebGLUniformLocation | null;
+  } = { colour: null, phases: null, round: null };
+
+  /**
+   * Walk the waves on. The movement lives here rather than with the colour
+   * sampler because that samples five times a second: motion driven off it
+   * arrives in visible steps, which is what made the light look parked. Here it
+   * advances once per drawn frame, and each speed takes a small random nudge so
+   * no wave keeps a heading long enough for the eye to predict it — including
+   * drifting through zero and reversing, which is what makes it wander rather
+   * than sweep.
+   */
+  private advanceWash(): void {
+    const now = performance.now();
+    const dt = this._washLastT ? Math.min(0.1, (now - this._washLastT) / 1000) : 0;
+    this._washLastT = now;
+    if (!dt) return;
+    for (let i = 0; i < 3; i++) {
+      const nudged = this._washSpeeds[i] * 0.999 + (Math.random() - 0.5) * 0.02 * dt;
+      // Magnitude is held off zero. A plain random walk parks: it spends long
+      // stretches near zero speed, and a wave that is not moving is the thing
+      // this is meant to avoid. Direction still reverses — when the walk
+      // crosses zero the sign flips and the speed picks straight back up.
+      const sign = nudged < 0 ? -1 : 1;
+      this._washSpeeds[i] = sign * Math.min(0.12, Math.max(0.035, Math.abs(nudged)));
+      this._washPhases[i] = (this._washPhases[i] + this._washSpeeds[i] * dt) % 6.2831853;
+    }
+  }
+
+  /** Paint the wash over the whole canvas, before the picture goes on top. */
+  private drawAmbientWash(gl: WebGL2RenderingContext): void {
+    const rgb = this._washRgb;
+    if (!rgb || !this.initWashProgram() || !this.washProgram) return;
+    this.advanceWash();
+    gl.useProgram(this.washProgram);
+    if (this.washLocs.colour) {
+      gl.uniform3f(this.washLocs.colour, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+    }
+    if (this.washLocs.phases) {
+      const [p0, p1, p2] = this._washPhases;
+      gl.uniform3f(this.washLocs.phases, p0, p1, p2);
+    }
+    if (this.washLocs.round) {
+      gl.uniform3f(
+        this.washLocs.round,
+        this.cornerRadiusBufferPx(),
+        this.canvas?.width || 0,
+        this.canvas?.height || 0,
+      );
+    }
+    gl.viewport(0, 0, this.width, this.height);
+    // The quad has to be bound HERE. The picture's own draw binds it further
+    // down, so on the way in there is no vertex array attached and a_position
+    // reads as a constant — measured as the wash appearing only as a sliver at
+    // the right edge while both bars stayed black.
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
   private initVRProgram(): boolean {
     if (this.vrProgram) return true;
     if (!this.gl) return false;
@@ -2851,9 +3031,16 @@ export class CanvasRenderer {
       // Playwright's bundled Firefox rounds them and does NOT reproduce it).
       // As the element's background the same colour is painted by the browser,
       // which means border-radius applies to it, in every engine, with no clip.
-      gl.clearColor(0, 0, 0, 0);
+      // Clear TRANSPARENT and let the canvas element's own background carry the
+      // letterbox — see syncLetterboxBackground and the rounded corners it is
+      // there for. A flat tint HERE was tried to guarantee ambient reached the
+      // bars in fullscreen, and it does, but flat is exactly what ambient was
+      // moved off: it put the old solid band back.
       gl.clear(gl.COLOR_BUFFER_BIT);
       this.syncLetterboxBackground();
+      // Ambient light goes down first; the picture is drawn over it below.
+      this.drawAmbientWash(gl);
+      gl.useProgram(this.program);
 
       // WebGL viewport needs y from bottom
       // CSS y is from top.

@@ -285,6 +285,18 @@ export interface MoviControlSpec {
   onSelect?: (active: boolean, player: MoviElement) => void;
 }
 
+/** How bright the ambient colour is allowed to READ, in luminance. Low on
+ *  purpose: the bars sit beside the picture and are meant to be felt, not
+ *  looked at — anything approaching the frame's own level pulls the eye off it.
+ */
+const AMBIENT_TARGET_LUM = 38;
+/** …and no single channel past this, so a saturated shot cannot ride one
+ *  channel up into white. The cap has to sit far enough above the target that
+ *  it stays a backstop: when a channel pins to it the colour clips flat, and
+ *  flat colour beside a moving picture is exactly what reads as a painted box.
+ */
+const AMBIENT_MAX_CHANNEL = 84;
+
 export class MoviElement extends HTMLElement {
   private canvas: HTMLCanvasElement;
   private video: HTMLVideoElement;
@@ -702,6 +714,13 @@ export class MoviElement extends HTMLElement {
   private posterElement!: HTMLImageElement; // Poster image element
 
   // Ambient mode state
+  /** Where the ambient wash currently sits, and how fast it is drifting there.
+   *  It wanders rather than sweeping: a fixed round trip is a metronome, and a
+   *  metronome is something the eye learns and then starts watching for. The
+   *  velocity takes a small random nudge on every sample and is capped, so the
+   *  path never repeats but also never moves fast enough to be caught at it. */
+  private _ambientWashPhase = 0;
+  private _ambientWashVelocity = 0.002;
   private _ambientWrapper: string | null = null; // ID of external wrapper element
   private ambientWrapperElement: HTMLElement | null = null; // Reference to external wrapper element
   private _ambientRafId: number | null = null;
@@ -26161,6 +26180,13 @@ export class MoviElement extends HTMLElement {
   }
 
   private stopAmbientColorSampling(): void {
+    (
+      (this.player as unknown as {
+        videoRenderer?: {
+          setAmbientWash?: (rgb: [number, number, number] | null) => void;
+        };
+      } | null)?.videoRenderer
+    )?.setAmbientWash?.(null);
     if (this._ambientRafId !== null) {
       cancelAnimationFrame(this._ambientRafId);
       this._ambientRafId = null;
@@ -26228,39 +26254,77 @@ export class MoviElement extends HTMLElement {
   private updateAmbientBackground(): void {
     const { r, g, b } = this.currentAmbientColors;
 
-    // Create a gradient with the sampled color
-    // Use radial gradient for smooth ambient effect without lines
-    let color1, color2, color3, color4;
-
-    if (this._theme === "light") {
-      // Significantly higher opacity for light mode to be visible against white/light backgrounds
-      // Brighter, more saturated effect
-      color1 = `rgba(${r}, ${g}, ${b}, 0.5)`;
-      color2 = `rgba(${r}, ${g}, ${b}, 0.3)`;
-      color3 = `rgba(${r}, ${g}, ${b}, 0.15)`;
-      color4 = `rgba(${r}, ${g}, ${b}, 0.05)`;
-    } else {
-      // Original subtle opacity for dark mode
-      color1 = `rgba(${r}, ${g}, ${b}, 0.2)`;
-      color2 = `rgba(${r}, ${g}, ${b}, 0.1)`;
-      color3 = `rgba(${r}, ${g}, ${b}, 0.05)`;
-      color4 = `rgba(${r}, ${g}, ${b}, 0.02)`;
-    }
-
-    const gradient = `radial-gradient(
-      ellipse 100% 100% at 50% 50%,
-      ${color1} 0%,
-      ${color2} 30%,
-      ${color3} 60%,
-      ${color4} 100%
-    )`;
-
+    // (The old radial gradient of one averaged colour lived here. Both paths
+    // draw the drifting wash below now.)
     if (this._ambientMode) {
       const isFullscreen = document.fullscreenElement === this;
+      // The wash: black at both edges into the sampled colour, wider than what
+      // it fills so it can be slid. Brighter than the old flat fill dared to be
+      // — that one covered its whole area edge to edge, so anything strong read
+      // as a coloured band stuck to the picture; this one fades into black at
+      // both ends, so its middle can carry the colour the light actually is.
+      // Held to a LUMINANCE, not a peak. Peak-scaling keeps the brightest
+      // channel at a fixed level and lets the other two ride up with it, so a
+      // pale average — which is what a bright pink shot averages to — came out
+      // as near-white. Scaling by how bright the colour actually reads keeps
+      // dark shots dark and bright ones from turning into a lamp.
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const level = Math.min(AMBIENT_TARGET_LUM / Math.max(lum, 1), 1);
+      // …and the hue has to survive that. Dimming alone drags everything toward
+      // grey, so the colour is pushed back out from its own grey point: this is
+      // meant to read as a colour in the room, not as a lighter black.
+      const grey = lum * level;
+      const sat = (v: number) =>
+        Math.max(0, Math.min(AMBIENT_MAX_CHANNEL, Math.round(grey + (v * level - grey) * 1.25)));
+      const wr = sat(r);
+      const wg = sat(g);
+      const wb = sat(b);
+      // A wander, not a sweep. The speed drifts by a small random amount each
+      // sample and is capped either side of zero, so it slows, turns and picks
+      // up again on no schedule — but never fast enough to read as motion. The
+      // transitions below carry it between samples, so nothing animates per
+      // frame and the cost stays at one style write per sample.
+      this._ambientWashVelocity = Math.max(
+        -0.006,
+        Math.min(
+          0.006,
+          this._ambientWashVelocity * 0.97 + (Math.random() - 0.5) * 0.002,
+        ),
+      );
+      this._ambientWashPhase =
+        (((this._ambientWashPhase + this._ambientWashVelocity) % 2) + 2) % 2;
+      const washPos =
+        (this._ambientWashPhase <= 1
+          ? this._ambientWashPhase
+          : 2 - this._ambientWashPhase) * 100;
 
       if (this.ambientWrapperElement && !isFullscreen) {
-        // External wrapper in normal mode — wrapper handles ambient, letterbox stays black
-        this.ambientWrapperElement.style.background = gradient;
+        // External wrapper in normal mode — wrapper handles ambient, letterbox
+        // stays black. Ambient used to be worth looking at only in fullscreen,
+        // where the bars carried it; out here it was a still radial wash of one
+        // averaged colour. Same wash as fullscreen now, drifting the same way.
+        // Radial out here, not the bar's linear wash: the wrapper is the space
+        // AROUND the player, and a gradient that runs edge to edge across it
+        // tints the whole page — measured on the dev page, the browser window
+        // went brown. It falls off from a centre instead, and that centre is
+        // what drifts: same slow left-right travel as fullscreen, on a shape
+        // that fades out before it reaches anything.
+        const centre = 30 + (washPos / 100) * 40; // 30% → 70% and back
+        // Alphas carry a little more than they look like they should: the
+        // colour itself was pulled down for the bars, and out here it is laid
+        // over black, so matching the level the wrapper already had means
+        // meeting the dimmer colour partway.
+        const alpha =
+          this._theme === "light"
+            ? [0.66, 0.4, 0.2, 0.07]
+            : [0.45, 0.24, 0.11, 0.03];
+        const w = this.ambientWrapperElement;
+        w.style.backgroundImage = `radial-gradient(ellipse 110% 100% at ${centre.toFixed(
+          1,
+        )}% 50%, rgba(${wr}, ${wg}, ${wb}, ${alpha[0]}) 0%, rgba(${wr}, ${wg}, ${wb}, ${alpha[1]}) 30%, rgba(${wr}, ${wg}, ${wb}, ${alpha[2]}) 60%, rgba(${wr}, ${wg}, ${wb}, ${alpha[3]}) 100%)`;
+        w.style.backgroundSize = "";
+        w.style.backgroundRepeat = "";
+        w.style.transition = "background-image 2.4s linear";
         this.player?.setLetterboxColor(0, 0, 0);
 
         if (this._theme === "light") {
@@ -26270,15 +26334,26 @@ export class MoviElement extends HTMLElement {
           this.ambientWrapperElement.style.filter = "none";
         }
       } else {
-        // Fullscreen or no wrapper — letterbox color on canvas
-        const maxBrightness = 80;
-        const peak = Math.max(r, g, b, 1);
-        const scale = Math.min(maxBrightness / peak, 0.45);
-        this.player?.setLetterboxColor(
-          Math.floor(r * scale),
-          Math.floor(g * scale),
-          Math.floor(b * scale),
-        );
+        // Fullscreen or no wrapper: the bars ARE the ambient light. One flat
+        // colour is what made it look painted on — a band of dull grey-green
+        // across the top that never moved. A wash instead: black at both edges
+        // into the sampled colour, half and half, and slid a little on every
+        // sample so it drifts. The transition on the renderer's side carries
+        // the movement between samples, so nothing animates per frame.
+        // The bars ARE the ambient light here, and they are the canvas's own
+        // pixels — measured in real fullscreen, a bar pixel reads back opaque,
+        // so a CSS background behind them is never seen (which is why the wash
+        // was invisible there). GL draws it instead: black into the sampled
+        // colour and back, sliding. The flat letterbox colour stays out of the
+        // way underneath.
+        this.player?.setLetterboxColor(0, 0, 0);
+        (
+          (this.player as unknown as {
+            videoRenderer?: {
+              setAmbientWash?: (rgb: [number, number, number] | null) => void;
+            };
+          } | null)?.videoRenderer
+        )?.setAmbientWash?.([wr, wg, wb]);
       }
     }
   }
