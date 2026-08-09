@@ -4366,6 +4366,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // session, each time interrupting playback that was otherwise fine.
     const pipelineGeneration = this._demuxerGeneration;
 
+    // ONE chain, always. This loop is entered from several places — the frame
+    // it schedules here, the background timer's tick, play(), a rendition swap,
+    // a video-only resync — and each entry used to schedule another frame
+    // without retiring the one already pending. While the tab is hidden that
+    // compounds: rAF callbacks do not run, so every background tick leaves one
+    // more queued, and on return they all fire in the same frame and each
+    // spawns a self-sustaining chain of its own. Measured on a 12-second
+    // background stint: 359,761 loop entries in the first second, the thread
+    // saturated, and the first packet not read until a second after the tab
+    // came back — which is the "sometimes the picture takes forever" this was
+    // chased for. Retiring the pending frame first keeps exactly one chain
+    // whatever calls in.
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+    }
     this.animationFrameId = requestAnimationFrame(this.processLoop);
 
     if (!this.demuxer) return;
