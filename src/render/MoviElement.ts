@@ -222,6 +222,24 @@ export interface MoviControlSpec {
    *  the built-in's action name instead. Unknown or absent → the end. */
   before?: string;
   after?: string;
+  /** WHICH capsule it sits in — the bar draws one behind each group of
+   *  controls, and this says which group this one belongs to.
+   *
+   *  A built-in group's name joins that capsule: "play", "seek", "volume",
+   *  "time", "settings". Any other string MAKES a capsule of that name, so two
+   *  host controls naming the same string share one. "none" means what it says
+   *  — no capsule, and none of the neighbours' either: the control stands on
+   *  the bar on its own, which is also how it gets OUT of the right-hand
+   *  capsule that every control on that side otherwise shares.
+   *
+   *  Left off, a control on the left gets its own capsule and one on the right
+   *  joins the settings capsule it is already inside — the arrangement each
+   *  side already had.
+   *
+   *  Separate from before/after on purpose: those say where it goes, this says
+   *  what it belongs WITH. A control can sit beside the subtitles button and
+   *  still be in nobody's capsule. */
+  group?: "play" | "seek" | "volume" | "time" | "settings" | "none" | (string & {});
   /** Where it appears. Default "bar". */
   placement?: "bar" | "menu" | "both";
   /** WHICH kind of media it belongs to. Default "both".
@@ -1395,7 +1413,7 @@ export class MoviElement extends HTMLElement {
           <path d="m12 12 4-4"></path>
         </svg>
         <span class="movi-context-menu-label">Playback Speed</span>
-        <span class="movi-context-menu-shortcut" data-shortcut-pair="speedup,speeddown">+ / -</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-pair="speedup,speeddown">+/-</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu" data-submenu="speed">
@@ -1408,7 +1426,7 @@ export class MoviElement extends HTMLElement {
         <div class="movi-context-menu-item" data-speed="0.25">0.25x</div>
         <div class="movi-context-menu-item" data-speed="0.5">0.5x</div>
         <div class="movi-context-menu-item" data-speed="0.75">0.75x</div>
-        <div class="movi-context-menu-item movi-context-menu-active" data-speed="1">Normal</div>
+        <div class="movi-context-menu-item movi-context-menu-active" data-speed="1">1x<span class="movi-speed-normal">(Normal)</span></div>
         <div class="movi-context-menu-item" data-speed="1.25">1.25x</div>
         <div class="movi-context-menu-item" data-speed="1.5">1.5x</div>
         <div class="movi-context-menu-item" data-speed="1.75">1.75x</div>
@@ -1677,21 +1695,25 @@ export class MoviElement extends HTMLElement {
               </svg>
             </button>
 
-            <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                <path d="M3 3v5h5" />
-                <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-              </svg>
-            </button>
+            <!-- The two seek buttons are one control, not two: they do the same
+                 thing in opposite directions, and the bar groups them as one. -->
+            <div class="movi-seek-group">
+              <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                </svg>
+              </button>
 
-            <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                <path d="M21 3v5h-5" />
-                <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-              </svg>
-            </button>
+              <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                  <path d="M21 3v5h-5" />
+                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                </svg>
+              </button>
+            </div>
 
             <div class="movi-volume-container">
               <button class="movi-btn movi-volume-btn" aria-label="Mute/Unmute">
@@ -1718,10 +1740,19 @@ export class MoviElement extends HTMLElement {
               <span class="movi-current-time">0:00</span>
               <span class="movi-time-separator"> / </span>
               <span class="movi-duration">0:00</span>
-              <button class="movi-live-badge" type="button" aria-label="Go to live" title="Go to live edge">
+              <button class="movi-live-badge" type="button" aria-label="Go to live">
                 <span class="movi-live-dot"></span>LIVE
               </button>
             </div>
+
+            <!-- Where you are, by name. Hidden until the source turns out to
+                 have chapters, which most do not. -->
+            <button class="movi-chapter-pill" type="button" aria-label="Chapters" style="display: none;">
+              <span class="movi-chapter-pill-text"></span>
+              <svg class="movi-chapter-pill-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </button>
           </div>
 
           <div class="movi-controls-right">
@@ -1817,7 +1848,7 @@ export class MoviElement extends HTMLElement {
                     <div class="movi-speed-item" data-speed="0.25">0.25x</div>
                     <div class="movi-speed-item" data-speed="0.5">0.5x</div>
                     <div class="movi-speed-item" data-speed="0.75">0.75x</div>
-                    <div class="movi-speed-item movi-speed-active" data-speed="1">Normal</div>
+                    <div class="movi-speed-item movi-speed-active" data-speed="1">1x<span class="movi-speed-normal">(Normal)</span></div>
                     <div class="movi-speed-item" data-speed="1.25">1.25x</div>
                     <div class="movi-speed-item" data-speed="1.5">1.5x</div>
                     <div class="movi-speed-item" data-speed="1.75">1.75x</div>
@@ -2087,6 +2118,23 @@ export class MoviElement extends HTMLElement {
     shadowRoot.appendChild(timelinePanel);
 
     // Timeline close button
+    // Browsing the strip yourself holds the follow off. Read from the INPUT,
+    // not from scroll events: our own smooth scroll fires those too, and a
+    // time window around it never covered the whole animation — so the follow
+    // kept mistaking its own tail for the viewer and suppressing the next one,
+    // which is how a seek ended up not scrolling at all. A wheel, a drag or a
+    // key is unambiguous.
+    const strip = timelinePanel.querySelector(".movi-timeline-strip");
+    for (const type of ["wheel", "pointerdown", "touchstart", "keydown"]) {
+      strip?.addEventListener(
+        type,
+        () => {
+          this._timelineUserScrolledAt = performance.now();
+        },
+        { passive: true },
+      );
+    }
+
     timelinePanel.querySelector(".movi-timeline-close")?.addEventListener("click", (e) => {
       e.stopPropagation();
       this._timelineCancelled = true;
@@ -2175,13 +2223,13 @@ export class MoviElement extends HTMLElement {
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="fullscreen">F</kbd><span>Fullscreen</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="pip">P</kbd><span>Picture-in-Picture</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="mute">M</kbd><span>Mute / Unmute</span></div>
-          <div class="movi-shortcut-row"><kbd data-shortcut-pair="volumeup,volumedown">&uarr; / &darr;</kbd><span>Volume</span></div>
-          <div class="movi-shortcut-row" data-fastseek-keys><kbd data-shortcut-pair="seekback,seekforward">&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-pair="volumeup,volumedown">&uarr;/&darr;</kbd><span>Volume</span></div>
+          <div class="movi-shortcut-row" data-fastseek-keys><kbd data-shortcut-pair="seekback,seekforward">&larr;/&rarr;</kbd><span>Seek ±10s</span></div>
           <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
           <div class="movi-shortcut-row" data-video-only data-fastseek-keys><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-pair="speedup,speeddown">+/-</kbd><span>Speed Up/Down</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="subtitles">V</kbd><span>Cycle Subtitles</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-pair="subtitledelayback,subtitledelayforward">Z / X</kbd><span>Subtitle Delay</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-pair="subtitledelayback,subtitledelayforward">Z/X</kbd><span>Subtitle Delay</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="audiotrack">B</kbd><span>Cycle Audio</span></div>
         </div>
         <div class="movi-shortcuts-col">
@@ -2269,7 +2317,7 @@ export class MoviElement extends HTMLElement {
       // right beside mute and shares the row, so it needs a tooltip of its own
       // rather than inheriting the one from the control next to it.
       const btn = (ev.target as HTMLElement | null)?.closest?.(
-        ".movi-btn, .movi-volume-slider, .movi-time",
+        ".movi-btn, .movi-volume-slider, .movi-live-badge, .movi-chapter-pill, .movi-time",
       ) as HTMLElement | null;
       // Over neither — the clock, the gaps between controls. Hovering those has
       // to CLEAR the tooltip rather than leave the last one standing.
@@ -2398,6 +2446,13 @@ export class MoviElement extends HTMLElement {
       return { text: "Forward 10 seconds", key: k("seekforward") };
     if (is("movi-volume-btn"))
       return { text: this.muted ? "Unmute" : "Mute", key: k("mute") };
+    // Before the clock: the badge lives INSIDE the time block, so without its
+    // own answer it inherited the clock's — the LIVE pill offering to show
+    // remaining time, on a stream that has none.
+    if (is("movi-live-badge")) return { text: "Go to live edge", key: "" };
+    // The pill already SAYS the chapter; the tooltip says what clicking does.
+    if (is("movi-chapter-pill"))
+      return { text: "Chapters", key: this.shortcutLabel("timeline") };
     if (is("movi-time")) {
       // What the click will DO, the way Play and Mute read — the clock is a
       // toggle between elapsed and remaining, and naming the state it is
@@ -2413,7 +2468,7 @@ export class MoviElement extends HTMLElement {
       // Both directions on one chip, the way the shortcuts sheet prints them —
       // the slider is one control and the keys are the two ends of it.
       const pair = [k("volumeup"), k("volumedown")].filter(Boolean);
-      return { text: "Volume", key: pair.join(" / ") };
+      return { text: "Volume", key: pair.join("/") };
     }
     if (is("movi-audio-track-btn"))
       return { text: "Audio track", key: k("audiotrack") };
@@ -2425,7 +2480,7 @@ export class MoviElement extends HTMLElement {
       // Both directions, like the panel row and the shortcuts sheet: one
       // control, one key each way.
       const pair = [k("speedup"), k("speeddown")].filter(Boolean);
-      return { text: "Playback speed", key: pair.join(" / ") };
+      return { text: "Playback speed", key: pair.join("/") };
     }
     if (is("movi-stable-audio-btn"))
       return { text: "Stable volume", key: k("stableaudio") };
@@ -2528,6 +2583,14 @@ export class MoviElement extends HTMLElement {
         this.loop ? "Loop On" : "Loop Off",
       );
     });
+
+    // The chapter pill opens the timeline — it names where you are, and the
+    // timeline is the picture of that.
+    (shadowRoot.querySelector(".movi-chapter-pill") as HTMLElement | null)
+      ?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleTimeline();
+      });
 
     // Time display: click toggles elapsed / remaining. A player's own clock is
     // the obvious place for that, and it costs no room on the bar.
@@ -12195,21 +12258,6 @@ export class MoviElement extends HTMLElement {
     aspect: { title: "Aspect", list: "", owner: "" },
   };
 
-  /** Which ACTION each panel row also answers to. Not the letter: the letter is
-   *  whatever the binding says today, and a row carrying its own copy would go
-   *  stale the moment a host moved it. Rows absent from here have no key —
-   *  Quality is a ladder the player picks from, and there is no key for a
-   *  ladder. */
-  private static readonly SETTINGS_ACTIONS: Record<string, string> = {
-    speed: "speedup,speeddown",
-    audio: "audiotrack",
-    subtitles: "subtitles",
-    hdr: "hdr",
-    stable: "stableaudio",
-    loop: "loop",
-    aspect: "aspect",
-  };
-
   /** Row icons, drawn to match the context menu's (16px, 1.8-2 stroke). A list
    *  of bare words is slower to scan than a list with marks against it — and
    *  these are the same marks the context menu already trained people on. */
@@ -12309,7 +12357,10 @@ export class MoviElement extends HTMLElement {
         );
       case "speed": {
         const rate = this.playbackRate || 1;
-        return rate === 1 ? "Normal" : `${rate}x`;
+        // 1x, not "Normal": every other row in this list is a number with an
+        // x after it, and one word among them reads as a different KIND of
+        // setting rather than the middle of the same scale.
+        return `${rate}x`;
       }
       case "audio": {
         // Label alone is often just "Surround" or "Stereo" — which channel
@@ -12419,20 +12470,28 @@ export class MoviElement extends HTMLElement {
         : (el.querySelector("button") as HTMLElement | null);
       return !btn || getComputedStyle(btn).display !== "none";
     }).length;
-    // Aspect ratio folds with the tray but is not inside it — it has to come
-    // after the gear to sit on the gear's right. Count it anyway, or a video
-    // whose only other extra is captions would look like a one-button tray and
-    // lose the "more" button that reveals it.
+    // Aspect ratio and Picture-in-Picture fold with the tray but are not inside
+    // it — both have to come after the gear to sit on the gear's right. Count
+    // them anyway, or a video whose only other extra is captions would look
+    // like a one-button tray and lose the "more" button that reveals it.
     //
     // Read from the states that hide it outright, NOT from its computed
     // display: this decision is what hides it while the tray is shut, so
     // reading that back would flip the class on every pass.
-    const aspectFoldable =
+    const videoPresentation =
       !this.classList.contains("movi-audio-mode") &&
       !this.classList.contains("movi-native-video");
+    const aspectFoldable = videoPresentation;
+    // PiP hides itself outright where the browser has no Picture-in-Picture, so
+    // its own display is the honest signal here, unlike aspect's.
+    const pipEl = this.shadowRoot?.querySelector(
+      ".movi-pip-btn",
+    ) as HTMLElement | null;
+    const pipFoldable =
+      videoPresentation && !!pipEl && pipEl.style.display !== "none";
     this.classList.toggle(
       "movi-single-extra",
-      shown + (aspectFoldable ? 1 : 0) <= 1,
+      shown + (aspectFoldable ? 1 : 0) + (pipFoldable ? 1 : 0) <= 1,
     );
   }
 
@@ -12442,22 +12501,6 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!root) return;
     const chevron = `<svg class="movi-settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
-    // The key that reaches this row without opening the panel at all. The rows
-    // that HAVE one were the bar buttons before the gear collected them, and
-    // their keys still work — the panel was simply the one surface that never
-    // said so, while the context menu and the shortcuts sheet both did.
-    const key = (rowKey: string) => {
-      // A row can name a PAIR — speed is one row and two keys, one each way.
-      // shortcutLabel is empty for an unbound action and for a player with
-      // hotkeys switched off, so a pair with one half gone prints the half that
-      // is left, and naming a key that does nothing never happens.
-      const k = (MoviElement.SETTINGS_ACTIONS[rowKey] || "")
-        .split(",")
-        .map((action) => this.shortcutLabel(action))
-        .filter(Boolean)
-        .join(" / ");
-      return k ? `<kbd class="movi-settings-key">${k}</kbd>` : "";
-    };
     const rows: string[] = [];
     const page = (
       pageKey: string,
@@ -12467,7 +12510,7 @@ export class MoviElement extends HTMLElement {
     ) => {
       if (!this.settingsRowAvailable(container, item)) return;
       rows.push(
-        `<button type="button" class="movi-settings-row" data-page="${pageKey}">${MoviElement.SETTINGS_ICONS[pageKey] || ""}<span class="movi-settings-row-label">${label}</span>${key(pageKey)}<span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue(pageKey))}</span>${chevron}</button>`,
+        `<button type="button" class="movi-settings-row" data-page="${pageKey}">${MoviElement.SETTINGS_ICONS[pageKey] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue(pageKey))}</span>${chevron}</button>`,
       );
     };
     // Refresh first: these menus only rebuild when their own (now hidden)
@@ -12506,7 +12549,7 @@ export class MoviElement extends HTMLElement {
       }
     }
     rows.push(
-      `<button type="button" class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span>${key("speed")}<span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
+      `<button type="button" class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
     );
     page(
       "audio",
@@ -12522,7 +12565,7 @@ export class MoviElement extends HTMLElement {
     );
 
     const toggle = (toggleKey: string, label: string, on: boolean) =>
-      `<button type="button" class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span>${key(toggleKey)}<span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
+      `<button type="button" class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
     rows.push(`<div class="movi-settings-divider"></div>`);
     // HDR: defer to the decision the bar's own logic already made.
     // updateHdrVisibility writes "flex" on the container only when HDR is
@@ -12551,7 +12594,7 @@ export class MoviElement extends HTMLElement {
     // button is already absent there; this row was the one that wasn't.
     if (!audioOnly && this.isControlAvailable("aspect")) {
       rows.push(
-      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span>${key("aspect")}<span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
+      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
       );
     }
     root.innerHTML = rows.join("");
@@ -12714,6 +12757,23 @@ export class MoviElement extends HTMLElement {
     }
     const host = this.getBoundingClientRect();
     if (!host.width) return;
+
+    // Lift it clear of the seek bar, onto the same line the button tooltips
+    // use. The panel is anchored to the button row, so the stylesheet's 12px
+    // put its lower edge across the progress track — the one part of the bar
+    // that is being watched while the panel is open. Measured rather than
+    // written as a number: the progress block is a different height on a
+    // compact player than on a full one.
+    const row = menu.closest(".movi-buttons-row") as HTMLElement | null;
+    const progress = menu
+      .closest(".movi-controls-bar")
+      ?.querySelector(".movi-progress-container") as HTMLElement | null;
+    if (row && progress) {
+      const gap = row.getBoundingClientRect().bottom -
+        progress.getBoundingClientRect().top + 6;
+      menu.style.bottom = `${Math.round(gap)}px`;
+    }
+
     menu.style.maxWidth = `${Math.max(200, Math.round(host.width - 16))}px`;
     menu.style.right = "0px";
     const rect = menu.getBoundingClientRect();
@@ -12869,8 +12929,15 @@ export class MoviElement extends HTMLElement {
     // open, so this.shadowRoot wouldn't find it and auto-hide would think no menu
     // is open (hiding the controls out from under an open menu).
     const contextMenu = this.contextMenuRoot().querySelector(".movi-context-menu") as HTMLElement;
+    // The timeline counts as open chrome too. It is anchored to the bar — the
+    // stylesheet moves it when the bar goes — so auto-hiding underneath it slid
+    // the panel down while someone was reading it.
+    const timeline = this.shadowRoot.querySelector(
+      ".movi-timeline-panel",
+    ) as HTMLElement | null;
 
     return (
+      (timeline?.style.display === "flex") ||
       this.isBottomMenuOpen(settingsMenu) ||
       this.isBottomMenuOpen(speedMenu) ||
       this.isBottomMenuOpen(audioMenu) ||
@@ -13475,6 +13542,8 @@ export class MoviElement extends HTMLElement {
         this.updateTitle();
         if (!controlsHidden) {
           this.updateTimeDisplay();
+          this.updateChapterPill();
+          this.updateTimelineCurrent();
           this.updateProgressBar();
           this.updateVolumeIcon();
         }
@@ -13976,6 +14045,9 @@ export class MoviElement extends HTMLElement {
            black and have no light-theme treatment of their own, so they must
            not follow --movi-glass-bg when that flips to a light surface — white
            text on white is what that costs. Public hook all the same. */
+        /* The capsule behind the right-hand icon cluster. Public hook: a host
+           that wants the old loose row sets it to transparent. */
+        --movi-controls-group-bg: rgba(255, 255, 255, 0.1);
         --movi-chrome-bg: rgba(0, 0, 0, 0.92);
         --movi-chrome-border: rgba(255, 255, 255, 0.1);
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
@@ -14806,10 +14878,14 @@ export class MoviElement extends HTMLElement {
         z-index: 10 !important;
         display: flex;
         flex-direction: column;
-        /* Bottom inset is deliberately small: the bar is anchored to the
-           bottom edge, so this padding is the only thing lifting the row off
-           it. 12px left the controls floating noticeably above the frame. */
-        padding: 4px var(--movi-chrome-inset) 5px;
+        /* The bottom inset was deliberately small while the row was bare
+           icons — the bar is anchored to the bottom edge and this padding is
+           the only thing lifting the row off it, so 12px left the controls
+           floating. The capsules changed that: they have an edge of their own,
+           and measured against the frame it was sitting 3px PAST the bottom of
+           the player. Enough to clear it, and near the 10px above the capsule
+           so the row has the same air either side. */
+        padding: 4px var(--movi-chrome-inset) 11px;
         background: var(--movi-bar-bg);
         color: var(--movi-controls-color);
         height: auto;
@@ -14901,6 +14977,173 @@ export class MoviElement extends HTMLElement {
         position: relative;
       }
 
+      /* A disabled control fades its MARK, not the capsule it sits in: the
+         capsule is the group, and a faded group says the whole thing is gone.
+         It only shows on play, which is a group of one — see the initial state,
+         where nothing is loaded yet and play is the only thing switched off. */
+      .movi-controls-left > .movi-play-pause[disabled] svg {
+        opacity: 0.4;
+      }
+
+      /* Text needs more of an edge than an icon does. A round button inside the
+         capsule already carries its own inset — the glyph sits in the middle of
+         a 38px box — but the clock is bare text, and 2px of capsule between the
+         last digit and the curve reads as the number falling out of it. */
+      /* Through :host, and stated after the capsule rule it shares padding with:
+         2px is the ring a round button needs inside its capsule, and it is not
+         a margin for text — the digits sat against the curve. */
+      /* The chapter name reads as a control because it is one — it opens the
+         timeline. Same capsule as the clock beside it, with a cap on the width
+         so a chapter called "Part 3: The Long Walk Back Through the Woods"
+         cannot push the right-hand controls off the bar. */
+      :host .movi-controls-left > .movi-chapter-pill {
+        padding: 0 12px;
+        margin: 0;
+        align-self: stretch;
+        display: flex;
+        align-items: center;
+        max-width: 240px;
+        border: none;
+        color: var(--movi-chrome-fg, #fff);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .movi-chapter-pill-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* The mark that says this opens something. Sized off the text rather than
+         given a number, so it stays in proportion if the bar's font changes,
+         and held back a little — it is punctuation, not a control of its own. */
+      .movi-chapter-pill-chevron {
+        flex: 0 0 auto;
+        width: 1.15em;
+        height: 1.15em;
+        margin-left: 4px;
+        margin-right: -3px;
+        opacity: 0.65;
+      }
+      :host .movi-controls-left > .movi-chapter-pill:hover .movi-chapter-pill-chevron {
+        opacity: 1;
+      }
+      :host .movi-controls-left > .movi-chapter-pill:hover {
+        background: var(--movi-controls-group-hover-bg, rgba(255, 255, 255, 0.18));
+      }
+      /* Moved into a host's group: the group carries the capsule now. */
+      .movi-control-group > .movi-chapter-pill {
+        padding: 0 10px;
+      }
+
+      :host .movi-controls-left > .movi-time {
+        padding: 0 12px;
+        /* No leftover margin: the cluster's own gap spaces the capsules, and
+           the extra 6px here made this one sit twice as far out as the rest. */
+        margin: 0;
+        /* Its own capsule, so it stands as tall as the buttons beside it rather
+           than hugging the text. */
+        align-self: stretch;
+        display: flex;
+        align-items: center;
+      }
+
+      /* Controls sit ON something, one capsule per group of them. Icons in a
+         row over a picture are that many separate marks with nothing saying
+         which belong together; a quiet capsule behind each group says it in one
+         stroke. The groups are the ones that mean something: play on its own,
+         the two seek buttons as the pair they are, volume with its slider, the
+         clock, and the whole settings run on the right.
+
+         Alpha over the bar rather than a colour, so it works on both themes
+         and over any frame — the bar's own gradient is what it sits on. */
+      .movi-controls-right,
+      .movi-control-group,
+      .movi-controls-left > .movi-play-pause,
+      .movi-controls-left > .movi-custom-btn,
+      .movi-controls-left > .movi-seek-group,
+      .movi-controls-left > .movi-volume-container,
+      .movi-controls-left > .movi-chapter-pill,
+      .movi-controls-left > .movi-time {
+        background: var(--movi-controls-group-bg);
+        border-radius: 999px;
+        /* Even on all four sides, so the capsule is concentric with the round
+           buttons at its ends. With more padding at the sides than the top the
+           end curves were struck from different centres and the two radii read
+           as a mismatch — which is exactly what it was. */
+        padding: 2px;
+      }
+
+      /* A capsule a host asked for, by naming a group. Laid out like the seek
+         pair, which is the same thing: several controls reading as one. */
+      .movi-control-group {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+      /* A control that moved INTO a group stops being a direct child of the
+         cluster, so it drops the capsule rule above on its own and is left
+         wearing the group's. Padding is the one thing it keeps from that rule
+         and no longer needs — the group supplies it now. */
+      .movi-control-group > .movi-play-pause,
+      .movi-control-group > .movi-time {
+        padding: 0;
+      }
+
+      /* group: "none" — a control that belongs to no capsule. The wrapper is
+         only there to keep the bar from giving it one. */
+      .movi-control-group-bare {
+        background: none;
+        padding: 0;
+      }
+
+      /* A group sitting in the ROW rather than in a cluster is one that left
+         the right-hand capsule. The row is space-between with two children —
+         the two clusters — so a third landed exactly in the middle of the bar,
+         which is the one place it did not belong. An auto margin eats the free
+         space to its left instead, parking it against the cluster it stepped
+         out of. */
+      .movi-buttons-row > .movi-control-group {
+        margin-left: auto;
+      }
+
+      /* An empty capsule is a dot. Groups come and go with the controls in
+         them — a host removing its last one, or controlslist switching a
+         built-in pair off — and a capsule with nothing left inside it stayed in
+         the row as a 4px mark with no meaning. */
+      .movi-control-group:empty,
+      :host([controlslist~="noseekbuttons"]) .movi-seek-group {
+        display: none;
+      }
+
+      .movi-seek-group {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+
+      /* Between the capsules, not between the marks inside them: 2px is what
+         separates two buttons sharing a capsule, and it is not enough to tell
+         one capsule from the next. Through :host for the specificity — the
+         width-scoped blocks below set this cluster's gap too, and they are
+         talking about buttons in a row, which it no longer is. */
+      :host .movi-controls-left {
+        gap: 6px;
+      }
+
+      /* Play is a capsule made of one button, so the button has to carry the
+         ring the container groups get from their padding — without it, it sits
+         2px shorter than everything beside it and the row's baseline breaks.
+         A host's button on this side is the same shape of thing: its own
+         capsule, so its own ring. */
+      :host .movi-controls-left > .movi-play-pause,
+      :host .movi-controls-left > .movi-custom-btn {
+        --movi-btn-size: 42px;
+        width: var(--movi-btn-size);
+        height: var(--movi-btn-size);
+      }
+
       .movi-controls-left,
       .movi-controls-right {
         display: flex;
@@ -14913,6 +15156,77 @@ export class MoviElement extends HTMLElement {
            MARKS read, and the padding is doing that job already. */
         gap: 2px;
         flex-shrink: 0;
+      }
+
+      /* The right group reads wider than the left at the same spacing, because
+         the left is broken up by the volume slider and the clock while these
+         sit in an unbroken run — 26px between glyphs across five icons is a row
+         with holes in it. Done through the size VARIABLE rather than padding:
+         the box is width/height off that var, so padding alone moved nothing,
+         and everything keyed to it (the round hover, the active fill) follows
+         the smaller box instead of turning into an ellipse around it. */
+      .movi-controls-left .movi-btn,
+      .movi-controls-right .movi-btn,
+      /* A group that stepped OUT of the clusters — see group: "none" — is
+         still a control in this row and has to be the size the rest are. Named
+         here rather than left to the base .movi-btn, which is the 44px box the
+         player uses away from the bar: outside both clusters the button came
+         back at 46 with a 20px glyph, beside 38px neighbours carrying 24. */
+      .movi-buttons-row > .movi-control-group .movi-btn {
+        /* The PADDING comes off, not the box on its own: the box is border-box,
+           so shrinking it alone squeezes the content area and the 22px glyph
+           shrinks with it — measured at 14px, which is a smaller icon and not a
+           smaller gap. Box and padding move together instead, leaving the glyph
+           its full glyph and taking the space from around it.
+
+           Both clusters, not just the right one: each is a capsule now, and two
+           capsules of different heights either side of the same bar is a worse
+           thing to look at than the loose row they replaced. */
+        --movi-btn-size: 38px;
+        /* width/height and not just the variable: several width-scoped blocks
+           below set the box as a literal, so a variable alone was ignored at
+           every size except the widest — the padding shrank, the box did not,
+           and the gap stayed where it was on a small player. */
+        width: var(--movi-btn-size);
+        height: var(--movi-btn-size);
+        padding: 7px;
+      }
+
+      /* Where the host's controls end and the player's begin. Six marks at one
+         spacing read as six unrelated things — measured on a host that adds two
+         of its own, the row was a switch, an icon, a badged gear and three more
+         icons, all equally far apart. A little more air at the seam lets the
+         eye take it as two small groups instead, and costs no width anywhere
+         else: no custom controls, no seam, no gap. */
+      .movi-controls-right .movi-custom-btn + .movi-btn:not(.movi-custom-btn),
+      .movi-controls-right .movi-custom-btn + .movi-settings-container {
+        margin-left: 10px;
+      }
+
+      /* A larger mark, not a larger button. Measured, these icons carry the
+         same ink as the left ones — the skip arrows and the aspect frame are
+         both 16.5px of drawing — but they read smaller because they no longer
+         have the whitespace around them that the left group still has. Two
+         pixels of glyph gives the eye back what the tighter framing took, and
+         the gap between them is unchanged: the box grew with the glyph. */
+      .movi-controls-left .movi-btn svg,
+      .movi-controls-right .movi-btn svg,
+      .movi-buttons-row > .movi-control-group .movi-btn svg {
+        width: 24px;
+        height: 24px;
+      }
+
+      /* …but not on a finger. 32px is a comfortable mark to look at and a poor
+         thing to hit, and the reason these boxes are oversized in the first
+         place is that they are targets before they are icons. */
+      @media (pointer: coarse) {
+        .movi-controls-left .movi-btn,
+        .movi-controls-right .movi-btn {
+          --movi-btn-size: 40px;
+          width: var(--movi-btn-size);
+          height: var(--movi-btn-size);
+          padding: 9px;
+        }
       }
 
       /* The clock is text, not a 44px box, so it has no padding of its own to
@@ -15232,6 +15546,14 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         inset: 0;
         border-radius: inherit;
+        /* And it CLIPS. The fill is a pill on its leading end only — its
+           trailing end is square so the buffer can carry on from it without a
+           pinch of bare track between them — which is right at every position
+           except the last one: at the end of the video the fill spans the whole
+           bar and that square end sat over the track's rounded corner, so the
+           bar finished flat. Clipping to the track's own shape ends it round no
+           matter which segment reaches the edge. */
+        overflow: hidden;
         pointer-events: none;
       }
 
@@ -16672,6 +16994,23 @@ export class MoviElement extends HTMLElement {
       /* ========================================
          TIMELINE PANEL
       ======================================== */
+      /* "(Normal)" beside 1x is a note about the number, not part of it — every
+         other row in the list is just a rate, and this one should not read as a
+         longer name. */
+      .movi-speed-normal {
+        /* A measured gap, not a text space: the space between two runs of
+           different size is whatever the font decides, and here it came out
+           tight enough that the note read as part of the number. */
+        margin-left: 6px;
+        /* …and it stays next to the number. A context-menu row is a flex box
+           that spreads its children — label at one end, shortcut at the other —
+           so this note became the far child and flew to the right edge. The
+           auto margin puts the row's free space on ITS right instead. */
+        margin-right: auto;
+        opacity: 0.55;
+        font-size: 0.9em;
+      }
+
       .movi-timeline-panel {
         position: absolute;
         bottom: 125px;
@@ -16694,17 +17033,21 @@ export class MoviElement extends HTMLElement {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 10px 14px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        /* No rule under it. The strip's own padding already separates the two,
+           and a line across a panel this short cut it in half — the same
+           reasoning the track menus lost theirs for. */
+        padding: 12px 14px 6px;
         flex-shrink: 0;
       }
 
+      /* Sentence case at reading weight. The old uppercase-and-letterspaced
+         title was the loudest thing in a panel whose whole point is the
+         pictures under it. */
       .movi-timeline-title {
-        font-size: 12px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: rgba(255, 255, 255, 0.6);
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: normal;
+        color: var(--movi-chrome-fg, #fff);
       }
 
       .movi-timeline-actions {
@@ -16735,42 +17078,78 @@ export class MoviElement extends HTMLElement {
         cursor: not-allowed;
       }
 
+      /* A round hit box, like every other close in the player — the bare glyph
+         had a 4px target and no hover of its own. */
       .movi-timeline-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
         background: none;
         border: none;
-        color: rgba(255, 255, 255, 0.5);
-        font-size: 20px;
+        border-radius: 50%;
+        color: var(--movi-chrome-fg, #fff);
+        opacity: 0.55;
+        font-size: 18px;
         cursor: pointer;
-        padding: 0 4px;
+        padding: 0;
         line-height: 1;
-        transition: color 0.15s;
+        transition: opacity 0.15s, background 0.15s;
       }
 
       .movi-timeline-close:hover {
-        color: var(--movi-chrome-fg, #fff);
+        opacity: 1;
+        background: var(--movi-controls-group-bg);
       }
 
       .movi-timeline-strip {
         display: flex;
-        gap: 8px;
-        padding: 10px 14px;
+        gap: 10px;
+        /* Room above and below for a tile that lifts and grows: the strip
+           hides its vertical overflow, so 6px of headroom would have clipped
+           the top off the keyboard-selected one. Less underneath than before —
+           the scroll lane is 8px taller now and sits in that space. */
+        padding: 10px 14px 4px;
         overflow-x: auto;
         overflow-y: hidden;
         flex: 1;
         min-height: 0;
       }
 
+      /* 4px was a bar you could see and not one you could hold — a pointer has
+         to land inside four pixels to start a drag. The lane is 12px now and
+         the thumb is drawn inside it with a transparent border, so it still
+         READS as a hairline while the grab area is three times taller. */
       .movi-timeline-strip::-webkit-scrollbar {
-        height: 4px;
+        height: 12px;
       }
 
       .movi-timeline-strip::-webkit-scrollbar-track {
         background: transparent;
+        /* Inset to the strip's own side padding. A scroll container draws its
+           bar across the full width INCLUDING padding, so the track ran into
+           both rounded corners of the panel while the tiles above it stopped
+           14px short — the one line in the panel that touched the edges. */
+        margin: 0 14px;
       }
 
       .movi-timeline-strip::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.15);
-        border-radius: var(--movi-radius-scrollbar);
+        background: rgba(255, 255, 255, 0.22);
+        /* The border is the padding: clipped to the padding box, so the visible
+           thumb is 4px inside a 12px lane. */
+        border: 4px solid transparent;
+        background-clip: padding-box;
+        border-radius: 999px;
+        /* A strip of forty thumbnails otherwise gives a thumb a few pixels
+           wide, which is back to being unholdable. */
+        min-width: 44px;
+      }
+
+      .movi-timeline-strip::-webkit-scrollbar-thumb:hover,
+      .movi-timeline-strip::-webkit-scrollbar-thumb:active {
+        background: rgba(255, 255, 255, 0.45);
+        background-clip: padding-box;
       }
 
       .movi-timeline-item {
@@ -16779,17 +17158,77 @@ export class MoviElement extends HTMLElement {
         position: relative;
         border-radius: var(--movi-radius-tile);
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        transition: border-color 0.2s, transform 0.2s;
+        transition: transform 0.15s, filter 0.15s;
+      }
+
+      /* The ring is drawn on a layer of its own, ABOVE the thumbnail.
+         Everything simpler was hidden by the picture: a border moves every tile
+         beside it when it turns on, an outline is drawn outside the box where
+         this strip clips it, and an inset shadow paints under the element's own
+         children — which is why it only showed in the thin strips of tile the
+         image did not cover, top and bottom.
+
+         At rest it is the tile's edge: without the old border a near-black frame
+         had no boundary at all and dissolved into the panel behind it, which is
+         just as dark. */
+      .movi-timeline-item::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+        pointer-events: none;
+        transition: box-shadow 0.15s;
+      }
+
+      /* White for the pointer and the keyboard cursor — what you are about to
+         pick. The accent is reserved for where you already are. */
+      .movi-timeline-item:hover::before,
+      .movi-timeline-item.movi-timeline-selected::before {
+        box-shadow: inset 0 0 0 2px var(--movi-chrome-fg, #fff);
       }
 
       .movi-timeline-item:hover,
       .movi-timeline-item.movi-timeline-selected {
-        border-color: var(--movi-primary);
-        /* Keep the pop small enough that an active + adjacent-hovered item
-           don't grow into each other across the 8px gap (scale doesn't
-           reflow neighbours, so an over-large scale visually overlaps). */
-        transform: scale(1.03);
+        /* Up, not bigger, for the pointer: the cursor is already there, and the
+           old scale grew a tile into its neighbours because a transform reflows
+           nothing. */
+        transform: translateY(-2px);
+      }
+
+      /* The keyboard cursor gets the size as well. There is no pointer sitting
+         on it to say where you are, so it has to be findable from across the
+         strip — and it lifts over its neighbours rather than under them, which
+         is what a raised tile with no z-index did. */
+      .movi-timeline-item.movi-timeline-selected {
+        transform: translateY(-3px) scale(1.06);
+        z-index: 1;
+      }
+
+      /* Where the playhead actually is. No ring of its own: the rings belong to
+         the pointer and the keyboard cursor, which are about what you are ABOUT
+         to pick, and a third one in the accent colour turned the strip into a
+         competition. This one is told apart by everything ELSE going dim, and
+         by the line along its foot — which is the thing a ring cannot say. */
+      .movi-timeline-strip:has(.movi-timeline-current)
+        .movi-timeline-item:not(.movi-timeline-current):not(:hover) {
+        filter: brightness(0.72);
+      }
+
+      /* How far through that tile's stretch we are, as a line along its foot.
+         The variable is written by updateTimelineCurrent and removed with the
+         class, so a tile that is not current draws nothing. */
+      .movi-timeline-item.movi-timeline-current::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        z-index: 3;
+        height: 3px;
+        width: calc(var(--movi-timeline-progress, 0) * 100%);
+        background: var(--movi-primary);
+        pointer-events: none;
       }
 
       .movi-timeline-item img {
@@ -16808,17 +17247,20 @@ export class MoviElement extends HTMLElement {
         width: 55px;
       }
 
+      /* A chip in the corner rather than a gradient band across the foot: the
+         band covered the bottom third of every frame to carry four characters,
+         and the frame is what the panel is for. Same shade the OSD and the seek
+         card use, so it reads as the player's own label on someone's picture. */
       .movi-timeline-time {
         position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        text-align: center;
+        bottom: 4px;
+        right: 4px;
         font-size: 10px;
         font-weight: 600;
         color: var(--movi-chrome-fg, #fff);
-        background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
-        padding: 12px 4px 4px;
+        background: var(--movi-osd-bg);
+        border-radius: var(--movi-radius-badge);
+        padding: 2px 5px;
         font-variant-numeric: tabular-nums;
       }
 
@@ -16826,20 +17268,22 @@ export class MoviElement extends HTMLElement {
         min-width: 130px;
       }
 
+      /* A chapter still needs the full width — a title is not four characters —
+         so this one keeps its band, reaching a little less far up the frame. */
       .movi-timeline-chapter-label {
         position: absolute;
         bottom: 0;
         left: 0;
         right: 0;
-        background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
-        padding: 16px 6px 5px;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.88));
+        padding: 20px 8px 6px;
         display: flex;
         flex-direction: column;
-        gap: 1px;
+        gap: 2px;
       }
 
       .movi-timeline-chapter-title {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 600;
         color: var(--movi-chrome-fg, #fff);
         white-space: nowrap;
@@ -16847,18 +17291,23 @@ export class MoviElement extends HTMLElement {
         text-overflow: ellipsis;
       }
 
+      /* Inside the band it is a line of the label, not a chip on the picture. */
       .movi-timeline-chapter .movi-timeline-time {
         position: static;
         background: none;
+        border-radius: 0;
         padding: 0;
-        font-size: 9px;
-        color: rgba(255, 255, 255, 0.5);
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--movi-chrome-fg, #fff);
+        opacity: 0.6;
       }
 
       .movi-timeline-status {
-        padding: 0 14px 8px;
-        font-size: 10px;
-        color: rgba(255, 255, 255, 0.4);
+        padding: 0 14px 10px;
+        font-size: 11px;
+        color: var(--movi-chrome-fg, #fff);
+        opacity: 0.45;
         text-align: center;
         flex-shrink: 0;
       }
@@ -17587,7 +18036,8 @@ export class MoviElement extends HTMLElement {
            box: away while the tray is shut, out with it when it opens. The
            single-extra case below promotes it to the bar like any other lone
            foldable, which is why that state is excluded here. */
-        :host(:not(.movi-single-extra)) .movi-controls-right:not(.expanded) .movi-aspect-ratio-btn {
+        :host(:not(.movi-single-extra)) .movi-controls-right:not(.expanded) .movi-aspect-ratio-btn,
+        :host(:not(.movi-single-extra)) .movi-controls-right:not(.expanded) .movi-pip-btn {
           display: none !important;
         }
 
@@ -17619,8 +18069,27 @@ export class MoviElement extends HTMLElement {
         }
         
         /* Alternative for older browsers: shrink left instead of hiding if :has not supported */
+        /* Shrink, don't grow. flex:1 is 1 1 0% — it GROWS the cluster to fill
+           the row, which with a capsule on it drew a pill the width of the
+           player. 0 1 auto keeps the capsule around its own icons and still
+           lets it be squeezed when they outrun the bar, which is what the
+           strip's own scrolling is waiting for. */
+        /* Expanding hides the left cluster, and a space-between row with one
+           child left lays it out at the START — the capsule slid to the left
+           edge. The ROW right-aligns instead of the cluster taking an auto
+           margin: a host group sitting in the row has an auto margin of its own
+           (see .movi-control-group in the row), and two of them share the free
+           space between them, which walked that group into the middle of the
+           bar the moment the tray opened. */
+        .movi-buttons-row:has(.movi-controls-right.expanded) {
+          justify-content: flex-end;
+        }
+        .movi-buttons-row:has(.movi-controls-right.expanded) > .movi-control-group {
+          margin-left: 0;
+        }
+
         .movi-controls-right.expanded {
-           flex: 1;
+           flex: 0 1 auto;
            /* min-width:0 lets this shrink below its content so the constraint
               reaches the expandable, which then scrolls. Without it the default
               min-width:auto keeps the whole cluster at content width and it
@@ -17758,10 +18227,10 @@ export class MoviElement extends HTMLElement {
           right: 10px;
         }
         .movi-controls-bar {
-          /* Bottom inset stays small at every size — see the base rule. These
-             per-breakpoint paddings were symmetric, so they quietly restored
-             the 14/16px lift the base rule had just removed. */
-          padding: 14px 18px 5px;
+          /* Bottom inset is no longer the smallest number that works: the
+             capsules have an edge, and measured at this width theirs sat 5px
+             BELOW the frame. See the base rule. */
+          padding: 14px 18px 11px;
         }
 
         .movi-time {
@@ -17797,7 +18266,7 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: 36px;
         }
         .movi-controls-bar {
-          padding: 2px 8px 5px;
+          padding: 2px 8px 9px;
         }
         .movi-buttons-row {
           gap: 4px;
@@ -17869,7 +18338,9 @@ export class MoviElement extends HTMLElement {
           right: 16px;
         }
         .movi-controls-bar {
-          padding: 16px 24px 7px;
+          /* Same reasoning as the base rule: the capsules need to clear the
+             frame's bottom edge, not touch it. */
+          padding: 16px 24px 13px;
         }
         /* A 20px glyph that reads fine in a 640px pane looks undersized across
            a fullscreen TV — the mark grows a little, and the box grows with it
@@ -17879,9 +18350,14 @@ export class MoviElement extends HTMLElement {
           width: 22px;
           height: 22px;
         }
+        /* Through the variable, not as a literal: a group that wants tighter
+           icons sets --movi-btn-size on itself (see .movi-controls-right), and
+           a hard width here silently won that argument at every width above
+           1025px — which is most of them. */
         .movi-btn {
-          width: 46px;
-          height: 46px;
+          --movi-btn-size: 46px;
+          width: var(--movi-btn-size);
+          height: var(--movi-btn-size);
         }
         /* Room comes from the box, not from pushing the boxes apart: at this
            width the old 16px gap plus the button's own padding put 34px of
@@ -19042,18 +19518,6 @@ export class MoviElement extends HTMLElement {
          — the end is where the VALUE is, and a key is not a value. Follows the
          panel's own foreground (the panel flips to a light surface under the
          light theme, unlike the always-dark bar), so it is legible in both. */
-      .movi-settings-key {
-        flex: 0 0 auto;
-        margin-left: 8px;
-        padding: 1px 5px;
-        border: 1px solid var(--movi-glass-border);
-        border-radius: var(--movi-radius-badge-sm);
-        font-family: inherit;
-        font-size: 11px;
-        line-height: 1.5;
-        opacity: 0.6;
-      }
-
       .movi-settings-row-value {
         flex: 0 1 auto;
         /* Right-aligned by the margin, not by growing: the trailing element of
@@ -20013,7 +20477,9 @@ export class MoviElement extends HTMLElement {
           gap: 4px !important;
         }
         .movi-controls-bar {
-          padding: 4px 8px 5px !important;
+          /* Bottom lifted like every other width: the capsules have an edge of
+             their own and 5px reads as them resting on the frame. */
+          padding: 4px 8px 9px !important;
         }
         .movi-time {
           font-size: 10px !important;
@@ -24806,6 +25272,144 @@ export class MoviElement extends HTMLElement {
   /** Time display shows the remainder ("-1:23") instead of elapsed. */
   private _timeShowsRemaining = false;
 
+  /**
+   * Name the section the playhead is in, on the pill beside the clock.
+   *
+   * Most sources have no chapters, so the pill is absent rather than empty
+   * until one does — an unlabelled capsule in the bar is a control that does
+   * nothing. Absent in linear mode too: it opens the timeline, and the timeline
+   * works by seeking.
+   */
+  private updateChapterPill(): void {
+    const pill = this.shadowRoot?.querySelector(
+      ".movi-chapter-pill",
+    ) as HTMLElement | null;
+    if (!pill) return;
+    const chapters = this.player?.getChapters() ?? [];
+    const hide = () => {
+      if (pill.style.display !== "none") pill.style.display = "none";
+    };
+    if (
+      !chapters.length ||
+      this._linearMode ||
+      !this.isControlAvailable("timeline")
+    ) {
+      hide();
+      return;
+    }
+    const duration = this.player?.getDuration() ?? 0;
+    const t = this._uiCurrentTime();
+    const current =
+      chapters.find((ch, i) => {
+        const end = i < chapters.length - 1 ? chapters[i + 1].start : duration;
+        return t >= ch.start && t < end;
+      }) ?? chapters[0];
+    const label = current?.title || "";
+    if (!label) {
+      hide();
+      return;
+    }
+    if (pill.style.display === "none") pill.style.display = "";
+    const text = pill.querySelector(
+      ".movi-chapter-pill-text",
+    ) as HTMLElement | null;
+    // Written only when it CHANGES: this runs on the UI tick, and rewriting the
+    // same string every frame is a layout the browser redoes for nothing.
+    if (text && text.textContent !== label) {
+      text.textContent = label;
+      // The tooltip names the live chapter, so refresh it while it is up.
+      if (this.controlTipFor === pill) this.showControlTip(pill);
+    }
+  }
+
+  /**
+   * Mark the tile the playhead is inside, and show how far through it we are.
+   *
+   * The strip was a row of equal thumbnails with no answer to "where am I" —
+   * the only highlight it had was the keyboard cursor, which is about what you
+   * are ABOUT to pick. Cheap enough for the UI tick: it only runs while the
+   * panel is open, and only writes when the tile changes.
+   */
+  /** The tile the marker was last on, and the windows either side of a scroll
+   *  we caused ourselves — see updateTimelineCurrent. */
+  private _timelineCurrentIndex = -1;
+  /** The tile someone clicked, held until playback genuinely leaves it. */
+  private _timelinePickedStart = -1;
+  private _timelineUserScrolledAt = 0;
+
+  private updateTimelineCurrent(): void {
+    const sr = this.shadowRoot;
+    const panel = sr?.querySelector(".movi-timeline-panel") as HTMLElement | null;
+    if (!sr || !panel || panel.style.display === "none") return;
+    const items = Array.from(
+      sr.querySelectorAll(".movi-timeline-item"),
+    ) as HTMLElement[];
+    if (!items.length) return;
+    const t = this._uiCurrentTime();
+    let current = -1;
+    for (let i = 0; i < items.length; i++) {
+      const start = Number(items[i].dataset.start);
+      const end = Number(items[i].dataset.end);
+      if (!Number.isNaN(start) && t >= start && (Number.isNaN(end) || t < end)) {
+        current = i;
+      }
+    }
+
+    // A tile that was clicked stays the current one until playback leaves it.
+    // A seek to a chapter usually lands a fraction BEFORE its start — the
+    // decoder resumes at the keyframe in front of it — so the moment the seek
+    // target retired, the marker fell back to the previous chapter and drew its
+    // progress line at nearly full. The card you just picked went quiet and the
+    // one before it looked like it was playing.
+    if (this._timelinePickedStart >= 0) {
+      const picked = items.findIndex(
+        (el) => Number(el.dataset.start) === this._timelinePickedStart,
+      );
+      const end = picked >= 0 ? Number(items[picked].dataset.end) : NaN;
+      if (picked >= 0 && t < end && t >= this._timelinePickedStart - 1.5) {
+        current = picked;
+      } else {
+        this._timelinePickedStart = -1;
+      }
+    }
+    for (let i = 0; i < items.length; i++) {
+      const el = items[i];
+      const on = i === current;
+      if (el.classList.contains("movi-timeline-current") !== on) {
+        el.classList.toggle("movi-timeline-current", on);
+      }
+      if (!on) {
+        if (el.style.getPropertyValue("--movi-timeline-progress")) {
+          el.style.removeProperty("--movi-timeline-progress");
+        }
+        continue;
+      }
+      const start = Number(el.dataset.start);
+      const end = Number(el.dataset.end);
+      const span = end > start ? (t - start) / (end - start) : 0;
+      el.style.setProperty(
+        "--movi-timeline-progress",
+        Math.max(0, Math.min(1, span)).toFixed(3),
+      );
+    }
+
+    // Follow the playhead. A seek an hour along used to leave the strip where
+    // it was, so the marker moved to a tile nobody could see. Only on a CHANGE
+    // of tile — scrolling on every tick would fight the scroll it just did.
+    if (current >= 0 && current !== this._timelineCurrentIndex) {
+      this._timelineCurrentIndex = current;
+      // …but not while someone is reading the strip themselves. Browsing ahead
+      // and being yanked back a second later is worse than not following.
+      if (performance.now() - this._timelineUserScrolledAt > 4000) {
+        items[current].scrollIntoView({
+          inline: "center",
+          block: "nearest",
+          behavior: "smooth",
+        });
+      }
+    }
+  }
+
   private updateTimeDisplay(): void {
     const currentTimeEl = this.shadowRoot?.querySelector(
       ".movi-current-time",
@@ -25125,6 +25729,12 @@ export class MoviElement extends HTMLElement {
 
       container.appendChild(segment);
     }
+
+    // The pill beside the clock names the same chapters. It is otherwise only
+    // written on the UI tick, which is gated on a visible bar — so without this
+    // a source swap left the previous video's chapter sitting in the bar until
+    // someone moved the mouse.
+    this.updateChapterPill();
   }
 
   /**
@@ -26154,7 +26764,11 @@ export class MoviElement extends HTMLElement {
 
     // Controls to disable (everything except volume)
     const controlsToDisableSelector =
-      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-stable-audio-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-pip-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause, .movi-seek-backward, .movi-seek-forward";
+      // .movi-more-btn is deliberately absent: it opens the tray, and a tray
+      // full of dead buttons is still a thing a viewer is allowed to open and
+      // look at. Disabling it made the one control that REVEALS the others
+      // unusable, so on a narrow player the bar looked like it had lost them.
+      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-stable-audio-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-pip-btn, .movi-fullscreen-btn, .movi-center-play-pause, .movi-seek-backward, .movi-seek-forward";
     const controlsToDisable = shadowRoot.querySelectorAll(
       controlsToDisableSelector,
     );
@@ -26209,6 +26823,12 @@ export class MoviElement extends HTMLElement {
           el.style.display = "none";
           el.style.opacity = "0";
           el.classList.remove("movi-center-visible");
+        } else if (el.classList.contains("movi-play-pause")) {
+          // Play is its own capsule in the bar, so fading the ELEMENT fades the
+          // pill under it and that one group comes out a different colour from
+          // every other. Left opaque; the stylesheet fades its mark instead,
+          // off the same [disabled] the line below sets.
+          el.style.opacity = "";
         } else {
           el.style.opacity = "0.4";
         }
@@ -27645,6 +28265,22 @@ export class MoviElement extends HTMLElement {
     more: ".movi-more-btn",
   };
 
+  /**
+   * The capsules a host can join, by name.
+   *
+   * Two shapes behind one map: "seek", "volume" and "settings" are already
+   * containers, so a control joins by being appended to them. "play" and
+   * "time" are a button and a block of text that WEAR a capsule rather than
+   * being one, so joining those wraps them — see controlGroupTarget.
+   */
+  private static readonly CONTROL_GROUPS: Record<string, string> = {
+    play: ".movi-play-pause",
+    seek: ".movi-seek-group",
+    volume: ".movi-volume-container",
+    time: ".movi-time",
+    settings: ".movi-controls-right",
+  };
+
   /** The context menu's item-click delegate, kept so panels created after the
    *  menu was wired can be given it too. See setupContextMenu. */
   private _menuItemClickHandler: ((e: Event) => void) | null = null;
@@ -27735,8 +28371,70 @@ export class MoviElement extends HTMLElement {
         this._prefWrite(`ctl:${id}`, entry.active ? "1" : "0");
       }
     }
+    // Where its rows sit RIGHT NOW, so the rebuild below can put them back.
+    // Rendering re-runs the anchor search, and an anchor says "after Loop" —
+    // which is where it goes, in front of anything else already sitting there.
+    // Two controls asking for the same anchor therefore swapped places every
+    // time either one was updated: toggling Autoplay moved it above Audio only,
+    // toggling it again moved it back. A state change must not reorder a menu.
+    const homes = this.customControlHomes(id);
     this.teardownCustomControl(id);
     this.renderCustomControl(id);
+    this.restoreCustomControlHomes(id, homes);
+  }
+
+  /** Each of a control's nodes, and the sibling it currently follows. */
+  private customControlHomes(
+    id: string,
+  ): Array<{ parent: Element; prev: Element | null }> {
+    const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+      ?.escape;
+    const sel = esc ? esc(id) : id;
+    const roots = new Set<ParentNode>([
+      this.shadowRoot as ParentNode,
+      this.contextMenuRoot() as ParentNode,
+    ]);
+    const homes: Array<{ parent: Element; prev: Element | null }> = [];
+    for (const root of roots) {
+      if (!root) continue;
+      for (const node of Array.from(
+        root.querySelectorAll(`[data-custom-control="${sel}"]`),
+      )) {
+        const parent = node.parentElement;
+        if (parent) homes.push({ parent, prev: node.previousElementSibling });
+      }
+    }
+    return homes;
+  }
+
+  /** Put freshly-rendered nodes back where the old ones were. */
+  private restoreCustomControlHomes(
+    id: string,
+    homes: Array<{ parent: Element; prev: Element | null }>,
+  ): void {
+    if (!homes.length) return;
+    const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+      ?.escape;
+    const sel = esc ? esc(id) : id;
+    const roots = new Set<ParentNode>([
+      this.shadowRoot as ParentNode,
+      this.contextMenuRoot() as ParentNode,
+    ]);
+    for (const root of roots) {
+      if (!root) continue;
+      for (const node of Array.from(
+        root.querySelectorAll(`[data-custom-control="${sel}"]`),
+      )) {
+        const home = homes.find((h) => h.parent === node.parentElement);
+        // No home, or the sibling it used to follow is gone with a rebuild of
+        // its own: leave the fresh node where the anchor put it.
+        if (!home) continue;
+        if (home.prev && !home.prev.isConnected) continue;
+        if (node.previousElementSibling === home.prev) continue;
+        if (home.prev) home.prev.after(node);
+        else home.parent.prepend(node);
+      }
+    }
   }
 
   /**
@@ -27779,6 +28477,9 @@ export class MoviElement extends HTMLElement {
   removeControl(id: string): void {
     this.teardownCustomControl(id);
     this._customControls.delete(id);
+    // The capsule it asked for goes with it, and anything of the player's own
+    // that was wrapped to make room goes back to standing on its own.
+    this.pruneControlGroups();
   }
 
   /**
@@ -27942,9 +28643,8 @@ export class MoviElement extends HTMLElement {
         .split(",")
         .map((a) => this.shortcutLabel(a))
         .filter(Boolean);
-      write(el, halves.join(" / "));
+      write(el, halves.join("/"));
     }
-    this.buildSettingsRoot();
     if (this.controlTipFor) this.showControlTip(this.controlTipFor);
   }
 
@@ -28110,7 +28810,17 @@ export class MoviElement extends HTMLElement {
           e.stopPropagation();
           this.triggerCustomControl(id);
         });
-        this.insertAtAnchor(row, btn, spec);
+        if (spec.group) {
+          // A named group decides the parent; before/after still order the
+          // control inside it.
+          this.insertAtAnchor(
+            this.controlGroupTarget(row, spec.group, id),
+            btn,
+            spec,
+          );
+        } else {
+          this.insertAtAnchor(row, btn, spec);
+        }
       }
     }
 
@@ -28197,6 +28907,95 @@ export class MoviElement extends HTMLElement {
   }
 
   /** Place a node before/after a named built-in, or at the end of the row. */
+  /**
+   * The element a grouped control should be appended to, made if it isn't there.
+   *
+   * Three cases, and the third is the one that earns this function. A group
+   * that is ALREADY a container is joined by appending. A group that is a bare
+   * control wearing a capsule — play, the clock — is wrapped, and wrapping is
+   * enough on its own to hand the capsule over: the bar's capsule rules are
+   * written as `.movi-controls-left > .movi-play-pause`, a DIRECT child of the
+   * cluster, so a play button that moves inside a wrapper stops matching them
+   * and stops drawing its own. It becomes a button in a group, which is what it
+   * now is. A name the player doesn't know makes a wrapper of its own.
+   */
+  private controlGroupTarget(
+    cluster: Element,
+    group: string,
+    id: string,
+  ): Element {
+    const row = cluster.parentElement ?? cluster;
+    // "none" is a group of exactly one, named after the control so two solo
+    // controls never land in the same capsule.
+    const name = group === "none" ? `solo:${id}` : group;
+
+    const existing = (
+      group === "none" ? row : this.shadowRoot
+    )?.querySelector(
+      `.movi-control-group[data-group="${CSS.escape(name)}"]`,
+    );
+    if (existing) return existing;
+
+    const builtIn = MoviElement.CONTROL_GROUPS[name];
+    if (builtIn) {
+      const el = this.shadowRoot?.querySelector(builtIn);
+      if (!el) return cluster;
+      // Already a container of its own — the seek pair, the volume block, the
+      // whole right-hand cluster. Join it as it is.
+      if (
+        el.classList.contains("movi-seek-group") ||
+        el.classList.contains("movi-volume-container") ||
+        el.classList.contains("movi-controls-right")
+      ) {
+        return el;
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "movi-control-group";
+      wrap.dataset.group = name;
+      el.parentElement?.insertBefore(wrap, el);
+      wrap.appendChild(el);
+      return wrap;
+    }
+
+    const wrap = document.createElement("div");
+    // "none" still gets a wrapper, and the wrapper is what makes it possible to
+    // have NO capsule: both clusters hand one out by position — the right
+    // cluster is a capsule, and a bare button on the left is given its own —
+    // so the only way to stand outside both is to stand in something that
+    // draws nothing.
+    wrap.className =
+      group === "none"
+        ? "movi-control-group movi-control-group-bare"
+        : "movi-control-group";
+    wrap.dataset.group = name;
+    // A solo control on the RIGHT has to leave the right-hand cluster
+    // altogether — that cluster IS the capsule everything inside it shares, so
+    // standing alone means standing outside it, just to its left.
+    if (group === "none" && cluster.classList.contains("movi-controls-right")) {
+      row.insertBefore(wrap, cluster);
+    } else {
+      cluster.appendChild(wrap);
+    }
+    return wrap;
+  }
+
+  /** Drop a group wrapper the last control just left, and give a built-in that
+   *  was wrapped its own capsule back. */
+  private pruneControlGroups(): void {
+    const groups = this.shadowRoot?.querySelectorAll(".movi-control-group");
+    if (!groups) return;
+    for (const g of Array.from(groups)) {
+      const hosted = g.querySelector("[data-custom-control]");
+      if (hosted) continue;
+      // Nothing of the host's left in it: hand the built-ins back to the
+      // cluster, in place, and take the wrapper away.
+      const parent = g.parentElement;
+      if (!parent) continue;
+      while (g.firstElementChild) parent.insertBefore(g.firstElementChild, g);
+      g.remove();
+    }
+  }
+
   private insertAtAnchor(
     parent: Element,
     node: Element,
@@ -29149,6 +29948,13 @@ export class MoviElement extends HTMLElement {
 
     if (panel.style.display === "none") {
       panel.style.display = "flex";
+      // Bring the bar up with it. The panel is positioned against the controls
+      // — the stylesheet lifts it only while the container carries
+      // movi-controls-visible — so opening on a bar that had not been shown yet
+      // left it sitting low, and it jumped up on the first mouse move, which is
+      // what put the class there. Auto-hide holds off on its own while the
+      // panel is open (see isAnyMenuOpen).
+      this.showControls();
       // Auto-generate if strip is empty, previous attempt failed, or generation
       // was paused mid-way (resumes from _timelineNextIndex)
       const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
@@ -29162,6 +29968,24 @@ export class MoviElement extends HTMLElement {
       if (strip && !this._timelineComplete && !this._timelineGenerating) {
         requestAnimationFrame(() => this.generateTimelineStrip(shadowRoot));
       }
+      // Open it where the viewer already is. A strip generated for a two-hour
+      // film starts at its own beginning, so opening it an hour in showed the
+      // opening titles and nothing about the present.
+      requestAnimationFrame(() => {
+        this.updateTimelineCurrent();
+        const items = Array.from(
+          strip?.querySelectorAll(".movi-timeline-item") ?? [],
+        ) as HTMLElement[];
+        const current = strip?.querySelector(
+          ".movi-timeline-current",
+        ) as HTMLElement | null;
+        // Opening counts as having followed: without this the first tick would
+        // see a "changed" tile and scroll again, smoothly, over the jump we
+        // just made instantly.
+        this._timelineCurrentIndex = current ? items.indexOf(current) : -1;
+        this._timelineUserScrolledAt = 0;
+        current?.scrollIntoView({ inline: "center", block: "nearest" });
+      });
     } else {
       this._timelineCancelled = true;
       panel.style.display = "none";
@@ -29197,6 +30021,11 @@ export class MoviElement extends HTMLElement {
     // Only clear when starting fresh; on resume we keep already-generated items
     if (this._timelineNextIndex === 0) {
       strip.innerHTML = "";
+      // The marker's tile went with them, so forget where it was — otherwise
+      // the first tile of the NEW strip could match the old index and the
+      // follow would decide nothing had changed.
+      this._timelineCurrentIndex = -1;
+      this._timelinePickedStart = -1;
     }
     this._timelineGenerating = true;
     this._timelineCancelled = false;
@@ -29267,6 +30096,12 @@ export class MoviElement extends HTMLElement {
 
           const item = document.createElement("div");
           item.className = "movi-timeline-item movi-timeline-chapter";
+          // The span this tile stands for. Read back by updateTimelineCurrent
+          // to mark the one the playhead is inside.
+          item.dataset.start = String(ch.start);
+          item.dataset.end = String(
+            i < chapters.length - 1 ? chapters[i + 1].start : this.player.getDuration(),
+          );
 
           if (blob) {
             const img = document.createElement("img");
@@ -29293,7 +30128,12 @@ export class MoviElement extends HTMLElement {
           // Click to seek to chapter
           item.addEventListener("click", (e) => {
             e.stopPropagation();
+            this._timelinePickedStart = ch.start;
             this.currentTime = ch.start;
+            // Move the marker now rather than at the next tick: the tile you
+            // clicked is the answer, and waiting for the seek to land is what
+            // let the previous one hold the highlight.
+            this.updateTimelineCurrent();
           });
 
           strip.appendChild(item);
@@ -29328,6 +30168,11 @@ export class MoviElement extends HTMLElement {
 
           const item = document.createElement("div");
           item.className = "movi-timeline-item";
+          // Half an interval either side: a tile stands for the stretch it is
+          // the middle of, so the marker moves one tile at a time rather than
+          // going dark between them.
+          item.dataset.start = String(Math.max(0, time - interval / 2));
+          item.dataset.end = String(time + interval / 2);
 
           const img = document.createElement("img");
           img.src = URL.createObjectURL(blob);
@@ -29342,7 +30187,9 @@ export class MoviElement extends HTMLElement {
 
           item.addEventListener("click", (e) => {
             e.stopPropagation();
+            this._timelinePickedStart = Number(item.dataset.start);
             this.currentTime = time;
+            this.updateTimelineCurrent();
           });
 
           strip.appendChild(item);
