@@ -191,6 +191,34 @@ const OSD = {
  *   });
  * ```
  */
+/**
+ * A panel the HOST puts over the picture — see MoviElement.showOverlay.
+ *
+ * `content` is trusted exactly as far as addControl's `icon` is: it comes from
+ * the page embedding this player, not from the media or the network, and it is
+ * inserted as markup. A host passing anything it did not write should sanitise
+ * it first, or hand over an Element it built itself.
+ */
+export interface MoviOverlaySpec {
+  /** Unique, and the handle for updateOverlay / hideOverlay. */
+  id: string;
+  /** Markup, or an element to mount. Keep the element if you mean to mutate it. */
+  content: string | Element;
+  /** "fill" covers the picture (an end screen), "center" floats in the middle,
+   *  "bottom-end" tucks above the controls on the right (an up-next card).
+   *  Default "fill". */
+  placement?: "fill" | "center" | "bottom-end";
+  /** False lets clicks through to the video. Default true — an overlay with
+   *  links in it needs them. */
+  interactive?: boolean;
+  /** Take it away by itself when playback resumes, the viewer seeks, or Escape
+   *  is pressed. Nothing by default: an end screen should sit there. */
+  dismissOn?: Array<"play" | "seek" | "escape">;
+  /** Called whenever it goes, with what took it: one of the dismissOn reasons,
+   *  or "host" for hideOverlay. */
+  onDismiss?: (reason: string, player: MoviElement) => void;
+}
+
 /** One row of a custom control's submenu. */
 export interface MoviControlItem {
   /** Handed back to onPick. */
@@ -2364,6 +2392,15 @@ export class MoviElement extends HTMLElement {
     const tip = this.controlTipEl;
     const bar = tip?.parentElement;
     if (!tip || !bar) return;
+    // A button that has left the tree measures 0x0 at the origin, and the tip
+    // dutifully placed itself there — hard against the player's left edge.
+    // Toggling a host control is exactly how that happens: updateControl
+    // rebuilds the button, and the click handler then re-shows the tip for the
+    // node it remembered, which no longer exists.
+    if (!btn.isConnected) {
+      this.hideControlTip();
+      return;
+    }
     const info = this.controlTipInfo(btn);
     if (!info) {
       this.hideControlTip();
@@ -19277,6 +19314,33 @@ export class MoviElement extends HTMLElement {
         overflow: visible;
       }
 
+      /* Where a host's overlays live — see showOverlay.
+         z-index 8 is the whole placement argument: above the picture and the
+         subtitles (z:5), below the control bar (z:10). An end screen that
+         covered the controls would be a trap, and one painted under the video
+         would not be an overlay at all. The layer itself never takes the
+         pointer; each overlay decides that for itself. */
+      .movi-overlay-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 8;
+        pointer-events: none;
+      }
+      .movi-overlay-layer-hidden { display: none; }
+
+      .movi-overlay { position: absolute; }
+      .movi-overlay-fill { inset: 0; }
+      /* Clear of the control bar, which is what the padding is for. */
+      .movi-overlay-center {
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 0 64px;
+        box-sizing: border-box;
+      }
+      .movi-overlay-bottom-end { right: 12px; bottom: 64px; }
+
       /* A host's own bar button. It is a .movi-btn first, so it inherits the
          size, hit area, hover and focus of every other control and cannot end
          up looking like a guest. The only thing added is what a built-in
@@ -28377,10 +28441,28 @@ export class MoviElement extends HTMLElement {
     // Two controls asking for the same anchor therefore swapped places every
     // time either one was updated: toggling Autoplay moved it above Audio only,
     // toggling it again moved it back. A state change must not reorder a menu.
+    // A tooltip open on THIS control is describing a button that is about to
+    // be destroyed. Hand it to the replacement rather than letting it point at
+    // a node that has left the tree — the pointer has not moved, so the name
+    // under it should not go anywhere either.
+    const tipWasHere =
+      this.controlTipFor?.getAttribute?.("data-custom-control") === id;
+
     const homes = this.customControlHomes(id);
     this.teardownCustomControl(id);
     this.renderCustomControl(id);
     this.restoreCustomControlHomes(id, homes);
+
+    if (tipWasHere) {
+      const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+        ?.escape;
+      const sel = esc ? esc(id) : id;
+      const fresh = this.shadowRoot?.querySelector(
+        `.movi-btn[data-custom-control="${sel}"]`,
+      ) as HTMLElement | null;
+      if (fresh) this.showControlTip(fresh);
+      else this.hideControlTip();
+    }
   }
 
   /** Each of a control's nodes, and the sibling it currently follows. */
@@ -28480,6 +28562,130 @@ export class MoviElement extends HTMLElement {
     // The capsule it asked for goes with it, and anything of the player's own
     // that was wrapped to make room goes back to standing on its own.
     this.pruneControlGroups();
+  }
+
+  private _overlays = new Map<
+    string,
+    { spec: MoviOverlaySpec; el: HTMLElement }
+  >();
+  private _overlayLayer: HTMLElement | null = null;
+
+  /** The layer overlays live in, made on first use. */
+  private overlayLayer(): HTMLElement | null {
+    if (this._overlayLayer?.isConnected) return this._overlayLayer;
+    const sr = this.shadowRoot;
+    if (!sr) return null;
+    const layer = document.createElement("div");
+    layer.className = "movi-overlay-layer";
+    sr.appendChild(layer);
+    this._overlayLayer = layer;
+
+    // Wired once, and only for a player that actually uses overlays.
+    this.addEventListener("play", () => this.dismissOverlaysOn("play"));
+    this.addEventListener("seeking", () => this.dismissOverlaysOn("seek"));
+    this.addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Escape") this.dismissOverlaysOn("escape");
+    });
+    // Picture-in-picture is a window the browser draws, not this tree — an
+    // overlay cannot appear in it. Hidden rather than removed, so it is still
+    // there when the video comes back.
+    this.addEventListener("enterpictureinpicture", () =>
+      layer.classList.add("movi-overlay-layer-hidden"),
+    );
+    this.addEventListener("leavepictureinpicture", () =>
+      layer.classList.remove("movi-overlay-layer-hidden"),
+    );
+    return layer;
+  }
+
+  /**
+   * Put the host's own panel over the picture — an end screen, an up-next
+   * countdown, a paywall, a "you were watching" resume prompt.
+   *
+   * It has to live in HERE, not in the host's page, and fullscreen is the whole
+   * reason: the fullscreen element IS this player, so anything the host renders
+   * beside it stops existing the moment a viewer goes fullscreen. Everything
+   * else follows from that — the layer sits above the picture and BELOW the
+   * control bar, the way a video's end screen does, so the controls stay
+   * reachable while it is up.
+   *
+   * The look belongs to the host, exactly like addControl: hand over markup (a
+   * shipped <style> lands in this tree and works) or an element you keep a
+   * reference to and mutate yourself. A ticking countdown should do the latter
+   * and write to its own text node — re-rendering markup every second only to
+   * change a digit throws the node away under the pointer.
+   */
+  showOverlay(spec: MoviOverlaySpec): void {
+    if (!spec?.id) {
+      Logger.warn(TAG, "showOverlay: an overlay needs an id");
+      return;
+    }
+    const layer = this.overlayLayer();
+    if (!layer) return;
+
+    this.hideOverlay(spec.id);
+
+    const el = document.createElement("div");
+    el.className = `movi-overlay movi-overlay-${spec.placement || "fill"}`;
+    el.dataset.overlay = spec.id;
+    // Clicks land on the video underneath unless the overlay says otherwise —
+    // a countdown is a label, an end screen is a grid of links, and the two
+    // want opposite answers.
+    el.style.pointerEvents = spec.interactive === false ? "none" : "auto";
+    this.fillOverlay(el, spec.content);
+    layer.appendChild(el);
+    this._overlays.set(spec.id, { spec, el });
+  }
+
+  /** Change an overlay in place. Content given here REPLACES what is there. */
+  updateOverlay(id: string, patch: Partial<MoviOverlaySpec>): void {
+    const entry = this._overlays.get(id);
+    if (!entry) return;
+    entry.spec = { ...entry.spec, ...patch, id };
+    if (patch.content !== undefined) {
+      entry.el.textContent = "";
+      this.fillOverlay(entry.el, patch.content);
+    }
+    if (patch.placement) {
+      entry.el.className = `movi-overlay movi-overlay-${patch.placement}`;
+    }
+    if (patch.interactive !== undefined) {
+      entry.el.style.pointerEvents = patch.interactive === false ? "none" : "auto";
+    }
+  }
+
+  /** Take an overlay away. `reason` is passed on to its onDismiss. */
+  hideOverlay(id: string, reason = "host"): void {
+    const entry = this._overlays.get(id);
+    if (!entry) return;
+    this._overlays.delete(id);
+    entry.el.remove();
+    try {
+      entry.spec.onDismiss?.(reason, this);
+    } catch (e) {
+      Logger.warn(TAG, `overlay "${id}" onDismiss threw`, e);
+    }
+  }
+
+  /** Is this overlay up right now? */
+  isOverlayVisible(id: string): boolean {
+    return this._overlays.has(id);
+  }
+
+  private fillOverlay(el: HTMLElement, content: string | Element): void {
+    if (typeof content === "string") {
+      // eslint-disable-next-line no-unsanitized/property -- host-supplied, same trust as addControl's icon
+      el.innerHTML = content;
+    } else if (content instanceof Element) {
+      el.appendChild(content);
+    }
+  }
+
+  /** Overlays that asked to go away when something happens. */
+  private dismissOverlaysOn(reason: "play" | "seek" | "escape"): void {
+    for (const [id, { spec }] of [...this._overlays]) {
+      if (spec.dismissOn?.includes(reason)) this.hideOverlay(id, reason);
+    }
   }
 
   /**
