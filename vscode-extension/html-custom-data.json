@@ -322,6 +322,19 @@
           ]
         },
         {
+          "name": "cropbars",
+          "description": {
+            "kind": "markdown",
+            "value": "Crops the black bars that are part of the **picture**."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#cropbars"
+            }
+          ]
+        },
+        {
           "name": "renderer",
           "description": {
             "kind": "markdown",

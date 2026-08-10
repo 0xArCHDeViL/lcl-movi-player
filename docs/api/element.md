@@ -492,6 +492,42 @@ Controls how video fills the canvas.
 
 ---
 
+#### `cropbars`
+
+Crops the black bars that are part of the **picture**.
+
+A 2.39:1 film delivered in a 16:9 frame carries its letterbox as pixels, and a
+phone video padded into a 4:3 frame carries its pillarbox the same way. Without
+this, `cover`, `fill` and `zoom` scale that padding along with the image and
+hand back the same bars, larger — with it, the bars come off first, so those
+fits mean what they say.
+
+```html
+<movi-player src="film.mkv" cropbars objectfit="cover"></movi-player>
+```
+
+```javascript
+player.cropbars = true;
+player.getBarCrop();  // { top: 0.128, bottom: 0.128, left: 0, right: 0 }
+player.addEventListener("cropchange", (e) => console.log(e.detail));
+```
+
+Detection reads the small mirrored frame the renderer already keeps for ambient
+mode, a few times a second, and the crop is applied in the shader — nothing is
+decoded twice. It is deliberately slow to believe itself: the same bars have to
+hold for over a second, the line just inside a bar has to be much brighter than
+the bar (a fade to black has no such edge, which is what stops a night scene
+from cropping the film), nothing over a quarter of the frame comes off an edge,
+and a crop that lands on a known ratio — 2.39, 1.85, 4:3 and their portrait
+twins — is snapped onto it exactly and centred.
+
+Off by default, and a source with no bars is left alone. Bars on **both** axes
+at once are taken as measured rather than snapped: a frame padded twice has no
+single ratio to land on. The seek-bar preview and the timeline strip decode
+separately and still show the bars.
+
+---
+
 #### `hdr`
 
 Enables/disables HDR rendering.
@@ -2009,6 +2045,7 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
 | `aspectchange`         | `{ fit, mode }`                      | Viewer picked an aspect from the gear menu (`fit` is `contain`/`cover`/`fill`/`zoom`; `mode` says whether it landed on `objectfit` or the `control` fit) |
+| `cropchange`           | `{ top, bottom, left, right }`       | The bars cropped from the picture changed (see [`cropbars`](#cropbars)); fractions of the coded frame taken off each edge |
 | `loopchange`           | `{ enabled: boolean }`               | Loop toggled                                       |
 | `stablevolumechange`   | `{ enabled: boolean }`               | Stable volume toggled                              |
 | `hdrchange`            | `{ enabled: boolean }`               | HDR toggled                                        |

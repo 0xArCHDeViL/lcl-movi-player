@@ -699,10 +699,14 @@ export class CanvasRenderer {
     // the compositor believes, so the rounding survives.
     // x = radius in drawing-buffer pixels (0 disables), yz = buffer size.
     uniform vec3 u_round;
+    // The part of the frame to actually show, in texture coordinates
+    // (x0,y0 → x1,y1). The whole frame by default; narrowed when the black bars
+    // baked INTO the picture are cropped away — see setBarCropEnabled.
+    uniform vec4 u_crop;
     in vec2 v_texCoord;
     out vec4 outColor;
     void main() {
-      outColor = texture(u_image, v_texCoord);
+      outColor = texture(u_image, mix(u_crop.xy, u_crop.zw, v_texCoord));
       // The picture is opaque: the context is transparent only so a CUT corner
       // can show the page through it. Trusting the texture's own alpha instead
       // turned the whole canvas transparent on the paths that upload without
@@ -814,6 +818,11 @@ export class CanvasRenderer {
     precision highp float;
     uniform sampler2D u_image;
     uniform float u_hdrEnabled; // 0.0 = disabled, 1.0 = enabled
+    // The part of the frame to actually show, in texture coordinates
+    // (x0,y0 → x1,y1). The whole frame by default; narrowed when the black bars
+    // baked INTO the picture are cropped away — see setBarCropEnabled.
+    uniform vec4 u_crop;
+
     // Rounded corners cut in the shader — see the passthrough program.
     // x = radius in drawing-buffer pixels (0 disables), yz = buffer size.
     uniform vec3 u_round;
@@ -847,7 +856,7 @@ export class CanvasRenderer {
     }
 
     void main() {
-      vec4 color = texture(u_image, v_texCoord);
+      vec4 color = texture(u_image, mix(u_crop.xy, u_crop.zw, v_texCoord));
 
       // Apply PQ EOTF to get linear light
       vec3 linear = PQtoLinear(color.rgb);
@@ -2935,8 +2944,13 @@ export class CanvasRenderer {
       // Attempting to draw a closed frame causes "WebGL: INVALID_OPERATION: texImage2D: can't texture a closed VideoFrame"
       // Explicitly check display dimensions which are 0 on closed frames
       // (and on a <video> that has no metadata yet).
-      const contentWidth = sourceWidth(frame);
-      const contentHeight = sourceHeight(frame);
+      // The CROPPED size, so contain/cover/zoom/aspect all reason about the
+      // picture rather than the padded frame it arrived in. With no crop these
+      // are the frame's own dimensions.
+      const cropW = this.cropRect.x1 - this.cropRect.x0;
+      const cropH = this.cropRect.y1 - this.cropRect.y0;
+      const contentWidth = Math.round(sourceWidth(frame) * cropW);
+      const contentHeight = Math.round(sourceHeight(frame) * cropH);
       if (contentWidth === 0 || contentHeight === 0) {
         return; // Silently skip closed/invalid frames (normal at EOF)
       }
@@ -3106,6 +3120,7 @@ export class CanvasRenderer {
 
       gl.useProgram(this.program);
       this.applyRoundUniform(this.program);
+      this.applyCropUniform(this.program);
       gl.bindVertexArray(this.vao);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -3114,6 +3129,9 @@ export class CanvasRenderer {
       // sync readback is deferred until MoviElement asks via readAmbientPixels().
       if (this.ambientEnabled) {
         this._renderAmbientThumbnail();
+        // Reads the mirror that was just written. Rate-limited inside, and a
+        // no-op unless the host asked for bar cropping.
+        this.detectBars(performance.now());
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "InvalidStateError") {
@@ -3219,11 +3237,16 @@ export class CanvasRenderer {
     // fragment would fall outside the rounded rect and the ambient sample would
     // come back empty. Restored right after.
     this.setRoundUniformOff();
+    // …and no crop either. This mirror is what bar detection reads, and a
+    // cropped mirror would show it a frame with the bars already gone: it could
+    // never tell that the crop had become wrong, and never widen back.
+    this.applyCropUniform(this.program, true);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.applyRoundUniform(this.program);
+    this.applyCropUniform(this.program);
     // Restore main viewport for any subsequent GL work this tick.
     gl.viewport(0, 0, this.width, this.height);
   }
@@ -4444,6 +4467,311 @@ export class CanvasRenderer {
       (this.canvas as HTMLCanvasElement).clientWidth || this.canvas.width;
     const scale = cssW > 0 ? this.canvas.width / cssW : 1;
     return this.cornerRadiusCss * scale;
+  }
+
+  // ── Bar cropping ────────────────────────────────────────
+  /** On only when the host asks for it. Off, nothing here runs and the crop
+   *  stays the whole frame. */
+  private barCropEnabled = false;
+  private barCropOwnsMirror = false;
+  /** What the last few checks agreed on, and since when. */
+  private barCropCandidate: {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+  } | null = null;
+  private barCropStableSince = 0;
+  private barCropLastCheck = 0;
+  private onCropChange:
+    | ((crop: {
+        top: number;
+        bottom: number;
+        left: number;
+        right: number;
+      }) => void)
+    | null = null;
+
+  /** How dark a row has to be to count as bar, and how much brighter the row
+   *  just inside it must be for that edge to be a real one. */
+  private static readonly BAR_DARK = 18;
+  private static readonly BAR_EDGE = 34;
+  /** A bar this thick is not a bar. Nothing legitimate takes a quarter of the
+   *  frame off each end. */
+  private static readonly BAR_MAX = 0.25;
+  /** How long the same answer has to hold before it is acted on. A fade to
+   *  black is a dark frame for a moment; a letterbox is dark for the film. */
+  private static readonly BAR_SETTLE_MS = 1200;
+  private static readonly BAR_CHECK_MS = 250;
+
+  /**
+   * Crop the black bars that are part of the PICTURE.
+   *
+   * A 2.39:1 film delivered in a 16:9 frame carries its bars as pixels, so
+   * "fill" and "zoom" scale the padding along with the image and the viewer
+   * ends up with the same letterbox, larger. Cropping is done in the shader —
+   * the sampled region narrows, nothing is decoded twice — and the fit maths
+   * read the cropped size, which is what makes those modes mean anything.
+   */
+  setBarCropEnabled(
+    on: boolean,
+    onChange?: (crop: {
+      top: number;
+      bottom: number;
+      left: number;
+      right: number;
+    }) => void,
+  ): void {
+    if (onChange !== undefined) this.onCropChange = onChange;
+    if (on === this.barCropEnabled) return;
+    this.barCropEnabled = on;
+    if (on) {
+      // Detection reads the ambient mirror. If ambient is not using it, this
+      // turns it on and remembers that it was ours to turn off.
+      if (!this.ambientEnabled) {
+        this.enableAmbientMirror();
+        this.barCropOwnsMirror = this.ambientEnabled;
+      }
+      this.barCropCandidate = null;
+      this.barCropStableSince = 0;
+      this.barCropLastCheck = 0;
+    } else {
+      if (this.barCropOwnsMirror) {
+        this.disableAmbientMirror();
+        this.barCropOwnsMirror = false;
+      }
+      this.setCropRect(0, 0, 0, 0);
+    }
+  }
+
+  /** The crop in force, as the fraction taken off each edge. */
+  getBarCrop(): { top: number; bottom: number; left: number; right: number } {
+    return {
+      top: this.cropRect.y0,
+      bottom: 1 - this.cropRect.y1,
+      left: this.cropRect.x0,
+      right: 1 - this.cropRect.x1,
+    };
+  }
+
+  private setCropRect(
+    top: number,
+    bottom: number,
+    left: number,
+    right: number,
+  ): void {
+    const y0 = Math.max(0, Math.min(0.45, top));
+    const y1 = 1 - Math.max(0, Math.min(0.45, bottom));
+    const x0 = Math.max(0, Math.min(0.45, left));
+    const x1 = 1 - Math.max(0, Math.min(0.45, right));
+    if (y1 - y0 < 0.3 || x1 - x0 < 0.3) return; // never leave a sliver
+    if (
+      this.cropRect.y0 === y0 &&
+      this.cropRect.y1 === y1 &&
+      this.cropRect.x0 === x0 &&
+      this.cropRect.x1 === x1
+    ) {
+      return;
+    }
+    this.cropRect.y0 = y0;
+    this.cropRect.y1 = y1;
+    this.cropRect.x0 = x0;
+    this.cropRect.x1 = x1;
+    // The fit maths run off the cropped size, and they only run on a draw —
+    // so a still frame would keep the old geometry until something moved.
+    if (this.lastRenderedFrame) this.drawFrame(this.lastRenderedFrame, true);
+    Logger.info(
+      TAG,
+      `Bar crop: top=${(y0 * 100).toFixed(1)}% bottom=${((1 - y1) * 100).toFixed(1)}% ` +
+        `left=${(x0 * 100).toFixed(1)}% right=${((1 - x1) * 100).toFixed(1)}%`,
+    );
+    try {
+      this.onCropChange?.(this.getBarCrop());
+    } catch (e) {
+      Logger.warn(TAG, "crop change handler threw", e);
+    }
+  }
+
+  /**
+   * Look for letterbox bars in the mirrored frame.
+   *
+   * Cheap by construction: the mirror is already drawn for ambient, and this
+   * reads it a few times a second. Everything expensive about the idea is in
+   * being SURE — a fade to black, a night scene and a title card are all dark
+   * frames, and cropping one of them would eat the picture.
+   */
+  private detectBars(now: number): void {
+    if (!this.barCropEnabled) return;
+    if (now - this.barCropLastCheck < CanvasRenderer.BAR_CHECK_MS) return;
+    this.barCropLastCheck = now;
+    const px = this.readAmbientPixels();
+    if (!px) return;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+
+    // readPixels is bottom-up and the quad maps the texture's first row to the
+    // TOP of the image, so the image's top rows land at the END of the buffer.
+    const lum = (x: number, y: number) => {
+      const i = (y * size + x) * 4;
+      return 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+    };
+    // Eight samples across a line is plenty to know whether it is black, and
+    // stepping in from the extreme edge skips a scaler's ringing.
+    const rowMax = (y: number) => {
+      let m = 0;
+      for (let i = 0; i < 8; i++) {
+        m = Math.max(m, lum(Math.round(((i + 0.5) / 8) * (size - 1)), y));
+      }
+      return m;
+    };
+    const colMax = (x: number) => {
+      let m = 0;
+      for (let i = 0; i < 8; i++) {
+        m = Math.max(m, lum(x, Math.round(((i + 0.5) / 8) * (size - 1))));
+      }
+      return m;
+    };
+
+    const limit = Math.floor(size * CanvasRenderer.BAR_MAX);
+    // Rows are read from the far end for the image's top — readPixels is
+    // bottom-up. Columns need no such flip.
+    let top = 0;
+    while (top < limit && rowMax(size - 1 - top) <= CanvasRenderer.BAR_DARK) top++;
+    let bottom = 0;
+    while (bottom < limit && rowMax(bottom) <= CanvasRenderer.BAR_DARK) bottom++;
+    let left = 0;
+    while (left < limit && colMax(left) <= CanvasRenderer.BAR_DARK) left++;
+    let right = 0;
+    while (right < limit && colMax(size - 1 - right) <= CanvasRenderer.BAR_DARK) {
+      right++;
+    }
+
+    // A real bar ENDS somewhere: the first line of picture is much brighter
+    // than the bar. A dark scene fades instead, and that is the test that tells
+    // them apart — without it, the first night shot would crop the film.
+    if (!(top > 0 && rowMax(size - 1 - top) > CanvasRenderer.BAR_EDGE)) top = 0;
+    if (!(bottom > 0 && rowMax(bottom) > CanvasRenderer.BAR_EDGE)) bottom = 0;
+    if (!(left > 0 && colMax(left) > CanvasRenderer.BAR_EDGE)) left = 0;
+    if (!(right > 0 && colMax(size - 1 - right) > CanvasRenderer.BAR_EDGE)) {
+      right = 0;
+    }
+
+    const found = {
+      top: top / size,
+      bottom: bottom / size,
+      left: left / size,
+      right: right / size,
+    };
+    const c = this.barCropCandidate;
+    const same =
+      c &&
+      Math.abs(c.top - found.top) < 1 / size &&
+      Math.abs(c.bottom - found.bottom) < 1 / size &&
+      Math.abs(c.left - found.left) < 1 / size &&
+      Math.abs(c.right - found.right) < 1 / size;
+    if (!same) {
+      this.barCropCandidate = found;
+      this.barCropStableSince = now;
+      return;
+    }
+    if (now - this.barCropStableSince < CanvasRenderer.BAR_SETTLE_MS) return;
+
+    const current = this.getBarCrop();
+    if (
+      Math.abs(current.top - found.top) < 1 / size &&
+      Math.abs(current.bottom - found.bottom) < 1 / size &&
+      Math.abs(current.left - found.left) < 1 / size &&
+      Math.abs(current.right - found.right) < 1 / size
+    ) {
+      return; // already there
+    }
+    this.setCropRect(...this.snapToKnownAspect(found));
+  }
+
+  /**
+   * Nudge a crop onto a real aspect ratio.
+   *
+   * The mirror is 64 rows, so a measured bar is only ever a 64th of the frame —
+   * good enough to find it, one row out either way. Films are not one row out:
+   * they are 2.39, 1.85, 4:3. Landing exactly on the nearest of those keeps the
+   * cropped picture from being a fraction off, which is the difference between
+   * "cropped" and "cropped badly".
+   */
+  private snapToKnownAspect(found: {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+  }): [number, number, number, number] {
+    const w = this.lastRenderedFrame ? sourceWidth(this.lastRenderedFrame) : 0;
+    const h = this.lastRenderedFrame ? sourceHeight(this.lastRenderedFrame) : 0;
+    const vertical = found.top + found.bottom;
+    const horizontal = found.left + found.right;
+    // Both axes cropped is a window-boxed frame — a picture padded twice, by
+    // two different hands. There is no single ratio to snap that onto, so it is
+    // left exactly as measured.
+    if (!w || !h || (vertical > 0 && horizontal > 0)) {
+      return [found.top, found.bottom, found.left, found.right];
+    }
+    const visibleW = 1 - horizontal;
+    const visibleH = 1 - vertical;
+    if (visibleW <= 0 || visibleH <= 0) {
+      return [found.top, found.bottom, found.left, found.right];
+    }
+    const aspect = (w * visibleW) / (h * visibleH);
+    // Landscape ratios and their portrait twins. A phone video padded into a
+    // 4:3 frame is 3:4 visible, which is 4/3 upside down — leaving the
+    // reciprocals out meant a pillarboxed portrait clip matched nothing and
+    // kept the mirror's own two-column error instead of being centred.
+    const LANDSCAPE = [2.39, 2.35, 2.2, 2.0, 1.85, 16 / 9, 1.66, 1.5, 4 / 3];
+    const KNOWN = [1, ...LANDSCAPE, ...LANDSCAPE.map((k) => 1 / k)];
+    let best = 0;
+    let bestErr = Infinity;
+    for (const k of KNOWN) {
+      const err = Math.abs(aspect - k) / k;
+      if (err < bestErr) {
+        bestErr = err;
+        best = k;
+      }
+    }
+    if (bestErr > 0.03) {
+      return [found.top, found.bottom, found.left, found.right];
+    }
+    // Split it evenly. Matching a known ratio is the evidence that this is an
+    // ordinary pad, and ordinary pads are centred — where the two sides came
+    // out uneven, that is the 64-line mirror being one or two lines off on each
+    // side, not an off-centre picture. Measured on a 1440x1080 file holding a
+    // 810-wide image: 12 columns one side, 16 the other, when both are 14.
+    // (An unsnapped crop keeps exactly what was measured — see the early
+    // returns above.)
+    if (vertical > 0) {
+      const trim = Math.max(0, 1 - w / (h * best)) / 2;
+      return [trim, trim, 0, 0];
+    }
+    if (horizontal > 0) {
+      const trim = Math.max(0, 1 - (best * h) / w) / 2;
+      return [0, 0, trim, trim];
+    }
+    return [0, 0, 0, 0];
+  }
+
+  /** The visible part of the frame, in texture coordinates. Whole frame until
+   *  bar cropping finds something to take off. */
+  private cropRect = { x0: 0, y0: 0, x1: 1, y1: 1 };
+  private cropLocs = new WeakMap<WebGLProgram, WebGLUniformLocation | null>();
+
+  /** Feed the crop to whichever program is about to draw. */
+  private applyCropUniform(program: WebGLProgram | null, full = false): void {
+    const gl = this.gl;
+    if (!gl || !program) return;
+    let loc = this.cropLocs.get(program);
+    if (loc === undefined) {
+      loc = gl.getUniformLocation(program, "u_crop");
+      this.cropLocs.set(program, loc);
+    }
+    if (!loc) return;
+    const c = this.cropRect;
+    if (full) gl.uniform4f(loc, 0, 0, 1, 1);
+    else gl.uniform4f(loc, c.x0, c.y0, c.x1, c.y1);
   }
 
   /** Turn the corner cut off for a pass that draws somewhere else (see the

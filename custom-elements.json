@@ -103,6 +103,10 @@
               "description": "Specifies external element for ambient effects."
             },
             {
+              "name": "cropbars",
+              "description": "Crops the black bars that are part of the **picture**."
+            },
+            {
               "name": "renderer",
               "description": "Chooses the rendering backend.",
               "type": {

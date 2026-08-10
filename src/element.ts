@@ -222,6 +222,9 @@ export interface MoviPlayerAttributes {
 
   /** CSS selector for an external element to receive the ambient glow. */
   ambientwrapper?: string;
+  /** Crop the black bars that are part of the picture, so `cover` / `fill` /
+   *  `zoom` size the image rather than its padding. */
+  cropbars?: boolean | "";
   /** What to do with a source Movi can't play (`native` → hand to `<video>`). */
   fallback?: "native";
   /**

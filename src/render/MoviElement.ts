@@ -812,6 +812,9 @@ export class MoviElement extends HTMLElement {
   /** Back arrow restricted to fullscreen (`titlemode` "back-fullscreen"). */
   private _titleBackFullscreenOnly: boolean = false;
   private _resume: boolean = false; // Resume playback from last position (opt-in)
+  /** Crop the black bars that are baked into the picture — see `cropbars`. */
+  private _cropBars = false;
+
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
   // Audio output device routing (AudioContext.setSinkId). _audioOutputDeviceId
   // is the chosen target ("" = system default; may start as a label substring
@@ -1041,6 +1044,7 @@ export class MoviElement extends HTMLElement {
       "subtitleedge",
       "ambientmode",
       "ambientwrapper",
+      "cropbars",
       "renderer",
       "objectfit",
       "rotate",
@@ -21902,6 +21906,10 @@ export class MoviElement extends HTMLElement {
         this.setVR360(m.enable, m.half, m.fisheye, m.sbs, m.stereographic);
         break;
       }
+      case "cropbars":
+        this._cropBars = newValue !== null;
+        this.applyBarCrop();
+        break;
       case "stablevolume":
         this._stableVolume = newValue !== null;
         if (this.player) {
@@ -23212,6 +23220,9 @@ export class MoviElement extends HTMLElement {
       // Same for host-supplied chapters: the element outlives the player, and a
       // fresh one only knows about the container's own.
       if (this._chapters) this.player.setChapters(this._chapters);
+    // The renderer is new, and the crop setting lives on it — an attribute set
+    // before the player existed would otherwise never reach anything.
+    if (this._cropBars) this.applyBarCrop();
       // …and the corner rounding, which a fresh renderer does not inherit —
       // see scheduleRoundingReapply.
       this.syncPictureRounding(true);
@@ -25344,6 +25355,76 @@ export class MoviElement extends HTMLElement {
    * nothing. Absent in linear mode too: it opens the timeline, and the timeline
    * works by seeking.
    */
+  /**
+   * Hand the crop setting to the renderer, and mirror what it finds back out.
+   *
+   * The renderer owns the pixels — it already mirrors every drawn frame for
+   * ambient, and that mirror is what the bars are found in — so the decision
+   * lives there and this only switches it on and reports.
+   */
+  private applyBarCrop(): void {
+    const renderer = (
+      this.player as unknown as {
+        videoRenderer?: {
+          setBarCropEnabled?: (
+            on: boolean,
+            onChange?: (crop: {
+              top: number;
+              bottom: number;
+              left: number;
+              right: number;
+            }) => void,
+          ) => void;
+        };
+      } | null
+    )?.videoRenderer;
+    renderer?.setBarCropEnabled?.(this._cropBars, (crop) => {
+      this.dispatchEvent(
+        new CustomEvent("cropchange", {
+          detail: crop,
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    });
+  }
+
+  /**
+   * Crop the black bars that are part of the picture.
+   *
+   * A 2.39:1 film delivered in a 16:9 frame carries its letterbox as pixels, so
+   * "fill" and "zoom" scale the padding with the image and hand back the same
+   * letterbox, larger. With this on, the bars are taken off before any of that
+   * happens — so those fits mean what they say.
+   */
+  get cropbars(): boolean {
+    return this._cropBars;
+  }
+
+  set cropbars(value: boolean) {
+    if (value) this.setAttribute("cropbars", "");
+    else this.removeAttribute("cropbars");
+  }
+
+  /** What is being cropped right now, as the fraction taken off each edge. */
+  getBarCrop(): { top: number; bottom: number; left: number; right: number } {
+    const renderer = (
+      this.player as unknown as {
+        videoRenderer?: {
+          getBarCrop?: () => {
+            top: number;
+            bottom: number;
+            left: number;
+            right: number;
+          };
+        };
+      } | null
+    )?.videoRenderer;
+    return (
+      renderer?.getBarCrop?.() ?? { top: 0, bottom: 0, left: 0, right: 0 }
+    );
+  }
+
   private updateChapterPill(): void {
     const pill = this.shadowRoot?.querySelector(
       ".movi-chapter-pill",
@@ -27938,6 +28019,9 @@ export class MoviElement extends HTMLElement {
       });
 
       if (this._chapters) this.player.setChapters(this._chapters);
+    // The renderer is new, and the crop setting lives on it — an attribute set
+    // before the player existed would otherwise never reach anything.
+    if (this._cropBars) this.applyBarCrop();
 
       // Bind device enumeration + apply any pending `audiooutput` selection.
       this.setupAudioOutputs();
