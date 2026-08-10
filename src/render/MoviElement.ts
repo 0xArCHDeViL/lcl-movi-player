@@ -27513,6 +27513,18 @@ export class MoviElement extends HTMLElement {
         w.style.backgroundRepeat = "";
         w.style.transition = "background-image 2.4s linear";
         this.player?.setLetterboxColor(0, 0, 0);
+        // …and take the GL wash back off. Out here the light belongs to the
+        // wrapper behind the player; the wash is what the BARS carry, and it is
+        // only set in the branch below. Leaving fullscreen runs this branch
+        // again but nothing was clearing it, so the colour stayed painted
+        // inside the canvas and the bars never went back to black.
+        (
+          (this.player as unknown as {
+            videoRenderer?: {
+              setAmbientWash?: (rgb: [number, number, number] | null) => void;
+            };
+          } | null)?.videoRenderer
+        )?.setAmbientWash?.(null);
 
         if (this._theme === "light") {
           this.ambientWrapperElement.style.filter =
