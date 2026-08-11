@@ -1860,6 +1860,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       indicatorOn = true;
       myIndicator = ++this._switchIndicatorGen;
       this.emit("renditionSwitch", { active: true, label: switchLabel });
+      // Bound streams stop together, and this is the one place the picture
+      // stops on purpose. The swap is seamless by design — only the video
+      // pipeline is replaced, so the sound was never interrupted — but that
+      // design is exactly what a binding says no to: on a slow link the new
+      // rendition's first frame can be a second or more away, and what the
+      // viewer gets is a frozen picture with a spinner over it while the sound
+      // and the clock run on. Hold everything for the swap, and let the normal
+      // resume gate start it again when frames are actually arriving.
+      //
+      // Marked self-inflicted: this is our own stall, not a starved pipeline,
+      // so it resumes on readiness instead of serving the 1.5s cushion meant
+      // for a decoder that fell behind. A switch that bails leaves the old
+      // rendition's queue intact, so the gate finds video ready and lets go
+      // immediately.
+      if (this._bindAV && this.stateManager.is("playing")) {
+        this.wasPlayingBeforeRebuffer = true;
+        this._bufferingEntryTime = performance.now();
+        this._bufferingSelfInflicted = true;
+        this.stateManager.setState("buffering");
+        this.clock.pause();
+        this.audioRenderer?.suspendForBuffering();
+        this.videoRenderer?.stopPresentationLoop();
+      }
     };
     const endSwitch = <T,>(result: T): T => {
       if (indicatorOn && myIndicator === this._switchIndicatorGen) {
