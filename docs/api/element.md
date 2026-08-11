@@ -528,6 +528,34 @@ separately and still show the bars.
 
 ---
 
+#### `backgroundplay`
+
+Lets [`autoplay`](#autoplay) start while the tab is **hidden**.
+
+By default a hidden tab parks the autoplay and starts it the first time the tab
+is shown. That isn't politeness: a first play started behind another tab meets a
+throttled `requestAnimationFrame` and a denied WakeLock, and its opening seek can
+time out into a buffering state that only a manual pause → play unsticks.
+
+```html
+<movi-player src="album.m4a" autoplay backgroundplay></movi-player>
+```
+
+```javascript
+player.backgroundplay = true;
+```
+
+Turn it on when the page knows that "hidden" doesn't mean "unwatched" — a
+background audio player, a playlist that has to keep advancing behind another
+tab, a kiosk screen the browser reports as hidden.
+
+This is only about **starting**. Playback that has already begun continues when
+the tab goes away with or without this. Document Picture-in-Picture is exempt
+either way: the tab is hidden by definition there while the picture is on
+screen, so autoplay is never deferred for it.
+
+---
+
 #### `hdr`
 
 Enables/disables HDR rendering.
@@ -2046,6 +2074,7 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
 | `aspectchange`         | `{ fit, mode }`                      | Viewer picked an aspect from the gear menu (`fit` is `contain`/`cover`/`fill`/`zoom`; `mode` says whether it landed on `objectfit` or the `control` fit) |
 | `cropchange`           | `{ top, bottom, left, right }`       | The bars cropped from the picture changed (see [`cropbars`](#cropbars)); fractions of the coded frame taken off each edge |
+| `controlschange`       | `{ visible: boolean }`               | The control bar appeared or auto-hid. Fires on the change only, so a host drawing its own chrome over the player can follow it |
 | `loopchange`           | `{ enabled: boolean }`               | Loop toggled                                       |
 | `stablevolumechange`   | `{ enabled: boolean }`               | Stable volume toggled                              |
 | `hdrchange`            | `{ enabled: boolean }`               | HDR toggled                                        |

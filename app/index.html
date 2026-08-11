@@ -2515,6 +2515,9 @@
         aspect-ratio: 16/9;
         display: flex;
         justify-content: center;
+        /* Pass the wrapper's radius down — see the movi-player rule below for
+           why the element itself has to have one. */
+        border-radius: inherit;
       }
       /* Audio-strip mode: when the inner <movi-player> picks up its
          .movi-audio-strip class (no video, no embedded cover art), the
@@ -2540,6 +2543,8 @@
         max-width: 880px;
         height: auto;
         flex: 0 0 auto;
+        /* No picture, no corners to cut — the strip carries its own shape. */
+        border-radius: 0;
       }
       /* The wrapper clips rounded video corners with overflow:hidden — but in
          audio-strip mode there are no video corners, and that clip cut off the
@@ -2552,6 +2557,13 @@
         width: 100%;
         height: 100%;
         display: block;
+        /* The radius has to reach the PLAYER, not stop at the wrapper. Firefox
+           composites the player's canvas as its own layer and does not apply an
+           ancestor's overflow:hidden to it, so a rounded frame had square video
+           inside it there — Chrome hid the bug by honouring the clip. Given its
+           own radius the player rounds the picture in its shader, and the
+           ancestor clip stops mattering. */
+        border-radius: inherit;
         --movi-controls-bg: rgba(0, 0, 0, 0.85);
         --movi-controls-color: #ffffff;
         --movi-progress-color: var(--accent);

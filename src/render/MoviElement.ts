@@ -814,6 +814,8 @@ export class MoviElement extends HTMLElement {
   private _resume: boolean = false; // Resume playback from last position (opt-in)
   /** Crop the black bars that are baked into the picture — see `cropbars`. */
   private _cropBars = false;
+  /** Let autoplay start while the tab is hidden — see `backgroundplay`. */
+  private _backgroundPlay = false;
 
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
   // Audio output device routing (AudioContext.setSinkId). _audioOutputDeviceId
@@ -890,14 +892,20 @@ export class MoviElement extends HTMLElement {
     };
     this.posterElement.src = this._lastFrameSnapshot;
     this.posterElement.style.display = "block";
+    // A snapshot of the frame we were just showing: no decode wait, and no
+    // fade — it is meant to be indistinguishable from the picture it replaces.
+    this._posterToken++;
+    this.posterElement.style.opacity = "1";
     this._snapshotPosterActive = true;
   };
 
   private _hideSnapshotPoster = () => {
     if (!this._snapshotPosterActive || !this.posterElement) return;
     const prev = this._snapshotPosterPrev;
+    this._posterToken++;
     this.posterElement.src = prev?.src ?? "";
     this.posterElement.style.display = prev?.display ?? "none";
+    this.posterElement.style.opacity = "1";
     this._snapshotPosterActive = false;
     this._snapshotPosterPrev = null;
   };
@@ -1045,6 +1053,7 @@ export class MoviElement extends HTMLElement {
       "ambientmode",
       "ambientwrapper",
       "cropbars",
+      "backgroundplay",
       "renderer",
       "objectfit",
       "rotate",
@@ -1152,6 +1161,9 @@ export class MoviElement extends HTMLElement {
     this.posterElement.crossOrigin = "anonymous";
     this.posterElement.referrerPolicy = "no-referrer";
     this.posterElement.decoding = "async";
+    // The fade showPoster() drives. Kept short: this is the seam between a
+    // blank frame and a picture, not an animation anyone should notice.
+    this.posterElement.style.transition = "opacity 220ms ease";
     // YouTube's `maxresdefault.jpg` 404s for videos that never had a 720p
     // thumbnail uploaded; fall back to `hqdefault.jpg` (always present) so
     // the overlay never sits as silent black.
@@ -1159,9 +1171,12 @@ export class MoviElement extends HTMLElement {
       const url = this.posterElement.src;
       const m = url.match(/\/vi\/([\w-]+)\/maxresdefault\.jpg/);
       if (m) {
-        this.posterElement.src = `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`;
+        // Through showPoster so the replacement is decoded before it lands —
+        // otherwise the one poster that arrives after a failure is the one that
+        // paints in stripes.
+        void this.showPoster(`https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`);
       } else {
-        this.posterElement.style.display = "none";
+        this.hidePoster();
       }
     });
     this.posterElement.style.position = "absolute";
@@ -1253,9 +1268,41 @@ export class MoviElement extends HTMLElement {
     const loadingIndicator = document.createElement("div");
     loadingIndicator.className = "movi-loading-indicator";
     loadingIndicator.style.display = "none";
+    // The play mark filling itself, over and over.
+    //
+    // A ring — plain, comet-tailed or otherwise — is the same spinner every
+    // other page on the internet uses, and says nothing about what is being
+    // waited for. This is the player's own triangle, filling from the bottom
+    // and starting again: the shape means "video", and the repeating fill
+    // means "still loading" without borrowing anyone's spinner.
+    //
+    // A mask rather than a clipPath, because a clip ignores stroke — and the
+    // stroke with a round linejoin is what rounds the triangle's corners here,
+    // exactly as it does on the play buttons.
     loadingIndicator.innerHTML = `
-      <div class="movi-loader-container"></div>
+      <div class="movi-loader-container">
+        <svg class="movi-loader-mark" viewBox="0 0 48 48" aria-hidden="true">
+          <mask class="movi-loader-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="48" height="48">
+            <path d="M17 13L35 24L17 35Z" fill="#fff" stroke="#fff" stroke-width="7" stroke-linejoin="round"/>
+          </mask>
+          <g>
+            <rect class="movi-loader-bed" x="0" y="0" width="48" height="48"/>
+            <rect class="movi-loader-fill" x="0" y="0" width="48" height="48"/>
+          </g>
+        </svg>
+      </div>
     `;
+    // The mask has to be referenced by a per-instance id: several players on
+    // one page each get their own shadow root, but a bare url(#id) inside a
+    // <g> attribute is resolved before that scoping in some engines and the
+    // second player masked against the first one's node.
+    {
+      const maskId = `movi-loader-mask-${++MoviElement._loaderMaskSeq}`;
+      const mask = loadingIndicator.querySelector(".movi-loader-mask");
+      const group = loadingIndicator.querySelector("svg > g");
+      mask?.setAttribute("id", maskId);
+      group?.setAttribute("mask", `url(#${maskId})`);
+    }
     shadowRoot.appendChild(loadingIndicator);
 
     // Create centered play/pause button
@@ -1263,8 +1310,12 @@ export class MoviElement extends HTMLElement {
     centerPlayPause.className = "movi-center-play-pause";
     centerPlayPause.setAttribute("aria-label", "Play/Pause");
     centerPlayPause.innerHTML = `
-      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M5 4v16l14-8z"></path>
+      <!-- Filled AND stroked with a round linejoin: that is what softens the
+           three corners, and it costs nothing next to hand-authoring the arcs.
+           The triangle is drawn inset by half the stroke so the painted shape
+           lands where the sharp one did instead of growing by 1.3px a side. -->
+      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">
+        <path d="M6.4 5.6L17.6 12L6.4 18.4Z"></path>
       </svg>
       <svg class="movi-center-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
         <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
@@ -1335,16 +1386,28 @@ export class MoviElement extends HTMLElement {
     this.emptyStateIndicator.innerHTML = `
       <div class="movi-empty-container">
         <div class="movi-empty-icon-wrapper">
-          <svg viewBox="0 0 48 48" fill="none">
-            <rect x="8" y="12" width="32" height="24" rx="2" stroke="rgba(255, 255, 255, 0.3)" stroke-width="1.5" fill="rgba(255, 255, 255, 0.02)"/>
-            <rect x="6" y="14" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
-            <rect x="6" y="22" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
-            <rect x="6" y="30" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
-            <rect x="40" y="14" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
-            <rect x="40" y="22" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
-            <rect x="40" y="30" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
-            <circle cx="24" cy="24" r="5" fill="rgba(255, 255, 255, 0.06)" stroke="rgba(255, 255, 255, 0.2)" stroke-width="1"/>
-            <path d="M22 21l6 3-6 3z" fill="rgba(255, 255, 255, 0.3)"/>
+          <!-- A player, drawn as one: a frame, a play triangle, and a scrub
+               line with the playhead parked partway along it. The film-strip
+               clip-art this replaced said "media file", and a bare play disc
+               said "a button" — neither says the thing sitting on the stage is
+               a PLAYER waiting for something to play.
+
+               Monochrome, painted in the chrome's own foreground via the
+               classes below: this sits on an otherwise empty stage, where a
+               saturated badge reads as an error rather than a resting state,
+               and a hardcoded white would vanish under the light theme.
+
+               The triangle is centred on its CENTROID, not its bounding box —
+               a right-pointing triangle carries its mass at the blunt end, so
+               box-centring parks it visibly right of centre. Its centroid sits
+               at the middle of the frame ABOVE the scrub line (y=45), not the
+               middle of the frame, so the two don't crowd. -->
+          <svg viewBox="0 0 100 100" fill="none" aria-hidden="true">
+            <rect class="movi-empty-logo-frame" x="7" y="21" width="86" height="58" rx="12" stroke-width="3.5" opacity="0.32"/>
+            <path class="movi-empty-logo-play" d="M45 36 L61 45 L45 54 Z" stroke-width="5.5" stroke-linejoin="round" opacity="0.8"/>
+            <path class="movi-empty-logo-track" d="M21 69 H79" stroke-width="3.5" stroke-linecap="round" opacity="0.18"/>
+            <path class="movi-empty-logo-track" d="M21 69 H45" stroke-width="3.5" stroke-linecap="round" opacity="0.55"/>
+            <circle class="movi-empty-logo-head" cx="45" cy="69" r="4.5" opacity="0.8"/>
           </svg>
         </div>
         <div class="movi-empty-text">
@@ -1719,8 +1782,9 @@ export class MoviElement extends HTMLElement {
         <div class="movi-buttons-row">
           <div class="movi-controls-left">
             <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
-              <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M5 4v16l14-8z"></path>
+              <!-- Rounded the same way as the centre one — see there. -->
+              <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">
+                <path d="M6.4 5.6L17.6 12L6.4 18.4Z"></path>
               </svg>
               <svg class="movi-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
                 <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
@@ -2144,7 +2208,15 @@ export class MoviElement extends HTMLElement {
         <span class="movi-timeline-title">Timeline</span>
         <button class="movi-timeline-close" aria-label="Close timeline">&times;</button>
       </div>
-      <div class="movi-timeline-strip"></div>
+      <div class="movi-timeline-scroller">
+        <button class="movi-timeline-arrow movi-timeline-arrow-left" type="button" tabindex="-1" aria-label="Scroll timeline left">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="movi-timeline-strip"></div>
+        <button class="movi-timeline-arrow movi-timeline-arrow-right" type="button" tabindex="-1" aria-label="Scroll timeline right">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
       <div class="movi-timeline-status"></div>
     `;
     shadowRoot.appendChild(timelinePanel);
@@ -2156,7 +2228,9 @@ export class MoviElement extends HTMLElement {
     // kept mistaking its own tail for the viewer and suppressing the next one,
     // which is how a seek ended up not scrolling at all. A wheel, a drag or a
     // key is unambiguous.
-    const strip = timelinePanel.querySelector(".movi-timeline-strip");
+    const strip = timelinePanel.querySelector(
+      ".movi-timeline-strip",
+    ) as HTMLElement | null;
     for (const type of ["wheel", "pointerdown", "touchstart", "keydown"]) {
       strip?.addEventListener(
         type,
@@ -2165,6 +2239,40 @@ export class MoviElement extends HTMLElement {
         },
         { passive: true },
       );
+    }
+
+    // Page arrows. A trackpad or a touchscreen scrolls this strip without them,
+    // but a mouse has nothing to grab except a 12px lane, and nothing on screen
+    // said the strip continued past the edge at all — a two-hour film's tiles
+    // simply stopped mid-panel. Each side appears only when there is something
+    // that way, so a strip that fits shows neither.
+    if (strip) {
+      const arrows = timelinePanel.querySelectorAll(".movi-timeline-arrow");
+      for (const arrow of arrows) {
+        const back = arrow.classList.contains("movi-timeline-arrow-left");
+        arrow.addEventListener("click", (e) => {
+          e.stopPropagation();
+          // Reaching for an arrow is browsing, exactly like a wheel or a drag —
+          // the follow must not yank the strip back under the next tick.
+          this._timelineUserScrolledAt = performance.now();
+          // Just under a full page, so the tile you were looking at stays on
+          // screen as an anchor instead of the strip jumping to a stranger.
+          const step = strip.clientWidth * 0.8;
+          strip.scrollBy({ left: back ? -step : step, behavior: "smooth" });
+        });
+      }
+      strip.addEventListener("scroll", () => this.updateTimelineArrows(), {
+        passive: true,
+      });
+      // Two things change what is reachable and neither is a scroll: tiles
+      // arriving one at a time while the strip generates, and the player being
+      // resized under an open panel.
+      new MutationObserver(() => this.updateTimelineArrows()).observe(strip, {
+        childList: true,
+      });
+      if (typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(() => this.updateTimelineArrows()).observe(strip);
+      }
     }
 
     timelinePanel.querySelector(".movi-timeline-close")?.addEventListener("click", (e) => {
@@ -6783,6 +6891,13 @@ export class MoviElement extends HTMLElement {
     if (this.player) this.player.isPiPActive = false;
     this.setPipPlaceholderVisible(false);
     this.setPipUiTimer(false);
+    // The page's own bar is the reserve again. 0 means "work it out from the
+    // overlay", which is what the page path recomputes on its next pass.
+    this.player?.setSubtitleControlsPadding(0);
+    // …and put the corners back, forcing the clip to be re-read the way the
+    // fullscreen exit does — the canvas has just been moved between documents,
+    // which is precisely when a browser drops the clip it was honouring.
+    this.syncPictureRounding(true);
 
     const canvas = this.canvas;
     const sr = this.shadowRoot;
@@ -6919,6 +7034,13 @@ export class MoviElement extends HTMLElement {
       });
       this._pipWindow = pipWindow;
       this._emitPipChange(true);
+      // Captions clear the PiP window's strip from here on, not the page's bar.
+      requestAnimationFrame(() => this.syncPipSubtitlePadding());
+      // Take the shader's corner cut off, the way entering fullscreen does.
+      // Nothing else recomputes it on this path, and the radius never changing
+      // value is exactly what made the exit a no-op the last time this went
+      // wrong — see syncPictureRounding.
+      this.syncPictureRounding();
 
       // Chrome may ignore requestWindow size (remembers last PiP size), force resize
       try {
@@ -6947,6 +7069,18 @@ export class MoviElement extends HTMLElement {
           opacity: 0; transition: opacity 0.2s;
         }
         body:hover .pip-controls, body.show-controls .pip-controls { opacity: 1; }
+        /* The title, on the same fade as the controls. The host's own title bar
+           stays in the page, where the picture no longer is — this window is
+           the surface a viewer is actually looking at. */
+        .pip-title {
+          position: absolute; top: 0; left: 0; right: 0;
+          padding: 8px 12px 18px;
+          background: linear-gradient(rgba(0,0,0,0.75), transparent);
+          color: #fff; font: 500 13px/1.3 system-ui, sans-serif;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          opacity: 0; transition: opacity 0.2s; pointer-events: none;
+        }
+        body:hover .pip-title, body.show-controls .pip-title { opacity: 1; }
         .pip-progress-row { display: flex; flex-direction: column; gap: 4px; }
         .pip-progress-bar {
           width: 100%; height: 3px; background: rgba(255,255,255,0.2);
@@ -7036,6 +7170,11 @@ export class MoviElement extends HTMLElement {
       }
 
       // Build PiP controls
+      const pipTitle = pipWindow.document.createElement("div");
+      pipTitle.className = "pip-title";
+      pipWindow.document.body.appendChild(pipTitle);
+      this.syncPipTitle();
+
       const controls = pipWindow.document.createElement("div");
       controls.className = "pip-controls";
 
@@ -7077,7 +7216,7 @@ export class MoviElement extends HTMLElement {
       const seekBackBtn = makeBtn("seek-back", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4.01 6.54 3.58 11H1l3.5 4L8 11H5.59c.42-3.35 3.33-6 6.91-6 3.87 0 7 3.13 7 7s-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.96 8.96 0 0012.5 21c4.97 0 9-4.03 9-9s-4.03-9-9-9z"/><text x="12.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
       const playPauseBtn = makeBtn("play-pause", this.player.getState() === "playing"
         ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
-        : `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`);
+        : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`);
       const seekFwdBtn = makeBtn("seek-fwd", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.49 3.54 8.92 8H23l-3.5 4L16 11h2.41c-.42-3.35-3.33-6-6.91-6-3.87 0-7 3.13-7 7s3.13 7 7 7c1.93 0 3.68-.79 4.94-2.06l1.42 1.42A8.96 8.96 0 0111.5 21c-4.97 0-9-4.03-9-9s4.03-9 9-9z"/><text x="11.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
       const backToTabBtn = makeBtn("back-to-tab", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`);
       const isMuted = this._muted;
@@ -7101,7 +7240,7 @@ export class MoviElement extends HTMLElement {
         const isPlaying = this.player.getState() === "playing";
         playPauseBtn.innerHTML = isPlaying
           ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
-          : `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+          : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`;
       };
 
       playPauseBtn.addEventListener("click", () => {
@@ -7186,6 +7325,23 @@ export class MoviElement extends HTMLElement {
       // Show controls briefly on open
       pipWindow.document.body.classList.add("show-controls");
       setTimeout(() => pipWindow.document.body.classList.remove("show-controls"), 2000);
+
+      // Captions follow the strip up and down. The class is toggled from
+      // several places (the open flash, the timer, a tap), so this watches the
+      // class itself rather than trying to hook each of them, and the pointer
+      // events cover the CSS :hover half of the same rule.
+      {
+        const body = pipWindow.document.body;
+        const follow = () => this.syncPipSubtitlePadding();
+        body.addEventListener("mouseenter", follow);
+        body.addEventListener("mouseleave", follow);
+        new (pipWindow as unknown as {
+          MutationObserver: typeof MutationObserver;
+        }).MutationObserver(follow).observe(body, {
+          attributes: true,
+          attributeFilter: ["class"],
+        });
+      }
 
       // Keyboard shortcuts in PiP window
       pipWindow.document.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -8013,9 +8169,18 @@ export class MoviElement extends HTMLElement {
   private static readonly RESTORE_STEADY_MS = 30000;
   private static readonly STARVED_RESCUE_MS = 6000;
   private static readonly VISIBILITY_SETTLE_MS = 4000;
+  /** Hands each loader's SVG mask an id of its own — see the loading indicator. */
+  private static _loaderMaskSeq = 0;
   /** How long the picture may spend catching up to the sound before the wait
    *  earns a spinner. See videoCatchUpElapsedMs. */
   private static readonly CATCHUP_SPINNER_GRACE_MS = 600;
+  /** How long a seek is given to land before it earns a spinner. Most land in
+   *  well under this, and a loader that appears and vanishes inside a quarter
+   *  of a second reads as a fault rather than as progress. */
+  private static readonly SEEK_SPINNER_GRACE_MS = 400;
+  /** When the current seek-driven interruption began — see the grace above.
+   *  0 whenever playback is not in one. */
+  private _seekRunSince = 0;
   /** How long a freshly landed rendition is left alone by the frozen-video
    *  watchdog while its queue refills. Longer than the visibility settle: this
    *  one starts from an empty buffer AND an empty frame queue, and it is the
@@ -11456,6 +11621,25 @@ export class MoviElement extends HTMLElement {
     this.classList.toggle("movi-bar-collapsed", collapsed);
   }
 
+  /** Last state announced as `controlschange`, so the event fires on a change
+   *  and not on every mousemove. */
+  private _controlsAnnounced: boolean | null = null;
+
+  /** Say so when the bar comes or goes. A host that draws its own chrome over
+   *  the player has no other way to know — the bar hides itself on a timer, and
+   *  everything overlaid on it was left sitting over nothing. */
+  private announceControls(visible: boolean): void {
+    if (this._controlsAnnounced === visible) return;
+    this._controlsAnnounced = visible;
+    this.dispatchEvent(
+      new CustomEvent("controlschange", {
+        detail: { visible },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   private showControls(): void {
     if (!this._controls) return;
     const container = this.controlsContainer;
@@ -11516,6 +11700,7 @@ export class MoviElement extends HTMLElement {
     if (container) {
       container.classList.add("movi-controls-visible");
       container.classList.remove("movi-controls-hidden");
+      this.announceControls(true);
       this.syncBarCollapsedClass();
 
       // Restore cursor — clear the inline `none` on the host so the
@@ -11598,6 +11783,12 @@ export class MoviElement extends HTMLElement {
     } else if (this.player) {
       this.player.setSubtitleControlsPadding(subtitlePadding);
     }
+
+    // …unless the picture is in the PiP window, where the page's bar is not
+    // what the captions have to clear. That bar is 80-odd pixels tall and sits
+    // over a placeholder; the PiP window's own control strip is a third of it,
+    // so the reserve was pushing captions to the middle of a small window.
+    this.syncPipSubtitlePadding();
 
     // Show title bar if showtitle is enabled
     if (this._showTitle && this.shadowRoot) {
@@ -13001,6 +13192,7 @@ export class MoviElement extends HTMLElement {
     if (container) {
       container.classList.remove("movi-controls-visible");
       container.classList.add("movi-controls-hidden");
+      this.announceControls(false);
       // The bar going away takes its tooltip with it: the cursor never leaves
       // the button (the bar is pulled out from under it), so nothing else would.
       this.hideControlTip();
@@ -17144,6 +17336,91 @@ export class MoviElement extends HTMLElement {
         background: var(--movi-controls-group-bg);
       }
 
+      /* Holds the strip and the two page arrows in one stacking context, so an
+         arrow can sit ON the strip rather than stealing width from it — a
+         reserved gutter would shift every tile the moment the strip stopped
+         being scrollable. */
+      .movi-timeline-scroller {
+        position: relative;
+        display: flex;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .movi-timeline-arrow {
+        position: absolute;
+        /* Spans the tiles only: the scroll lane underneath stays grabbable,
+           which is the whole point of it being 12px tall. */
+        top: 0;
+        bottom: 14px;
+        width: 52px;
+        display: flex;
+        align-items: center;
+        border: none;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
+        z-index: 3;
+        color: var(--movi-chrome-fg, #fff);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s ease;
+      }
+
+      .movi-timeline-arrow svg {
+        width: 22px;
+        height: 22px;
+        /* Drawn on its own disc so the chevron survives whatever frame it
+           happens to be over — a bare glyph vanished against a bright one. */
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 50%;
+        padding: 5px;
+        box-sizing: content-box;
+      }
+
+      /* The fade is what says "there is more this way". It runs from the
+         panel's own background so the tiles slide under the panel edge rather
+         than being cut off by it. */
+      .movi-timeline-arrow-left {
+        left: 0;
+        justify-content: flex-start;
+        padding-left: 6px;
+        background: linear-gradient(
+          to right,
+          var(--movi-chrome-bg) 25%,
+          transparent
+        );
+      }
+
+      .movi-timeline-arrow-right {
+        right: 0;
+        justify-content: flex-end;
+        padding-right: 6px;
+        background: linear-gradient(
+          to left,
+          var(--movi-chrome-bg) 25%,
+          transparent
+        );
+      }
+
+      .movi-timeline-arrow.movi-timeline-arrow-on {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .movi-timeline-arrow:hover svg {
+        background: rgba(0, 0, 0, 0.8);
+      }
+
+      /* A finger already scrolls this strip, and on the widths that go with a
+         touchscreen a 52px overlay costs most of a tile. The arrows are for the
+         pointer that has nothing else to scroll with. */
+      @media (hover: none) {
+        .movi-timeline-arrow {
+          display: none;
+        }
+      }
+
       .movi-timeline-strip {
         display: flex;
         gap: 10px;
@@ -17156,6 +17433,10 @@ export class MoviElement extends HTMLElement {
         overflow-y: hidden;
         flex: 1;
         min-height: 0;
+        /* It is a flex ITEM of the scroller row now, and a scroll container
+           whose min-width is auto refuses to shrink below its content — the
+           strip would have pushed the panel wide instead of scrolling. */
+        min-width: 0;
       }
 
       /* 4px was a bar you could see and not one you could hold — a pointer has
@@ -18574,34 +18855,77 @@ export class MoviElement extends HTMLElement {
         transition: top var(--movi-transition-normal);
       }
 
+      /* The play mark, filling itself, over and over.
+
+         A ring is a ring: plain, comet-tailed or dotted, it is the spinner
+         every other page uses and it says nothing about what is being waited
+         for. This one is the player's own triangle — the same rounded shape
+         the play buttons carry — with the fill rising through it and starting
+         again. The shape says "video"; the fill that never gets to stay says
+         "still loading".
+
+         Scale lives on the container; everything inside is in the SVG's own
+         48-unit space, so one width change moves the whole thing. */
       .movi-loader-container {
-        width: 64px;
-        height: 64px;
-        border-radius: 50%;
+        width: 68px;
+        height: 68px;
         display: inline-block;
-        border-top: 4px solid var(--movi-controls-color);
-        border-right: 4px solid transparent;
-        box-sizing: border-box;
-        animation: movi-loader-spin 1s linear infinite;
-        filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.3));
+        color: var(--movi-controls-color);
+        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5));
+      }
+
+      .movi-loader-mark {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      /* What the triangle looks like before the fill reaches it — present
+         enough to hold the shape, quiet enough that the rising part is what
+         the eye follows. */
+      .movi-loader-bed {
+        fill: currentColor;
+        opacity: 0.22;
+      }
+
+      .movi-loader-fill {
+        fill: currentColor;
+        /* Translated in the SVG's user units, not a percentage: a percentage
+           on an SVG child resolves against its bounding box, and this rect is
+           the full 48 square either way, so units keep it honest. */
+        /* Fast off the mark, easing into the top. ease-in-out was tried and it
+           loiters at the bottom, where the mark is at its dimmest and the
+           loader looks stalled — the opposite of what it is there to say. */
+        animation: movi-loader-fill 1.35s cubic-bezier(0.3, 0, 0.2, 1) infinite;
+      }
+
+      /* Fills, holds for a beat at the top so the eye registers a full mark,
+         then fades out and drops back — a hard reset from full to empty reads
+         as a glitch rather than a loop. */
+      @keyframes movi-loader-fill {
+        0% {
+          transform: translateY(48px);
+          opacity: 1;
+        }
+        70% {
+          transform: translateY(0);
+          opacity: 1;
+        }
+        88% {
+          transform: translateY(0);
+          opacity: 0;
+        }
+        100% {
+          transform: translateY(48px);
+          opacity: 0;
+        }
       }
 
       /* Mobile loader - smaller size */
       @container movi-host (max-width: 720px) {
         .movi-loader-container {
-          width: 48px;
-          height: 48px;
-          border-top-width: 3px;
-          border-right-width: 3px;
-        }
-      }
-
-      @keyframes movi-loader-spin {
-        0% {
-          transform: rotate(0deg);
-        }
-        100% {
-          transform: rotate(360deg);
+          width: 52px;
+          height: 52px;
         }
       }
 
@@ -19297,9 +19621,14 @@ export class MoviElement extends HTMLElement {
       .movi-settings-btn-badge,
       .movi-quality-btn-badge {
         position: absolute;
-        top: 2px;
-        right: 0;
-        padding: 1px 4px;
+        top: -2px;
+        right: -3px;
+        padding: 1px 3px;
+        /* An absolutely-positioned chip is shrink-to-fit, and "shrink" is capped
+           by the button it sits on — 38px. "4K HDR" needs more than that, so it
+           wrapped to two lines and the 24px-tall result covered the gear whole.
+           One line always, overhanging the corner instead of growing downward. */
+        white-space: nowrap;
         border-radius: var(--movi-radius-badge-sm);
         background: var(--movi-primary);
         color: var(--movi-chrome-fg, #fff);
@@ -20351,7 +20680,24 @@ export class MoviElement extends HTMLElement {
         display: flex;
         align-items: center;
         justify-content: center;
-        opacity: 0.6;
+        /* 0.6 was right for the grey placeholder it replaced — a brand mark
+           washed out that far reads as a rendering fault, not a logo. The
+           alphas that keep it quiet live on the shapes themselves. */
+        opacity: 0.92;
+      }
+
+      /* Painted here, not in the SVG, so the mark inverts with the theme
+         instead of being a fixed white that disappears on a light one. The
+         play triangle is filled AND stroked with the same paint: that's what
+         rounds its three corners without hand-authoring arcs. */
+      .movi-empty-logo-play,
+      .movi-empty-logo-head {
+        fill: var(--movi-chrome-fg, #fff);
+      }
+      .movi-empty-logo-frame,
+      .movi-empty-logo-track,
+      .movi-empty-logo-play {
+        stroke: var(--movi-chrome-fg, #fff);
       }
 
       .movi-empty-icon-wrapper svg {
@@ -21910,6 +22256,16 @@ export class MoviElement extends HTMLElement {
         this._cropBars = newValue !== null;
         this.applyBarCrop();
         break;
+      case "backgroundplay":
+        this._backgroundPlay = newValue !== null;
+        // Turning it on while an autoplay is parked waiting for the tab is the
+        // one case that needs more than a flag: release it now rather than
+        // leaving it waiting for a visibility change that may never come.
+        if (this._backgroundPlay && this._autoplayPendingVisible) {
+          this._autoplayPendingVisible = false;
+          this._startAutoplay().catch(() => {});
+        }
+        break;
       case "stablevolume":
         this._stableVolume = newValue !== null;
         if (this.player) {
@@ -23465,10 +23821,17 @@ export class MoviElement extends HTMLElement {
       // guards against does not apply either: the player keeps decoding while
       // backgrounded when isPiPActive, and the PiP document has its own
       // unthrottled rAF.
+      //
+      // …and unless the host has asked for `backgroundplay`, which says the
+      // embedding page knows what it is doing: a background music app, a
+      // playlist that must keep advancing behind another tab, a kiosk screen
+      // the browser reports as hidden. The throttling above is real and this
+      // opts into it knowingly, so it stays off by default.
       const hiddenAndNotInPip =
         typeof document !== "undefined" &&
         document.visibilityState !== "visible" &&
-        !this._pipWindow;
+        !this._pipWindow &&
+        !this._backgroundPlay;
       if (this._autoplay && this.player) {
         if (hiddenAndNotInPip) {
           this._autoplayPendingVisible = true;
@@ -23622,17 +23985,19 @@ export class MoviElement extends HTMLElement {
           title = "Can't Load This";
           message =
             "Couldn't load it. Check your connection, then try again.";
-        } else if (/^HTTP (401|403)\b/.test(raw) || /Access denied|Authentication required/i.test(raw)) {
+        // Unanchored for the same reason as the http match in the runtime error
+        // handler: the status can be wrapped ("Failed to open media: HTTP 403").
+        } else if (/\bHTTP (401|403)\b/.test(raw) || /Access denied|Authentication required/i.test(raw)) {
           // Most often a signed URL whose signature has run out — which is why
           // this can arrive in the middle of a video that had been playing
           // perfectly well. Saying "can't play this file" there is both untrue
           // and unhelpful: the file was playing, and reloading usually fixes it.
           title = "Access Expired";
           message = "The link to it is no longer valid.";
-        } else if (/^HTTP (404|410)\b/.test(raw) || /Video not found/i.test(raw)) {
+        } else if (/\bHTTP (404|410)\b/.test(raw) || /Video not found/i.test(raw)) {
           title = "Not Found";
           message = "It isn't at that address any more.";
-        } else if (/^HTTP 5\d\d\b/.test(raw)) {
+        } else if (/\bHTTP 5\d\d\b/.test(raw)) {
           title = "Server Problem";
           message =
             "The server hosting it stopped responding. Try again in a moment.";
@@ -23977,7 +24342,7 @@ export class MoviElement extends HTMLElement {
             this._switchResumeTime = 0;
             this._switchResumeDuration = 0;
             this._startAt = this._startAtBeforeSwitch;
-            this.posterElement.style.display = "none";
+            this.hidePoster();
           }
         } else if (this._snapshotPosterActive && this._recoveryResumeTime >= 0) {
           // Recovery recreate: same as a quality switch — hold the last-frame
@@ -23988,11 +24353,11 @@ export class MoviElement extends HTMLElement {
             this._recoveryResumeTime <= 0 || at >= this._recoveryResumeTime - 1;
           if (resumed) {
             this._hideSnapshotPoster();
-            this.posterElement.style.display = "none";
+            this.hidePoster();
           }
         } else {
           this._hideSnapshotPoster();
-          this.posterElement.style.display = "none";
+          this.hidePoster();
         }
       }
 
@@ -24325,7 +24690,13 @@ export class MoviElement extends HTMLElement {
       // Prettify the raw HttpSource messages — surfaced verbatim they read
       // like "HTTP 503" or "Stream failed after maximum retries" which means
       // nothing to a user staring at a buffering UI that just gave up.
-      const httpMatch = raw.match(/^HTTP (\d{3})/);
+      // NOT anchored: the status arrives both bare ("HTTP 403 (Fatal)", thrown
+      // mid-playback by HttpSource) and wrapped ("Failed to open media: HTTP 403
+      // (Fatal)", from the demuxer's open on a reload). Anchoring to ^ matched
+      // only the first, so the second fell past every branch to the generic
+      // "Something went wrong during playback." — with a "Try Software Decoding"
+      // button offered for what is a permission failure.
+      const httpMatch = raw.match(/\bHTTP (\d{3})\b/);
       if (this.hasUnfetchableSrcScheme()) {
         // Bad/typo'd URL scheme fails at fetch() and surfaces here as a generic
         // network error — blame the URL, not the network. Checked first: a bad
@@ -24967,8 +25338,8 @@ export class MoviElement extends HTMLElement {
       this._generatedPosterUrl = null;
     }
     if (!this._poster && this.posterElement) {
+      this.hidePoster();
       this.posterElement.src = "";
-      this.posterElement.style.display = "none";
     }
 
     // Drop cover art from the previous source. The File-source path
@@ -25061,6 +25432,19 @@ export class MoviElement extends HTMLElement {
   }
 
   // Property getters/setters (native video element API)
+  /**
+   * Re-read the tooltip for whatever the cursor is on.
+   *
+   * The click handler refreshes it a frame after the press, which is too early
+   * for play/pause: play() resolves later than that, so the label was rewritten
+   * from the state it was ABOUT to leave and then nothing touched it again —
+   * the bar said Pause over a paused video. State changes are the honest
+   * trigger, so the two labels that read state re-render from here.
+   */
+  private refreshControlTip(): void {
+    if (this.controlTipFor) this.showControlTip(this.controlTipFor);
+  }
+
   private updatePlayPauseIcon(): void {
     const playIcon = this.shadowRoot?.querySelector(
       ".movi-icon-play",
@@ -25238,6 +25622,9 @@ export class MoviElement extends HTMLElement {
         }
       }
     }
+
+    // The bar names what a click will DO, and that just changed.
+    this.refreshControlTip();
   }
 
   /** Target of the seek currently in flight, or -1. The player only moves its
@@ -25406,6 +25793,29 @@ export class MoviElement extends HTMLElement {
     else this.removeAttribute("cropbars");
   }
 
+  /**
+   * Let `autoplay` start even while the tab is hidden.
+   *
+   * By default a hidden tab parks the autoplay until it is shown. That is not
+   * politeness — a first play started behind another tab runs into a throttled
+   * rAF and a denied WakeLock, and the first seek can time out into a buffering
+   * state that only a manual pause→play unsticks. Opt in when the page knows
+   * that "hidden" doesn't mean "unwatched": background audio, a playlist that
+   * must keep advancing, a kiosk the browser reports as hidden.
+   *
+   * Playback already CONTINUES when a tab is hidden — this is only about
+   * starting there. (Document PiP is exempt either way: the tab is hidden by
+   * definition and the picture is on screen regardless.)
+   */
+  get backgroundplay(): boolean {
+    return this._backgroundPlay;
+  }
+
+  set backgroundplay(value: boolean) {
+    if (value) this.setAttribute("backgroundplay", "");
+    else this.removeAttribute("backgroundplay");
+  }
+
   /** What is being cropped right now, as the fraction taken off each edge. */
   getBarCrop(): { top: number; bottom: number; left: number; right: number } {
     const renderer = (
@@ -25481,6 +25891,25 @@ export class MoviElement extends HTMLElement {
   /** The tile someone clicked, held until playback genuinely leaves it. */
   private _timelinePickedStart = -1;
   private _timelineUserScrolledAt = 0;
+
+  /**
+   * Turn each page arrow on only when there is strip left on that side.
+   *
+   * The 2px slack is not cosmetic: a scroll container's scrollLeft is a
+   * fractional CSS pixel on a fractional-DPR display, so `scrollLeft + client
+   * === scroll` is never exactly true at the end and the right arrow would stay
+   * lit on a strip that had nowhere left to go.
+   */
+  private updateTimelineArrows(): void {
+    const sr = this.shadowRoot;
+    const strip = sr?.querySelector(".movi-timeline-strip") as HTMLElement | null;
+    if (!strip) return;
+    const left = sr?.querySelector(".movi-timeline-arrow-left") as HTMLElement | null;
+    const right = sr?.querySelector(".movi-timeline-arrow-right") as HTMLElement | null;
+    const max = strip.scrollWidth - strip.clientWidth;
+    left?.classList.toggle("movi-timeline-arrow-on", strip.scrollLeft > 2);
+    right?.classList.toggle("movi-timeline-arrow-on", strip.scrollLeft < max - 2);
+  }
 
   private updateTimelineCurrent(): void {
     const sr = this.shadowRoot;
@@ -26131,6 +26560,9 @@ export class MoviElement extends HTMLElement {
     } else {
       volumeHigh?.style.setProperty("display", "block");
     }
+
+    // The bar names what a click will DO, and that just changed.
+    this.refreshControlTip();
   }
 
   private updateLoadingIndicator(state?: string): void {
@@ -26197,6 +26629,38 @@ export class MoviElement extends HTMLElement {
       catchUpMs !== null &&
       catchUpMs !== undefined &&
       catchUpMs < MoviElement.CATCHUP_SPINNER_GRACE_MS
+    ) {
+      shouldShow = false;
+    }
+
+    // Seeks get the same courtesy. A scrub lands in a few hundred milliseconds
+    // on anything local, and putting the loader up the instant the playhead
+    // moves means it appears and disappears faster than it can be read — which
+    // registers as a glitch, not as "working on it". Hold it for the grace and
+    // let it through only if the seek is genuinely taking time.
+    //
+    // The run is tracked from the LIVE player state, not the state passed in:
+    // callers sometimes hand us "loading" while the player is mid-seek, and a
+    // run reset there would let the spinner straight through on the next tick.
+    // Seeking and the buffering that follows it are ONE run — a seek routinely
+    // lands in "buffering" while the first frames arrive, and restarting the
+    // clock there would show the spinner at exactly the moment we're avoiding.
+    //
+    // Buffering that begins on its own, mid-playback, is a real stall and gets
+    // no grace: that spinner is the only thing telling the viewer why the
+    // picture stopped.
+    const liveState = this.player?.getState() || currentState;
+    if (liveState === "seeking") {
+      if (!this._seekRunSince) this._seekRunSince = performance.now();
+    } else if (liveState !== "buffering") {
+      this._seekRunSince = 0;
+    }
+    if (
+      shouldShow &&
+      this._seekRunSince &&
+      (liveState === "seeking" || liveState === "buffering") &&
+      performance.now() - this._seekRunSince <
+        MoviElement.SEEK_SPINNER_GRACE_MS
     ) {
       shouldShow = false;
     }
@@ -27180,12 +27644,17 @@ export class MoviElement extends HTMLElement {
   private syncPictureRounding(force = false): void {
     // Fullscreen fills the screen — there are no corners to round there, and a
     // page radius left over from the inline layout would cut into the picture.
-    const fullscreen =
+    // Picture-in-Picture is the same case for the same reason: the canvas moves
+    // into a window with its own frame, and the host's radius has nothing to do
+    // with that window's shape — it was carving the page's corners out of a
+    // picture sitting somewhere else entirely.
+    const cornerless =
       document.fullscreenElement === this ||
       (document as unknown as { webkitFullscreenElement?: Element })
         .webkitFullscreenElement === this ||
-      this.classList.contains("movi-pseudo-fullscreen");
-    if (fullscreen) {
+      this.classList.contains("movi-pseudo-fullscreen") ||
+      !!this._pipWindow;
+    if (cornerless) {
       for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
         if (el && el.style.clipPath) el.style.clipPath = "";
       }
@@ -30287,6 +30756,9 @@ export class MoviElement extends HTMLElement {
         this._timelineCurrentIndex = current ? items.indexOf(current) : -1;
         this._timelineUserScrolledAt = 0;
         current?.scrollIntoView({ inline: "center", block: "nearest" });
+        // Opening on an already-generated strip fires neither a scroll nor a
+        // mutation, so the arrows would stay off until something else moved.
+        this.updateTimelineArrows();
       });
     } else {
       this._timelineCancelled = true;
@@ -30929,6 +31401,79 @@ export class MoviElement extends HTMLElement {
     this.fastseek = value;
   }
 
+  /** Bumped on every poster change, so a slow decode can tell it has been
+   *  overtaken and drop its result instead of painting a stale image. */
+  private _posterToken = 0;
+
+  /**
+   * Put a poster up only once it is fully decoded.
+   *
+   * Assigning src straight to the visible <img> hands the paint to the engine,
+   * and every engine does it differently — Firefox fills the frame top to
+   * bottom as the bytes land, Chrome and Safari have their own habits. None of
+   * them look deliberate. Decoding off-screen first means the picture arrives
+   * in one piece, the same way everywhere, and the fade below turns the swap
+   * into something chosen rather than something that happened.
+   *
+   * A decode that fails is not a reason to show nothing: a broken decode()
+   * (or an engine without it) falls through to the plain assignment, which is
+   * exactly what used to happen anyway.
+   */
+  private async showPoster(url: string): Promise<void> {
+    const el = this.posterElement;
+    if (!el || !url) return;
+    const token = ++this._posterToken;
+    // Resolved, not as written: el.src reads back absolute while the caller
+    // hands in whatever the host wrote. Comparing the two raw strings never
+    // matched, so a poster set twice — the attribute and the source both run
+    // this — faded itself out and back in for no reason.
+    let resolved = url;
+    try {
+      resolved = new URL(url, document.baseURI).href;
+    } catch {
+      // A data: URL long enough to throw is still fine to compare raw.
+    }
+    if (el.src === resolved && el.style.display === "block") return;
+
+    const pre = new Image();
+    pre.crossOrigin = el.crossOrigin;
+    pre.referrerPolicy = el.referrerPolicy;
+    pre.src = url;
+    try {
+      await pre.decode();
+    } catch {
+      // Fall through — a poster that will not decode is still worth trying to
+      // show; the <img> has its own error path (the YouTube fallback).
+    }
+    // Overtaken while we waited: a newer poster, or the poster being cleared.
+    if (token !== this._posterToken || !this.posterElement) return;
+
+    el.style.objectFit = this.posterObjectFit();
+    el.style.opacity = "0";
+    el.src = url;
+    el.style.display = "block";
+    // Next frame, so the 0 is committed before the transition to 1 — set in
+    // the same task the browser coalesces them and there is no fade at all.
+    requestAnimationFrame(() => {
+      if (token !== this._posterToken) return;
+      el.style.opacity = "1";
+    });
+  }
+
+  /**
+   * Take the poster down, and make sure it stays down.
+   *
+   * The token matters as much as the display: showPoster() decodes before it
+   * paints, so a poster requested a moment ago can still be in flight. Without
+   * bumping it here that decode lands afterwards and puts the picture back —
+   * which is how a source change stopped clearing the poster in some cases.
+   */
+  private hidePoster(): void {
+    if (!this.posterElement) return;
+    this._posterToken++;
+    this.posterElement.style.display = "none";
+  }
+
   private updatePoster() {
     // Only show the poster when there's actually a media source to back it.
     // Without this gate, setting poster="..." paints the overlay even in the
@@ -30964,16 +31509,12 @@ export class MoviElement extends HTMLElement {
       return;
     }
     if (this._poster) {
-      this.posterElement.src = this._poster;
-      this.posterElement.style.display = "block";
-      this.posterElement.style.objectFit = this.posterObjectFit();
+      void this.showPoster(this._poster);
     } else if (this._generatedPosterUrl) {
       // Fall back to the postertime-generated poster if no explicit URL.
-      this.posterElement.src = this._generatedPosterUrl;
-      this.posterElement.style.display = "block";
-      this.posterElement.style.objectFit = this.posterObjectFit();
+      void this.showPoster(this._generatedPosterUrl);
     } else {
-      this.posterElement.style.display = "none";
+      this.hidePoster();
     }
 
     // In 360° mode the flat poster <img> is replaced by the equirectangular
@@ -31443,12 +31984,18 @@ export class MoviElement extends HTMLElement {
     else this.setAttribute("titlemode", value);
   }
 
-  /** Whether the title bar may show in the CURRENT fullscreen state. */
+  /**
+   * Whether the title may show where the picture currently IS.
+   *
+   * Picture-in-Picture counts as fullscreen. Both are the picture leaving the
+   * page for a surface of its own, where nothing around it says what is
+   * playing — which is the whole reason titlemode="fullscreen" exists. On the
+   * page the heading beside the player already answers that.
+   */
   private titleAllowedHere(): boolean {
     if (this._titleMode === "both") return true;
-    return this._titleMode === "fullscreen"
-      ? this.isFullscreenActive()
-      : !this.isFullscreenActive();
+    const away = this.isFullscreenActive() || !!this._pipWindow;
+    return this._titleMode === "fullscreen" ? away : !away;
   }
 
   private handleBackClick(): void {
@@ -31457,9 +32004,50 @@ export class MoviElement extends HTMLElement {
     );
   }
 
+  /**
+   * While the picture is in PiP, reserve the PiP window's own controls.
+   *
+   * The reserve is measured off whatever that window is actually showing, so a
+   * viewer who resizes it keeps captions sitting just above the strip rather
+   * than wherever the page's bar happened to be.
+   */
+  private syncPipSubtitlePadding(): void {
+    if (!this._pipWindow || !this.player) return;
+    const doc = this._pipWindow.document;
+    const strip = doc.querySelector(".pip-controls") as HTMLElement | null;
+    // …and only while that strip is actually up. It fades on a timer and on
+    // the pointer leaving, and an absolutely-positioned strip changes no
+    // layout when it goes — so a reserve set once left the captions sitting
+    // high over an empty corner of the window.
+    const showing =
+      !!strip &&
+      (doc.body.classList.contains("show-controls") ||
+        doc.body.matches(":hover"));
+    // 0 is not "no padding": it hands the decision back to the renderer's own
+    // formula, which keeps captions off the very bottom edge.
+    this.player.setSubtitleControlsPadding(
+      showing ? (strip?.offsetHeight || 56) + 12 : 0,
+    );
+  }
+
+  /** Mirror the resolved title into the PiP window, if one is open and the
+   *  mode allows it there. */
+  private syncPipTitle(): void {
+    const el = this._pipWindow?.document.querySelector(
+      ".pip-title",
+    ) as HTMLElement | null;
+    if (!el) return;
+    const text = this._showTitle && this.titleAllowedHere() ? this._title || "" : "";
+    if (el.textContent !== text) el.textContent = text;
+    el.style.display = text ? "" : "none";
+  }
+
   private updateTitle() {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
+    // The title resolves late — from metadata, a header, or the filename — and
+    // a PiP window opened before that would keep an empty bar.
+    this.syncPipTitle();
 
     const titleBar = shadowRoot.querySelector(".movi-title-bar") as HTMLElement;
     const titleText = shadowRoot.querySelector(

@@ -225,6 +225,9 @@ export interface MoviPlayerAttributes {
   /** Crop the black bars that are part of the picture, so `cover` / `fill` /
    *  `zoom` size the image rather than its padding. */
   cropbars?: boolean | "";
+  /** Let `autoplay` start while the tab is hidden. Off by default: a first play
+   *  in a background tab runs into a throttled rAF and can park in buffering. */
+  backgroundplay?: boolean | "";
   /** What to do with a source Movi can't play (`native` → hand to `<video>`). */
   fallback?: "native";
   /**

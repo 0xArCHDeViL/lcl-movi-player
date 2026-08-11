@@ -3527,7 +3527,21 @@ export class CanvasRenderer {
       // baseScale, so the cue still lands where the author put it.
       const IMAGE_SUB_DISPLAY_SHRINK = 0.85;
       const baseScale = Math.min(scaleX, scaleY);
-      const uniformScale = baseScale * userSizeMult * IMAGE_SUB_DISPLAY_SHRINK;
+      // …with the floor the TEXT path has. A text cue is sized by CSS as
+      // clamp(20px, width * 0.032, 40px), so it stops shrinking at 20px; an
+      // image cue scaled straight off the canvas has no such floor and keeps
+      // going. In a Picture-in-Picture window a few hundred pixels wide that is
+      // a fifth of full size next to text that is still 20px — the same track,
+      // one line readable and the next a smudge.
+      //
+      // Expressed as the same curve: what the text size would be here, over
+      // what it is at the reference width. Only ever used to RAISE the scale —
+      // above 1920 the geometric mapping is larger and stays in charge, so a
+      // big screen looks exactly as it did.
+      const textPx = Math.min(40, Math.max(20, canvasWidth * 0.032));
+      const textScale = textPx / 40;
+      const displayScale = Math.max(baseScale, textScale);
+      const uniformScale = displayScale * userSizeMult * IMAGE_SUB_DISPLAY_SHRINK;
 
       // Calculate scaled dimensions preserving aspect ratio
       const scaledWidth = cue.image.width * uniformScale;

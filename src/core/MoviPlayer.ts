@@ -829,6 +829,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private muted: boolean = false; // Mute state
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
+  /** framesPresented when the current stall window opened — the baseline the
+   *  "is the picture still moving?" test measures against. */
+  private _stallStartFrames: number = 0;
+  /** Presented-frames-per-second at or above which an empty video queue is a
+   *  slow decoder, not a stall. Deliberately low: this is the line between
+   *  "watchable, if choppy" and "frozen", not a quality bar. A 60fps source
+   *  running at 30, or a 24fps one dropping half its frames, is comfortably
+   *  over it; a picture that has actually stopped presents nothing at all. */
+  private static readonly STALL_MOVING_FPS = 5;
   private _bufferingEntryTime: number = 0; // When we entered buffering state
   // True when the current buffering state was entered because of something WE
   // just did — a rate change's audio re-anchor, or a seek resuming on the thin
@@ -4591,9 +4600,33 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // complaint. Two gaps is enough evidence the decoder is behind.
         const effectiveStallTimeout =
           audioUnderrunning && !videoEmpty ? 200 : stallTimeout;
-        if (!this._stallStartTime) {
+        const framesNow = this.videoRenderer
+          ? this.videoRenderer.getStats().framesPresented
+          : 0;
+        // A 60fps source a machine can only decode at ~30 keeps the queue at or
+        // near zero the whole time — the presentation loop takes each frame the
+        // instant it lands — so `videoEmpty` reads true forever and this
+        // detector called it a stall. The picture was never stopped; it was
+        // HALF RATE, and a spinner over moving video is worse than the stutter
+        // it complains about. So ask what actually reached the screen across
+        // the stall window: frames still arriving at a watchable rate means
+        // slow decode, not an empty pipe, and the window simply restarts.
+        //
+        // Never applied when audio is underrunning — those gaps are already
+        // audible, and buffering to rebuild the cushion is the right answer
+        // however healthy the picture looks.
+        const stallElapsed = this._stallStartTime
+          ? performance.now() - this._stallStartTime
+          : 0;
+        const pictureMoving =
+          !audioUnderrunning &&
+          stallElapsed > 0 &&
+          ((framesNow - this._stallStartFrames) * 1000) / stallElapsed >=
+            MoviPlayer.STALL_MOVING_FPS;
+        if (!this._stallStartTime || pictureMoving) {
           this._stallStartTime = performance.now();
-        } else if (performance.now() - this._stallStartTime > effectiveStallTimeout) {
+          this._stallStartFrames = framesNow;
+        } else if (stallElapsed > effectiveStallTimeout) {
           // Only enter buffering after 500ms of continuous stall
           Logger.warn(
             TAG,
@@ -4638,9 +4671,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       } else {
         this._stallStartTime = 0;
+        this._stallStartFrames = 0;
       }
     } else {
       this._stallStartTime = 0;
+      this._stallStartFrames = 0;
     }
 
     // Audio desync detection: if audio falls significantly behind video at 1x.
@@ -5531,7 +5566,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // user-visible reason. The actual messages come from HttpSource —
       // see the strings it throws in startStream/buildHeaders.
       const isSourceError =
-        /^HTTP \d{3}/.test(errorMessage) ||
+        // Unanchored — the demuxer wraps it ("Failed to open media: HTTP 403"),
+        // and a wrapped 4xx is every bit as fatal as a bare one.
+        /\bHTTP \d{3}\b/.test(errorMessage) ||
         errorMessage.includes("Access denied") ||
         errorMessage.includes("Authentication required") ||
         errorMessage.includes("Video not found") ||
