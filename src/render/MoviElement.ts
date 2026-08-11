@@ -27692,13 +27692,26 @@ export class MoviElement extends HTMLElement {
       // button dead the press was swallowed and the video rolled by itself the
       // moment the data arrived. Only when there's no media at all does it go
       // dark with the rest: nothing to start, nothing to stop.
-      if (
-        isInitial &&
-        !isUnsupported &&
-        this.hasMediaSource() &&
-        el.classList.contains("movi-play-pause")
-      ) {
-        el.style.opacity = "1";
+      //
+      // BOTH play/pause buttons, not just the bar's. They are one control shown
+      // in two places, and on touch the centre one is the one that matters: a
+      // tap on the picture only toggles the chrome there, so the big button IS
+      // the play control. Exempting only the bar meant that during the opening
+      // load a phone could stop playback from the strip of small icons and not
+      // from the button filling the screen.
+      const isPlayControl =
+        el.classList.contains("movi-play-pause") ||
+        el.classList.contains("movi-center-play-pause");
+      if (isInitial && !isUnsupported && this.hasMediaSource() && isPlayControl) {
+        if (el.classList.contains("movi-center-play-pause")) {
+          // Whether it is ON SCREEN stays the classes' business — poster, first
+          // play, ended, touch-with-chrome-up. All this does is stop the
+          // disable pass from overriding them.
+          el.style.display = "";
+          el.style.opacity = "";
+        } else {
+          el.style.opacity = "1";
+        }
         el.style.pointerEvents = "auto";
         if (el.tagName === "BUTTON") (el as HTMLButtonElement).disabled = false;
         return;
