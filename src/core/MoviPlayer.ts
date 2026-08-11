@@ -1566,6 +1566,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     try {
+      // Silence whatever is still queued from the LAST source before opening
+      // this one. Every other transition already does this — seek, replay, an
+      // audio-language switch — but loading a new source did not, and the
+      // renderer happily played out its remaining buffer while the new file
+      // was still opening. What that sounds like is a second of the previous
+      // song after you have chosen a different one; it is loudest on a phone,
+      // where the open takes longer and there is no video swap to cover it.
+      this.audioRenderer.reset();
+      if (this.videoRenderer) this.videoRenderer.clearQueue();
+
       // Create source — honor a pre-built adapter if the caller supplied
       // one (custom protocol, encrypted blob, IndexedDB-backed source, etc.)
       // so the demuxer can read through it without going through SourceConfig.
