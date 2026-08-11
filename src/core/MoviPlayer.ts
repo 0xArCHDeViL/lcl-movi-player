@@ -839,14 +839,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * the CPU — an expensive codec decoding slower than realtime — and there the
    * picture carries on over sound full of holes.
    *
-   * On, neither happens: whichever side empties, playback buffers, both are
-   * suspended, and they start again together when both are ready.
+   * Bound — the default — neither happens: whichever side empties, playback
+   * buffers, both are suspended, and they start again together when both are
+   * ready. The cost is that a shortfall you would previously have watched or
+   * listened through becomes a full stop, which is the honest thing to show:
+   * a picture running seconds behind the sound is not playback anyone asked
+   * for. `bindav="false"` unbinds them for a caller who would rather have the
+   * stutter.
    *
-   * Not the default because it turns each of those into a full stop, and a
-   * source whose video is merely slow to DECODE (see the frames-presented
-   * check below, which is left in place) is better off with the stutter.
+   * The one case that would suffer from this is a picture that is merely slow
+   * to DECODE, and that is not this: the frames-presented check below restarts
+   * the stall window whenever frames are still reaching the screen, so a source
+   * decoding at half rate keeps stuttering along rather than turning into a
+   * spinner.
    */
-  private _bindAV: boolean = false;
+  private _bindAV: boolean = true;
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
   /** performance.now() of the last frame decoded while a seek waited for sync —

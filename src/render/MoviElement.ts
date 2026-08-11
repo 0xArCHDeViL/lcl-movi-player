@@ -829,8 +829,20 @@ export class MoviElement extends HTMLElement {
   /** Let autoplay start while the tab is hidden — see `backgroundplay`. */
   private _backgroundPlay = false;
   /** Sound and picture stall together — see MoviPlayer's _bindAV. Read from
-   *  the attribute, pushed to the core on load. */
-  private _bindAV = false;
+   *  the attribute, pushed to the core on load. On unless turned off. */
+  private _bindAV = true;
+
+  /**
+   * Read `bindav`, which is an opt-OUT.
+   *
+   * A bare boolean attribute cannot express this: absent has to mean ON, so
+   * "off" needs a value to carry it. `bindav="false"` (or off/0/no) unbinds;
+   * anything else, including the attribute being absent or empty, binds.
+   */
+  private static readBindAV(value: string | null): boolean {
+    if (value === null) return true;
+    return !/^\s*(false|off|0|no)\s*$/i.test(value);
+  }
 
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
   // Audio output device routing (AudioContext.setSinkId). _audioOutputDeviceId
@@ -22121,7 +22133,7 @@ export class MoviElement extends HTMLElement {
     this._videoId = this.getAttribute("videoid") || "";
     this._resume = this.hasAttribute("resume");
     this._stableVolume = this.hasAttribute("stablevolume");
-    this._bindAV = this.hasAttribute("bindav");
+    this._bindAV = MoviElement.readBindAV(this.getAttribute("bindav"));
     this._audioOnly = this.hasAttribute("audioonly");
 
     // If no src attribute, check for <source> child elements (Video.js-style)
@@ -22494,7 +22506,7 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "bindav":
-        this._bindAV = newValue !== null;
+        this._bindAV = MoviElement.readBindAV(newValue);
         // Takes effect on the next stall, so pushing it live is enough — there
         // is nothing to undo about one already in progress.
         this.player?.setBindAV(this._bindAV);
@@ -26064,17 +26076,22 @@ export class MoviElement extends HTMLElement {
    * machine, where an expensive codec decodes behind realtime and the picture
    * carries on over the holes.
    *
-   * With this set, whichever side empties buffers the other with it, and they
-   * resume together. The cost is that a shortfall you would previously have
-   * watched or listened through now becomes a full stop.
+   * Bound is the default: whichever side empties buffers the other with it,
+   * and they resume together. The cost is that a shortfall you would otherwise
+   * have watched or listened through becomes a full stop — which is the honest
+   * thing to show, since a picture running seconds behind the sound is not
+   * playback anyone asked for.
+   *
+   * `bindav="false"` (or off/0/no) unbinds them. A bare boolean attribute
+   * cannot express an opt-out — absent has to mean on — so "off" is carried by
+   * the value, and the setter writes it rather than removing the attribute.
    */
   get bindav(): boolean {
     return this._bindAV;
   }
 
   set bindav(value: boolean) {
-    if (value) this.setAttribute("bindav", "");
-    else this.removeAttribute("bindav");
+    this.setAttribute("bindav", value ? "" : "false");
   }
 
   /** What is being cropped right now, as the fraction taken off each edge. */
