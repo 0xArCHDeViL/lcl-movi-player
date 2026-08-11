@@ -224,6 +224,13 @@ export interface MoviPlayerAttributes {
   ambientwrapper?: string;
   /** Crop the black bars that are part of the picture, so `cover` / `fill` /
    *  `zoom` size the image rather than its padding. */
+  /** How far the demuxer may read before naming the streams: bytes, or
+   *  "512kb" / "2mb". Omit for the built-in budget — see the docs, it is
+   *  generous on purpose. */
+  probesize?: string | number;
+  /** How much media it may analyse first, in milliseconds. Companion to
+   *  `probesize`. */
+  probeduration?: string | number;
   cropbars?: boolean | "";
   /** Let `autoplay` start while the tab is hidden. Off by default: a first play
    *  in a background tab runs into a throttled rAF and can park in buffering. */

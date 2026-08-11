@@ -123,6 +123,32 @@
           ]
         },
         {
+          "name": "probesize",
+          "description": {
+            "kind": "markdown",
+            "value": "How far the demuxer may read before it says what the streams are."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#probesize"
+            }
+          ]
+        },
+        {
+          "name": "probeduration",
+          "description": {
+            "kind": "markdown",
+            "value": "How much media the demuxer may analyse before it says what the streams are, in"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#probeduration"
+            }
+          ]
+        },
+        {
           "name": "poster",
           "description": {
             "kind": "markdown",

@@ -38,6 +38,11 @@ const MAX_STREAM_BUFFER_SIZE = 250 * 1024 * 1024; // Match max buffer — stream
 //   (measured 30-500ms each) instead of filling. The buffer then never gets
 //   ahead, which is what a switch to a high rung feels like. 8MB is the
 //   largest the CDN still served whole in the measurement above, so take it.
+// 4MB, and NOT smaller — tried. Shrinking this to 512KB on the theory that the
+// open chunk was the wait made it seventeen times worse: `loadedmetadata` went
+// from 1646ms to 28807ms on the same warm click. Whatever the demuxer needs to
+// open, it is not answered by one small range, and the fill loop taking over
+// from there is nowhere near as fast as one big request.
 const FIRST_RANGE_CHUNK_SIZE = 4 * 1024 * 1024;
 const MAX_RANGE_CHUNK_SIZE = 8 * 1024 * 1024;
 const CORS_DETECTION_THRESHOLD = 3; // Only treat "Failed to fetch" as CORS after N consecutive failures while online

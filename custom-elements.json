@@ -45,6 +45,14 @@
               }
             },
             {
+              "name": "probesize",
+              "description": "How far the demuxer may read before it says what the streams are."
+            },
+            {
+              "name": "probeduration",
+              "description": "How much media the demuxer may analyse before it says what the streams are, in"
+            },
+            {
               "name": "poster",
               "description": "Displays an image before playback starts."
             },

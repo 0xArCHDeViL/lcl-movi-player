@@ -492,6 +492,34 @@ Controls how video fills the canvas.
 
 ---
 
+#### `probesize`
+
+How far the demuxer may read before it says what the streams are.
+
+Bytes, or a shorthand: `512kb`, `2mb`. Left off, the built-in budget applies —
+deliberately generous, because a stream with **no header** to read (MPEG-TS, a
+raw elementary stream) is identified by watching packets go by, and a budget cut
+blind is how such a file ends up with no streams found at all.
+
+Worth narrowing only when you know what you are serving. MP4 and WebM carry
+their header at the front and are described in the first few hundred KB, so a
+site serving those can open sooner:
+
+```html
+<movi-player probesize="1mb" probeduration="1000"></movi-player>
+```
+
+Measured over a network source, the open (`loadstart` → `loadedmetadata`) ran
+between 0.5s and 2.2s at the default; how much of that a smaller budget returns
+depends on the file and the link, so measure rather than assume.
+
+#### `probeduration`
+
+How much media the demuxer may analyse before it says what the streams are, in
+milliseconds. The companion to [`probesize`](#probesize), and the same caution
+applies: the default is generous so that headerless streams are identified
+correctly.
+
 #### `cropbars`
 
 Crops the black bars that are part of the **picture**.

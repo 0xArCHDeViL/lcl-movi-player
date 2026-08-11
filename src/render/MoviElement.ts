@@ -25,6 +25,7 @@ import type {
 import { Logger, LogLevel } from "../utils/Logger";
 import type { SourceAdapter } from "../source/SourceAdapter";
 import { HttpSource } from "../source/HttpSource";
+import { WasmBindings } from "../wasm/bindings";
 import { isOpenableScheme } from "../source/adapterRegistry";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
@@ -217,6 +218,17 @@ export interface MoviOverlaySpec {
   /** Called whenever it goes, with what took it: one of the dismissOn reasons,
    *  or "host" for hideOverlay. */
   onDismiss?: (reason: string, player: MoviElement) => void;
+}
+
+/** "512kb" / "2mb" / "1048576" → bytes. Anything unreadable means the default. */
+function parseByteSize(value: string | null): number {
+  if (!value) return 0;
+  const m = String(value).trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(k|kb|m|mb)?$/);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  const unit = m[2];
+  const mult = unit?.startsWith("m") ? 1024 * 1024 : unit?.startsWith("k") ? 1024 : 1;
+  return Math.max(0, Math.floor(n * mult));
 }
 
 /** One row of a custom control's submenu. */
@@ -1039,6 +1051,8 @@ export class MoviElement extends HTMLElement {
       "muted",
       "playsinline",
       "preload",
+      "probesize",
+      "probeduration",
       "poster",
       "width",
       "height",
@@ -22252,6 +22266,18 @@ export class MoviElement extends HTMLElement {
         this.setVR360(m.enable, m.half, m.fisheye, m.sbs, m.stereographic);
         break;
       }
+      // How far the demuxer may look before it names the streams. Absent
+      // means the built-in budget, which is generous because a stream with no
+      // header (MPEG-TS, a raw ES) is identified by watching packets go by.
+      // A host serving MP4/WebM — where the header sits at the front — can
+      // narrow it and open sooner. `probesize` is bytes, `probeduration` ms;
+      // both accept plain numbers, and probesize also "512kb" / "2mb".
+      case "probesize":
+        WasmBindings.probeBytes = parseByteSize(newValue);
+        break;
+      case "probeduration":
+        WasmBindings.probeAnalyzeMs = Math.max(0, parseInt(newValue || "0", 10) || 0);
+        break;
       case "cropbars":
         this._cropBars = newValue !== null;
         this.applyBarCrop();
