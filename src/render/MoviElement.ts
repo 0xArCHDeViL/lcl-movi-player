@@ -13554,6 +13554,21 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!btn) return;
 
+    // Not over the spinner. This is a receipt for a press — "yes, that
+    // registered" — and the spinner already answers that, from the same spot on
+    // the picture. Pressing play on a source that has to be fetched put the two
+    // on screen together: a play triangle sitting inside a loading ring, which
+    // reads as a player that has stopped rather than one that is working. It
+    // only shows up on a cold source; a warm one starts before the flash has
+    // faded and there is no spinner to collide with.
+    const spinner = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement | null;
+    if (spinner && spinner.style.display === "flex") {
+      this.cancelCenterFlash();
+      return;
+    }
+
     // When the button is already on screen as a control — touch with the chrome
     // up, the poster, the replay state — the flash is the wrong animation
     // entirely: it fades the button out and the class immediately puts it back,
@@ -18359,6 +18374,26 @@ export class MoviElement extends HTMLElement {
            width: 96px !important;
            height: 96px !important;
            border-width: 1.5px !important;
+        }
+
+        /* Never the button and the spinner together.
+           
+           The rule is stated here rather than in the code that adds the class
+           because the two are driven by different events and the order between
+           them is not guaranteed: on a source change with the chrome up, the
+           class is already on the button from the tap that raised it, and the
+           spinner arrives afterwards. Every path that adds the class asks
+           whether the spinner is up first, but none of them can answer for a
+           spinner that has not appeared yet. The host carries is-buffering for
+           exactly as long as the spinner is displayed, so a rule keyed off it
+           cannot be raced.
+           
+           Not display:none — the button transitions, and cutting it out
+           mid-fade is the flicker this file has fought before. */
+        :host(.is-buffering) .movi-center-play-pause {
+           opacity: 0 !important;
+           visibility: hidden !important;
+           pointer-events: none !important;
         }
         .movi-center-play-pause.movi-center-visible {
            transform: translate(-50%, -50%) scale(1);
@@ -23757,12 +23792,7 @@ export class MoviElement extends HTMLElement {
     if (this.emptyStateIndicator) {
       this.emptyStateIndicator.style.display = "none";
     }
-    {
-      const loadingIndicator = this.shadowRoot?.querySelector(
-        ".movi-loading-indicator",
-      ) as HTMLElement | null;
-      if (loadingIndicator) loadingIndicator.style.display = "flex";
-    }
+    this.setSpinnerVisible(true);
 
     // Auto quality, premuxed ladder, no measurement yet: run a quick speed test
     // BEFORE building the player and pick the opening rung from it, so playback
@@ -25963,7 +25993,16 @@ export class MoviElement extends HTMLElement {
         }
         centerPlayPauseBtn.classList.toggle(
           "movi-center-visible",
-          this._controls && this.isTouchLike() && this.areControlsVisible(),
+          this._controls &&
+            this.isTouchLike() &&
+            this.areControlsVisible() &&
+            // Not over the spinner — see centerHiddenBySpinner. The rule that
+            // normally keeps these two apart on touch is the spinner's own "not
+            // while the bar is up", and that reads the `movi-bar-visible` host
+            // class, which showControls only sets once playback has started.
+            // Before the first play — a source still being fetched, the chrome
+            // brought up by a tap — the two disagreed and both went on screen.
+            !this.centerHiddenBySpinner(),
         );
       }
     } else {
@@ -27054,6 +27093,24 @@ export class MoviElement extends HTMLElement {
     return loadingIndicator?.style.display === "flex";
   }
 
+  /**
+   * Put the spinner up or take it down — the ONLY way to do either.
+   *
+   * The host carries is-buffering for as long as the spinner is displayed, and
+   * CSS leans on that: it is what keeps the centre play button off the screen
+   * while the spinner is on it, which no amount of ordering between the two JS
+   * paths could guarantee on its own. Setting the display directly leaves the
+   * class behind, and a spinner the CSS cannot see is a spinner with a play
+   * triangle sitting inside it. Three call sites did exactly that.
+   */
+  private setSpinnerVisible(on: boolean): void {
+    const loadingIndicator = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement | null;
+    if (loadingIndicator) loadingIndicator.style.display = on ? "flex" : "none";
+    this.classList.toggle("is-buffering", on);
+  }
+
   /** Frames per second below which the picture counts as stopped rather than
    *  slow. A 25fps source manages 25; a 60fps one a machine can only half
    *  decode manages 30; a frozen one manages none. */
@@ -27224,25 +27281,28 @@ export class MoviElement extends HTMLElement {
     }
 
     if (shouldShow) {
-      loadingIndicator.style.display = "flex";
-      // Hide the centre play button behind it — but not on the opening load,
-      // where it is the only play control a finger has. See
-      // centerHiddenBySpinner.
+      this.setSpinnerVisible(true);
+      // Hide the centre play button behind it.
       const centerPlayPauseBtn = this.shadowRoot?.querySelector(
         ".movi-center-play-pause",
       ) as HTMLElement;
       if (centerPlayPauseBtn) {
         centerPlayPauseBtn.classList.remove("movi-center-visible");
       }
+      // Including one that is mid-flash. The class is only half of how this
+      // button reaches the screen — a press animates it visible on its own, and
+      // a flash begun a moment before the spinner appeared would otherwise play
+      // out on top of it. flashCenterIcon declines to start over a spinner; this
+      // is the same rule for one already running.
+      this.cancelCenterFlash();
     } else {
-      loadingIndicator.style.display = "none";
+      this.setSpinnerVisible(false);
       // Center play button visibility will be managed by updatePlayPauseIcon
     }
 
-    // Strip mode has no spinner — the centre-screen loader is hidden via
-    // CSS. Surface the same buffering state by pulsing the progress bar
-    // (see :host(.movi-audio-strip.is-buffering) rules in the style block).
-    this.classList.toggle("is-buffering", shouldShow);
+    // (is-buffering rides along inside setSpinnerVisible now — strip mode has
+    // no spinner and pulses its progress bar off that same class instead; see
+    // the :host(.movi-audio-strip.is-buffering) rules in the style block.)
   }
 
   private formatTime(seconds: number): string {
@@ -27320,10 +27380,7 @@ export class MoviElement extends HTMLElement {
     if (this.brokenIndicator) this.brokenIndicator.style.display = "none";
     if (this.emptyStateIndicator) this.emptyStateIndicator.style.display = "none";
     if (this.posterElement) this.posterElement.style.display = "none";
-    const loadingIndicator = this.shadowRoot?.querySelector(
-      ".movi-loading-indicator",
-    ) as HTMLElement | null;
-    if (loadingIndicator) loadingIndicator.style.display = "none";
+    this.setSpinnerVisible(false);
     v.controls = false;
     v.style.display = "block";
     v.style.objectFit =
@@ -27723,10 +27780,7 @@ export class MoviElement extends HTMLElement {
     }
 
     // Hide loading indicator
-    const loadingIndicator = this.shadowRoot?.querySelector(
-      ".movi-loading-indicator",
-    ) as HTMLElement;
-    if (loadingIndicator) loadingIndicator.style.display = "none";
+    this.setSpinnerVisible(false);
 
     // Hide center play button in error state
     const centerPlayPauseBtn = this.shadowRoot?.querySelector(
@@ -27878,10 +27932,7 @@ export class MoviElement extends HTMLElement {
     this.isLoading = false;
 
     // Show loading indicator
-    const loadingIndicator = this.shadowRoot?.querySelector(
-      ".movi-loading-indicator",
-    ) as HTMLElement;
-    if (loadingIndicator) loadingIndicator.style.display = "flex";
+    this.setSpinnerVisible(true);
 
     // Re-initialize with software decoding
     if (currentSrc) {
