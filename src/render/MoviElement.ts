@@ -1384,28 +1384,27 @@ export class MoviElement extends HTMLElement {
     this.emptyStateIndicator.innerHTML = `
       <div class="movi-empty-container">
         <div class="movi-empty-icon-wrapper">
-          <!-- A player, drawn as one: a frame, a play triangle, and a scrub
-               line with the playhead parked partway along it. The film-strip
-               clip-art this replaced said "media file", and a bare play disc
-               said "a button" — neither says the thing sitting on the stage is
-               a PLAYER waiting for something to play.
+          <!-- An empty tray.
+               Two marks were tried here and both were pressed: a play triangle
+               inside a frame, and then a dashed slot. The triangle is the most
+               actionable shape in the product and a dashed box still reads as
+               a drop target — anything shaped like the player invites someone
+               to operate it, and there is nothing here to operate.
+               So the icon stops speaking the player's language and speaks the
+               empty state's: a tray with nothing in it, which is the mark every
+               design system uses for "there is nothing here yet" and which
+               nobody has ever tried to press.
 
-               Monochrome, painted in the chrome's own foreground via the
-               classes below: this sits on an otherwise empty stage, where a
-               saturated badge reads as an error rather than a resting state,
-               and a hardcoded white would vanish under the light theme.
-
-               The triangle is centred on its CENTROID, not its bounding box —
-               a right-pointing triangle carries its mass at the blunt end, so
-               box-centring parks it visibly right of centre. Its centroid sits
-               at the middle of the frame ABOVE the scrub line (y=45), not the
-               middle of the frame, so the two don't crowd. -->
+               Monochrome, painted in the chrome's own foreground via the class
+               below: this sits on an otherwise empty stage, where a saturated
+               badge reads as an error rather than a resting state, and a
+               hardcoded white would vanish under the light theme. -->
           <svg viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <rect class="movi-empty-logo-frame" x="7" y="21" width="86" height="58" rx="12" stroke-width="3.5" opacity="0.32"/>
-            <path class="movi-empty-logo-play" d="M45 36 L61 45 L45 54 Z" stroke-width="5.5" stroke-linejoin="round" opacity="0.8"/>
-            <path class="movi-empty-logo-track" d="M21 69 H79" stroke-width="3.5" stroke-linecap="round" opacity="0.18"/>
-            <path class="movi-empty-logo-track" d="M21 69 H45" stroke-width="3.5" stroke-linecap="round" opacity="0.55"/>
-            <circle class="movi-empty-logo-head" cx="45" cy="69" r="4.5" opacity="0.8"/>
+            <rect class="movi-empty-logo-frame" x="14" y="26" width="72" height="48" rx="12" stroke-width="3.5" opacity="0.35"/>
+            <!-- The mouth: the line that makes a box a tray. It dips in the
+                 middle, which is the whole of the shape's meaning — something
+                 would rest in that dip, and nothing is. -->
+            <path class="movi-empty-logo-frame" d="M14 56 H34 L40 65 H60 L66 56 H86" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
           </svg>
         </div>
         <div class="movi-empty-text">
@@ -8360,6 +8359,15 @@ export class MoviElement extends HTMLElement {
     this._forcedDashRendition = null;
     this._hasEverPlayed = false;
     this._restoreRungSrc = "";
+    // Put the new video's poster up NOW, before the open. The `src` setter does
+    // this and this path did not, so a host that swaps the children — the only
+    // way to change video without losing fullscreen — got no cover at all: the
+    // canvas sat on the outgoing video's last frame until the new one painted.
+    // The poster attribute is already the new one by here (the swap settles on
+    // a microtask, after the host's render), and _hasEverPlayed was just
+    // cleared, so updatePoster's "playback owns the surface" gate lets it
+    // through.
+    this.updatePoster();
     // "Don't start" belonged to the video that was here before. pause() sets
     // this to cancel a queued autoplay, and a host that stops the outgoing
     // video before handing over the next one (the sensible thing to do — its
@@ -20862,16 +20870,8 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Painted here, not in the SVG, so the mark inverts with the theme
-         instead of being a fixed white that disappears on a light one. The
-         play triangle is filled AND stroked with the same paint: that's what
-         rounds its three corners without hand-authoring arcs. */
-      .movi-empty-logo-play,
-      .movi-empty-logo-head {
-        fill: var(--movi-chrome-fg, #fff);
-      }
-      .movi-empty-logo-frame,
-      .movi-empty-logo-track,
-      .movi-empty-logo-play {
+         instead of being a fixed white that disappears on a light one. */
+      .movi-empty-logo-frame {
         stroke: var(--movi-chrome-fg, #fff);
       }
 
@@ -25593,6 +25593,13 @@ export class MoviElement extends HTMLElement {
     // Refresh controls to reflect "no player" state
     this.updateControlsState();
     this.updatePlayPauseIcon();
+    // And the scrubber with them. It is driven by a loop that stops with the
+    // player, so on a source change it kept the PREVIOUS video's fill while the
+    // clock beside it already read 0:00 — a bar and a time that disagree. The
+    // zeroing lives in updateProgressBar, behind its own duration check, so
+    // calling it here is enough; a quality switch is excluded there, which is
+    // what keeps a mid-switch playhead from snapping back to the start.
+    this.updateProgressBar();
 
     // Hide error/broken indicator
     if (this.brokenIndicator) this.brokenIndicator.style.display = "none";
