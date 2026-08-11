@@ -3545,11 +3545,7 @@ export class MoviElement extends HTMLElement {
       const current = this._objectFit === "control" ? this._currentFit : this._objectFit;
       const idx = fits.indexOf(current as any);
       const next = fits[(idx + 1) % fits.length];
-      if (this._objectFit === "control") {
-        this._currentFit = next;
-      } else {
-        this._objectFit = next;
-      }
+      this.setFit(next);
       this.updateFitMode();
       this.showAspectOsd(next);
     });
@@ -4381,8 +4377,7 @@ export class MoviElement extends HTMLElement {
               if (ratio > 1.2 && current !== "cover") next = "cover";
               else if (ratio < 0.83 && current !== "contain") next = "contain";
               if (next) {
-                if (this._objectFit === "control") this._currentFit = next;
-                else this._objectFit = next;
+                this.setFit(next);
                 this.updateFitMode();
                 const labels: Record<string, string> = {
                   contain: "Fit",
@@ -5227,11 +5222,7 @@ export class MoviElement extends HTMLElement {
             const current = this._objectFit === "control" ? this._currentFit : this._objectFit;
             const idx = fits.indexOf(current as any);
             const next = fits[(idx + 1) % fits.length];
-            if (this._objectFit === "control") {
-              this._currentFit = next;
-            } else {
-              this._objectFit = next;
-            }
+            this.setFit(next);
             this.updateFitMode();
             this.updateAspectRatioIcon();
             const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
@@ -13104,30 +13095,31 @@ export class MoviElement extends HTMLElement {
     );
   }
 
-  private applyAspectChoice(fit: string): void {
-    const viaControl = this._objectFit === "control";
-    if (viaControl) {
+  /**
+   * Where a chosen fit lands, and the fact that it is remembered.
+   *
+   * Four things change the fit — the settings page, the bar's aspect button,
+   * the A key and the pinch gesture — and only the first went through
+   * applyAspectChoice. The other three wrote the field inline, so three of the
+   * four ways a viewer can change the fit were never saved, which is what
+   * "aspect doesn't persist" actually was. They all come here now.
+   */
+  private setFit(fit: string): void {
+    if (this._objectFit === "control") {
       this._currentFit = fit as typeof this._currentFit;
     } else {
       this._objectFit = fit as typeof this._objectFit;
     }
-    // Remember it here, not through the attribute. This path writes the
-    // private field directly and never touches `objectfit`, so the persistence
-    // hook — which listens for attribute changes — never heard about the one
-    // way a VIEWER can change the fit. persist="aspect" only ever recorded
-    // what the page itself had set, which is the value that needed
-    // remembering least.
-    //
-    // Except under objectfit="control", where the pick is deliberately
-    // transient and the host owns the attribute: storing it there would come
-    // back on the next load as objectfit="cover" and quietly take the host out
-    // of control mode.
-    if (!this._applyingPersisted) {
-      if (this._persistNames().has("aspect")) this._prefWrite("aspect", fit);
-      else if (this.legacySettingsEnabled()) {
-        SettingsStorage.getInstance().save({ objectFit: fit });
-      }
+    if (this._applyingPersisted) return;
+    if (this._persistNames().has("aspect")) this._prefWrite("aspect", fit);
+    else if (this.legacySettingsEnabled()) {
+      SettingsStorage.getInstance().save({ objectFit: fit });
     }
+  }
+
+  private applyAspectChoice(fit: string): void {
+    const viaControl = this._objectFit === "control";
+    this.setFit(fit);
     this.updateFitMode();
     this.showAspectOsd(fit);
     // Tell the host what the viewer picked, so it can remember it. Nothing
@@ -27008,6 +27000,49 @@ export class MoviElement extends HTMLElement {
     return loadingIndicator?.style.display === "flex" && this._hasEverPlayed;
   }
 
+  /** Frames per second below which the picture counts as stopped rather than
+   *  slow. A 25fps source manages 25; a 60fps one a machine can only half
+   *  decode manages 30; a frozen one manages none. */
+  private static readonly MOVING_FPS = 8;
+  /** Sampling window for the two readings below — long enough that a single
+   *  late frame cannot read as a stall. */
+  private static readonly MOVING_SAMPLE_MS = 600;
+  private _movingAt = 0;
+  private _movingFrames = -1;
+  private _movingTime = -1;
+  private _moving = false;
+
+  /**
+   * Are sound and picture both actually advancing right now?
+   *
+   * Two readings, because either alone lies. Frames alone: a decoder can keep
+   * emitting frames of a stream whose audio has stopped dead. The clock alone:
+   * it runs from the audio, so it advances happily over a frozen picture.
+   * Together they are the only claim worth making — playback is happening.
+   */
+  private playbackIsMoving(): boolean {
+    const now = performance.now();
+    const elapsed = now - this._movingAt;
+    if (elapsed < MoviElement.MOVING_SAMPLE_MS) return this._moving;
+
+    const frames = this.player?.getRenderHealth?.()?.framesPresented ?? -1;
+    const time = this._uiCurrentTime();
+    const first = this._movingFrames < 0;
+    // framesPresented restarts from zero on a seek, so a negative delta is a
+    // new run rather than time going backwards — take the sample and wait.
+    const drawn = frames - this._movingFrames;
+    const fps = (drawn * 1000) / Math.max(1, elapsed);
+    this._moving =
+      !first &&
+      drawn >= 0 &&
+      fps >= MoviElement.MOVING_FPS &&
+      time > this._movingTime + 0.05;
+    this._movingAt = now;
+    this._movingFrames = frames;
+    this._movingTime = time;
+    return this._moving;
+  }
+
   private updateLoadingIndicator(state?: string): void {
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
@@ -27105,6 +27140,22 @@ export class MoviElement extends HTMLElement {
       performance.now() - this._seekRunSince <
         MoviElement.SEEK_SPINNER_GRACE_MS
     ) {
+      shouldShow = false;
+    }
+
+    // The last word, over every reason above.
+    //
+    // If sound and picture are both moving, nothing is loading — whatever the
+    // state machine, the judder watchdog or a rendition switch happens to
+    // think. A spinner over a picture that is playing is not information, it
+    // is a fault report about playback that is working, and it is the single
+    // most common way this player has lied to a viewer.
+    //
+    // "Moving" is deliberately generous: a source running at half its own rate
+    // is choppy, not stopped, and the viewer is watching it. The floor is far
+    // below any real frame rate, so it separates "playing badly" from
+    // "stopped" and nothing finer.
+    if (shouldShow && this.playbackIsMoving()) {
       shouldShow = false;
     }
 
