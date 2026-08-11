@@ -896,6 +896,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private backgroundIntervalId: number | null = null;
   private backgroundWorker: Worker | null = null; // Worker-based timer for Safari
   private isBackgrounded: boolean = false; // True when tab is hidden (background)
+  /**
+   * The page has said hidden does not mean unwatched — see MoviElement's
+   * `backgroundplay`. Two things follow from it: an autoplay may START while
+   * hidden (handled in the element), and hiding the tab does not pause on a
+   * phone (below).
+   */
+  private _backgroundPlay: boolean = false;
   // performance.now() of the last background→foreground recovery. For a short
   // window after, the audio-underrun stall detector is suppressed: returning
   // from background the decode loop was throttled, so a transient underrun is
@@ -9145,6 +9152,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._bindAV = enabled;
   }
 
+  /** Hidden does not mean unwatched: see _backgroundPlay. */
+  setBackgroundPlay(enabled: boolean): void {
+    this._backgroundPlay = enabled;
+  }
+
+  getBackgroundPlay(): boolean {
+    return this._backgroundPlay;
+  }
+
   getBindAV(): boolean {
     return this._bindAV;
   }
@@ -9584,7 +9600,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         /Android|iPhone|iPod|Mobile|Opera Mini|IEMobile|BlackBerry/i.test(ua) ||
         // iPad on iOS 13+ reports as Mac — disambiguate via touch points
         (/Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1);
-      if (isMobile && !this.isPiPActive) {
+      // ...unless the page has explicitly asked for background playback. It is
+      // opt-in, so the caller is taking on the unreliability described above;
+      // the return path already handles the worst of it, pausing for a tap if
+      // the AudioContext comes back stuck suspended.
+      if (isMobile && !this.isPiPActive && !this._backgroundPlay) {
         this.pause();
         return;
       }

@@ -422,7 +422,17 @@ is remembered unless it is listed.
 ```
 
 **Settings:** `loop`, `muted`, `volume`, `speed`, `ambient`, `stablevolume`,
-`hdr`, `aspect`. Also available as `MoviElement.persistableSettings`.
+`hdr`, `aspect`, `cropbars`, `audiolang`, `subtitlelang`. Also available as
+`MoviElement.persistableSettings`.
+
+`audiolang` and `subtitlelang` are remembered as a **language**, not as a track
+number — track 2 is Hindi in one file and a commentary in the next, so the
+number is worth nothing across sources. The language is matched against each
+new file's tracks once they are known: exactly first, then by two-letter stem,
+so a preference stored as `eng` still finds a track tagged `en`. A file that
+has no track in that language keeps its own default and the preference waits
+for the next one that does. Turning subtitles off is itself a choice and is
+remembered as such.
 
 Opt-in per setting on purpose: a kiosk that starts every clip muted at 1x
 should not inherit the last viewer's choices. A remembered value **wins over
@@ -554,8 +564,8 @@ at once are taken as measured rather than snapped: a frame padded twice has no
 single ratio to land on. The seek-bar preview and the timeline strip decode
 separately and still show the bars.
 
-There is a **Crop bars** switch in the settings panel too, next to Aspect,
-which is the same setting reached from the player rather than from the page.
+There is a **Crop black bars** switch in the settings panel too, which is the
+same setting reached from the player rather than from the page.
 
 ---
 

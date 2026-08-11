@@ -162,7 +162,7 @@ const OSD = {
   rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
   muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
-  crop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M3 16h18"/></svg>`,
+  crop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
   ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
   // Plain monitor: the picture's quality changed, without claiming a direction.
@@ -5256,16 +5256,16 @@ export class MoviElement extends HTMLElement {
               const activeIdx = extSubs.findIndex((t) => t.active);
               if (activeIdx === -1) {
                 // Currently off → select first
-                this.player.selectSubtitleLang(extSubs[0].lang);
+                this.pickSubtitleLang(extSubs[0].lang);
                 this.showOSD(subOsdOn, `${extSubs[0].label} [${extSubs[0].lang.toUpperCase()}] (1/${extSubs.length})`);
               } else if (activeIdx + 1 < extSubs.length) {
                 // Next track
                 const next = extSubs[activeIdx + 1];
-                this.player.selectSubtitleLang(next.lang);
+                this.pickSubtitleLang(next.lang);
                 this.showOSD(subOsdOn, `${next.label} [${next.lang.toUpperCase()}] (${activeIdx + 2}/${extSubs.length})`);
               } else {
                 // Last → off
-                this.player.selectSubtitleLang(null);
+                this.pickSubtitleLang(null);
                 this.showOSD(subOsdOff, "Subtitles Off");
               }
               this.updateSubtitleTrackMenu();
@@ -5275,11 +5275,11 @@ export class MoviElement extends HTMLElement {
               const activeIdx = active ? muxedSubs.findIndex(t => t.id === active.id) : -1;
               const nextIdx = activeIdx + 1;
               if (nextIdx >= muxedSubs.length) {
-                this.player.selectSubtitleTrack(null);
+                this.pickSubtitleTrack(null);
                 this.showOSD(subOsdOff, "Subtitles Off");
               } else {
                 const next = muxedSubs[nextIdx];
-                this.player.selectSubtitleTrack(next.id);
+                this.pickSubtitleTrack(next.id);
                 const muxSubLang = next.language?.toUpperCase() || "";
                 const muxSubLabel = next.label || muxSubLang || "Sub";
                 const muxSubOsd = muxSubLang && muxSubLabel !== muxSubLang ? `${muxSubLabel} [${muxSubLang}]` : muxSubLabel;
@@ -5346,10 +5346,10 @@ export class MoviElement extends HTMLElement {
               const next = allAudio[nextIdx];
 
               if (next.type === "ext") {
-                this.player.selectAudioLang(next.lang);
+                this.pickAudioLang(next.lang);
               } else {
                 if (this.player.isNativeAudioActive()) this.player.useMuxedAudio();
-                this.player.selectAudioTrack(next.id);
+                this.pickAudioTrack(next.id);
               }
               const audioOsdLabel = next.langCode ? `${next.label} [${next.langCode}]` : next.label;
               this.showOSD(bIcon, `${audioOsdLabel} (${nextIdx + 1}/${allAudio.length})`);
@@ -6226,7 +6226,7 @@ export class MoviElement extends HTMLElement {
         // Select native audio language track
         if (this.player) {
           const langTrack = this.player.getAudioLangs().find(t => t.lang === audioLang);
-          this.player.selectAudioLang(audioLang);
+          this.pickAudioLang(audioLang);
           this.updateAudioTrackMenu();
           this.showOSD(
             OSD.audio,
@@ -6241,7 +6241,7 @@ export class MoviElement extends HTMLElement {
           if (this.player.isNativeAudioActive()) {
             this.player.useMuxedAudio();
           }
-          this.player.selectAudioTrack(trackId);
+          this.pickAudioTrack(trackId);
           this.updateAudioTrackMenu();
           const trk = this.player.getAudioTracks().find(t => t.id === trackId);
           this.showOSD(
@@ -6286,7 +6286,7 @@ export class MoviElement extends HTMLElement {
         // Select external subtitle language
         if (this.player) {
           const subTrack = this.player.getSubtitleLangs().find(t => t.lang === subtitleLang);
-          this.player.selectSubtitleLang(subtitleLang);
+          this.pickSubtitleLang(subtitleLang);
           this.updateSubtitleTrackMenu();
           this.showOSD(
             OSD.subOn,
@@ -6300,15 +6300,15 @@ export class MoviElement extends HTMLElement {
         if (this.player) {
           const subOsdIcon = OSD.subOn;
           if (trackId === -1) {
-            this.player.selectSubtitleTrack(null);
-            this.player.selectSubtitleLang(null);
+            this.pickSubtitleTrack(null);
+            this.pickSubtitleLang(null);
             this.showOSD(
               OSD.subOff,
               "Subtitles Off",
             );
           } else {
-            this.player.selectSubtitleLang(null);
-            this.player.selectSubtitleTrack(trackId);
+            this.pickSubtitleLang(null);
+            this.pickSubtitleTrack(trackId);
             const trk = this.player.getSubtitleTracks().find(t => t.id === trackId);
             const ctxSubLang = trk?.language?.toUpperCase() || "";
             const ctxSubLabel = trk?.label || ctxSubLang || `Subtitle ${trackId}`;
@@ -7914,7 +7914,7 @@ export class MoviElement extends HTMLElement {
             const audioIcon = OSD.audio;
             if (lang) {
               // External audio track — switch to native <audio>
-              this.player.selectAudioLang(lang);
+              this.pickAudioLang(lang);
               const t = this.player.getAudioLangs().find(a => a.lang === lang);
               const extAudioOsd = t ? `${t.label} [${lang.toUpperCase()}]` : lang.toUpperCase();
               this.showOSD(audioIcon, extAudioOsd);
@@ -7924,7 +7924,7 @@ export class MoviElement extends HTMLElement {
                 this.player.useMuxedAudio();
               }
               const tid = parseInt(trackIdStr);
-              this.player.selectAudioTrack(tid);
+              this.pickAudioTrack(tid);
               const trk = this.player.getAudioTracks().find(a => a.id === tid);
               const muxAudioLang = trk?.language?.toUpperCase() || "";
               const muxAudioLabel = trk?.label || muxAudioLang || `Audio ${tid}`;
@@ -8399,6 +8399,11 @@ export class MoviElement extends HTMLElement {
     this._forcedDashRendition = null;
     this._hasEverPlayed = false;
     this._restoreRungSrc = "";
+    // A new file gets its own go at the remembered languages: the tracks that
+    // matched last time are gone, and the preference has to be matched afresh.
+    this._persistedTracksApplied = false;
+    this._audioRestored = false;
+    this._subsRestored = false;
     // Put the new video's poster up NOW, before the open. The `src` setter does
     // this and this path did not, so a host that swaps the children — the only
     // way to change video without losing fullscreen — got no cover at all: the
@@ -11589,21 +11594,21 @@ export class MoviElement extends HTMLElement {
             if (subtitleLang !== undefined) {
               // External subtitle track
               const st = this.player.getSubtitleLangs().find(t => t.lang === subtitleLang);
-              this.player.selectSubtitleLang(subtitleLang);
+              this.pickSubtitleLang(subtitleLang);
               this.updateSubtitleTrackMenu();
               const extSubOsd = st ? `${st.label} [${subtitleLang.toUpperCase()}]` : subtitleLang.toUpperCase();
               this.showOSD(subIconOn, extSubOsd);
             } else if (trackIdStr === "null") {
               // Disable all subtitles (muxed + external)
-              this.player.selectSubtitleTrack(null).catch(() => {});
-              this.player.selectSubtitleLang(null);
+              this.pickSubtitleTrack(null).catch(() => {});
+              this.pickSubtitleLang(null);
               this.updateSubtitleTrackMenu();
               this.showOSD(subIconOff, "Subtitles Off");
             } else {
               // Muxed subtitle track
               const trackId = parseInt(trackIdStr || "0");
-              this.player.selectSubtitleLang(null);
-              this.player.selectSubtitleTrack(trackId).catch(() => {});
+              this.pickSubtitleLang(null);
+              this.pickSubtitleTrack(trackId).catch(() => {});
               const trk = this.player.getSubtitleTracks().find(t => t.id === trackId);
               const muxSubLangC = trk?.language?.toUpperCase() || "";
               const muxSubLabelC = trk?.label || muxSubLangC || `Subtitle ${trackId}`;
@@ -12613,9 +12618,10 @@ export class MoviElement extends HTMLElement {
     stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
     loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
     aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
-    // The frame with the bars still on it, and the picture inside them: what
-    // this switch takes off is the outer pair.
-    crop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M3 16h18"/></svg>`,
+    // Crop marks — the two overhanging L's of the crop tool. A framed
+    // rectangle was tried and it was indistinguishable from Aspect's, which is
+    // half of why that row moved away from this one.
+    crop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
   };
 
   private static readonly ASPECT_CHOICES: ReadonlyArray<
@@ -12925,6 +12931,21 @@ export class MoviElement extends HTMLElement {
     if (!audioOnly && hdrEl?.style.display === "flex" && this.isControlAvailable("hdr")) {
       rows.push(toggle("hdr", "HDR", this._hdr));
     }
+    // Crop black bars. Named for what it removes rather than for what it does
+    // — "crop" alone is an editing verb and reads as something that will take
+    // a piece of the film away, which is the opposite of the truth.
+    //
+    // Deliberately NOT next to Aspect, even though they answer the same
+    // question. Their icons are both a rectangle inside a rectangle, and side
+    // by side the pair read as one setting split in two. Distance is the
+    // cheapest fix, and the switch has its own mark now: crop marks, the tool
+    // rather than the frame. Video only, and off unless someone asks — a
+    // player that trimmed the edges of every film by default would be deciding
+    // for the viewer which part of the frame is the film. Second hand on the
+    // cropbars attribute, not a second setting.
+    if (!audioOnly && this.isControlAvailable("aspect")) {
+      rows.push(toggle("crop", "Crop black bars", this._cropBars));
+    }
     // Stable volume rides Movi's AudioContext compressor, which isn't in the
     // path when audio plays through a media element — adaptive streams and the
     // native fallback. The control bar button and the context-menu item are
@@ -12934,19 +12955,11 @@ export class MoviElement extends HTMLElement {
       rows.push(toggle("stable", "Stable volume", this._stableVolume));
     }
     rows.push(toggle("loop", "Loop", this._loop));
-    // Crop bars sits with Aspect because it is the same question — how the
-    // picture fills the frame — and because the two only make sense together:
-    // cover and zoom scale a letterbox along with the image unless this has
-    // taken it off first. Video only, and off unless someone asks for it: a
-    // player that trimmed the edges of every film by default would be deciding
-    // for the viewer what part of the frame is the film. See the cropbars
-    // attribute, which this switch is a second hand on.
     // Aspect is the canvas renderer's fit mode. The native fallback has no
     // canvas — its setFitMode() is an empty method — so the page would let the
     // viewer pick a fit and then do nothing with it. The control-bar aspect
     // button is already absent there; this row was the one that wasn't.
     if (!audioOnly && this.isControlAvailable("aspect")) {
-      rows.push(toggle("crop", "Crop bars", this._cropBars));
       rows.push(
       `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
       );
@@ -13070,6 +13083,20 @@ export class MoviElement extends HTMLElement {
       this._currentFit = fit as typeof this._currentFit;
     } else {
       this._objectFit = fit as typeof this._objectFit;
+    }
+    // Remember it here, not through the attribute. This path writes the
+    // private field directly and never touches `objectfit`, so the persistence
+    // hook — which listens for attribute changes — never heard about the one
+    // way a VIEWER can change the fit. persist="aspect" only ever recorded
+    // what the page itself had set, which is the value that needed
+    // remembering least.
+    //
+    // Except under objectfit="control", where the pick is deliberately
+    // transient and the host owns the attribute: storing it there would come
+    // back on the next load as objectfit="cover" and quietly take the host out
+    // of control mode.
+    if (!viaControl && !this._applyingPersisted && this._persistNames().has("aspect")) {
+      this._prefWrite("aspect", fit);
     }
     this.updateFitMode();
     this.showAspectOsd(fit);
@@ -13223,7 +13250,7 @@ export class MoviElement extends HTMLElement {
           this.cropbars = !this._cropBars;
           this.showOSD(
             OSD.crop,
-            this._cropBars ? "Crop Bars On" : "Crop Bars Off",
+            this._cropBars ? "Black Bars Cropped" : "Black Bars Kept",
           );
         }
         // Toggles stay on the panel — the point of a settings list is flipping
@@ -22508,6 +22535,9 @@ export class MoviElement extends HTMLElement {
         break;
       case "backgroundplay":
         this._backgroundPlay = newValue !== null;
+        // The core needs it too: it decides whether hiding the tab pauses on a
+        // phone. Live, so a page can turn it on while already playing.
+        this.player?.setBackgroundPlay(this._backgroundPlay);
         // Turning it on while an autoplay is parked waiting for the tab is the
         // one case that needs more than a flag: release it now rather than
         // leaving it waiting for a visibility change that may never come.
@@ -24000,6 +24030,7 @@ export class MoviElement extends HTMLElement {
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
         this.player.setBindAV(this._bindAV);
+        this.player.setBackgroundPlay(this._backgroundPlay);
         this.updateStableAudioUI();
         // Re-evaluate now that the source has loaded (the stream wrapper is set
         // during load, after setupAudioOutputs' first pass): ambient + audio-
@@ -24423,6 +24454,10 @@ export class MoviElement extends HTMLElement {
    * but left the badge (and the host) on the rung it started at.
    */
   private handleTracksChange(): void {
+    // The remembered languages go back on here rather than at load: this is
+    // the first moment the file's own track list exists, and matching a
+    // language needs something to match against.
+    this.applyPersistedTracks();
     // Re-entrancy guard. This handler re-renders the quality menu, and that
     // render pushes the ladder back into the player (setDashRenditions) —
     // which, on an engine that answers by republishing its track list, emits
@@ -26070,9 +26105,13 @@ export class MoviElement extends HTMLElement {
    * that "hidden" doesn't mean "unwatched": background audio, a playlist that
    * must keep advancing, a kiosk the browser reports as hidden.
    *
-   * Playback already CONTINUES when a tab is hidden — this is only about
-   * starting there. (Document PiP is exempt either way: the tab is hidden by
-   * definition and the picture is on screen regardless.)
+   * On a DESKTOP, playback already continues when a tab is hidden, so there
+   * this is only about starting there. On a PHONE it is more than that: hiding
+   * the tab normally pauses outright, because the OS throttles hidden tabs to
+   * the point where keeping playback alive is unreliable, and this opts out of
+   * that too. The return path still pauses for a tap if the AudioContext comes
+   * back stuck suspended. (Document PiP is exempt either way: the tab is
+   * hidden by definition and the picture is on screen regardless.)
    */
   get backgroundplay(): boolean {
     return this._backgroundPlay;
@@ -28369,7 +28408,7 @@ export class MoviElement extends HTMLElement {
     if (!this.player) return false;
     // Fire-and-forget — the switch is async (it re-stands-up the WASM audio
     // pipeline); callers here don't await the result.
-    void this.player.selectAudioLang(lang);
+    void this.pickAudioLang(lang);
     return true;
   }
 
@@ -28389,7 +28428,7 @@ export class MoviElement extends HTMLElement {
    * Select an external subtitle track by language (null to disable)
    */
   async selectSubtitleLang(lang: string | null): Promise<boolean> {
-    if (this.player) return this.player.selectSubtitleLang(lang);
+    if (this.player) return this.pickSubtitleLang(lang);
     return false;
   }
 
@@ -28833,6 +28872,7 @@ export class MoviElement extends HTMLElement {
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
         this.player.setBindAV(this._bindAV);
+        this.player.setBackgroundPlay(this._backgroundPlay);
         this.player.setSubtitleOverlay(this.subtitleOverlay);
         this.updateStableAudioUI();
       }
@@ -29068,7 +29108,27 @@ export class MoviElement extends HTMLElement {
     stablevolume: { attr: "stablevolume", boolean: true },
     hdr: { attr: "hdr", boolean: true },
     aspect: { attr: "objectfit", boolean: false },
+    // Sits with aspect for the same reason the two settings belong together:
+    // whether the bars come off decides what "cover" and "zoom" are sizing.
+    // Remembering one without the other gives back half a decision.
+    cropbars: { attr: "cropbars", boolean: true },
   };
+
+  /**
+   * The two settings that are remembered by LANGUAGE rather than by attribute.
+   *
+   * Everything in PERSISTABLE is a value the element already carries on an
+   * attribute, so remembering it is a matter of writing that attribute back.
+   * Track choices are not: a track number means nothing across files — track 2
+   * is Hindi in one and a commentary in the next — and there is no attribute
+   * for "the audio the viewer likes". What survives is the LANGUAGE, which is
+   * the actual preference; the track that carries it is found again per file.
+   *
+   * "off" is a real value for subtitles, and the only one that has to be
+   * stored as a word: an absent preference means "not chosen yet", and turning
+   * subtitles off is a choice.
+   */
+  private static readonly PERSISTABLE_LANGS = ["audiolang", "subtitlelang"];
 
   private _persistNames(): Set<string> {
     const raw = this.getAttribute("persist");
@@ -29106,6 +29166,155 @@ export class MoviElement extends HTMLElement {
   }
 
   private _applyingPersisted = false;
+  /** Cleared on every source change: the remembered languages are re-applied
+   *  once per file, when that file's tracks first arrive. */
+  private _persistedTracksApplied = false;
+
+  /**
+   * Remember a track choice, if the host asked for this one to be remembered.
+   *
+   * Called from the pick* wrappers rather than from the menus, because there
+   * are four surfaces that change tracks — the context menu, the settings
+   * panel's borrowed lists, the bar menus and the keyboard — and they all end
+   * up at the same four player calls.
+   */
+  private noteTrackChoice(name: string, lang: string | null): void {
+    if (this._applyingPersisted) return; // restoring, not choosing
+    if (!this._persistNames().has(name)) return;
+    this._prefWrite(name, lang && lang.trim() ? lang.trim() : "off");
+  }
+
+  /**
+   * Two language tags for the same language, as far as a viewer is concerned.
+   *
+   * Files disagree about how to spell one: "en", "eng", "en-US". Exact first,
+   * so "es" never loses to a file that also has "est"; only when nothing
+   * matches exactly does the two-letter stem get to try, which is what makes
+   * "eng" find "en".
+   */
+  private static langMatches(a: string, b: string, loose: boolean): boolean {
+    const na = a.trim().toLowerCase();
+    const nb = b.trim().toLowerCase();
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    if (!loose) return false;
+    const stem = (v: string) => v.split(/[-_]/)[0].slice(0, 2);
+    return stem(na) === stem(nb);
+  }
+
+  /**
+   * Put the remembered audio / subtitle languages back, once this file's
+   * tracks are known.
+   *
+   * A remembered language the file does not have is left alone rather than
+   * forced: the file's own default is a better answer than nothing, and the
+   * preference survives for the next file that does carry it.
+   */
+  private applyPersistedTracks(): void {
+    if (this._persistedTracksApplied || !this.player) return;
+    const names = this._persistNames();
+    const wantAudio = names.has("audiolang") ? this._prefRead("audiolang") : null;
+    const wantSubs = names.has("subtitlelang") ? this._prefRead("subtitlelang") : null;
+    if (!wantAudio && !wantSubs) return;
+    this._persistedTracksApplied = true;
+    this._applyingPersisted = true;
+    try {
+      for (const loose of [false, true]) {
+        if (wantAudio && !this._audioRestored) {
+          const byLang = this.player
+            .getAudioLangs?.()
+            ?.find((t) => MoviElement.langMatches(t.lang, wantAudio, loose));
+          if (byLang) {
+            this.player.selectAudioLang(byLang.lang);
+            this._audioRestored = true;
+          } else {
+            const trk = this.player
+              .getAudioTracks?.()
+              ?.find(
+                (t) =>
+                  t.language &&
+                  MoviElement.langMatches(t.language, wantAudio, loose),
+              );
+            if (trk) {
+              this.player.selectAudioTrack(trk.id);
+              this._audioRestored = true;
+            }
+          }
+        }
+        if (wantSubs && !this._subsRestored) {
+          if (wantSubs === "off") {
+            // Nothing to select — the file's own default is what has to be
+            // undone, and only if it turned something on.
+            this.player.selectSubtitleTrack(null);
+            this.player.selectSubtitleLang(null);
+            this._subsRestored = true;
+          } else {
+            const byLang = this.player
+              .getSubtitleLangs?.()
+              ?.find((t) => MoviElement.langMatches(t.lang, wantSubs, loose));
+            if (byLang) {
+              this.player.selectSubtitleLang(byLang.lang);
+              this._subsRestored = true;
+            } else {
+              const trk = this.player
+                .getSubtitleTracks?.()
+                ?.find(
+                  (t) =>
+                    t.language &&
+                    MoviElement.langMatches(t.language, wantSubs, loose),
+                );
+              if (trk) {
+                this.player.selectSubtitleTrack(trk.id);
+                this._subsRestored = true;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      Logger.warn(TAG, "restoring remembered tracks failed", err);
+    } finally {
+      this._applyingPersisted = false;
+      this.updateAudioTrackMenu();
+      this.updateSubtitleTrackMenu();
+    }
+  }
+
+  private _audioRestored = false;
+  private _subsRestored = false;
+
+  // ── The four ways a track gets picked, funnelled ──────────────────────────
+  private pickAudioLang(lang: string) {
+    const out = this.player!.selectAudioLang(lang);
+    this.noteTrackChoice("audiolang", lang);
+    return out;
+  }
+
+  private pickAudioTrack(id: number) {
+    const out = this.player!.selectAudioTrack(id);
+    const lang = this.player?.getAudioTracks?.()?.find((t) => t.id === id)
+      ?.language;
+    this.noteTrackChoice("audiolang", lang ?? null);
+    return out;
+  }
+
+  private pickSubtitleLang(lang: string | null) {
+    const out = this.player!.selectSubtitleLang(lang);
+    this.noteTrackChoice("subtitlelang", lang);
+    return out;
+  }
+
+  private pickSubtitleTrack(id: number | null) {
+    const out = this.player!.selectSubtitleTrack(id);
+    if (id === null) {
+      this.noteTrackChoice("subtitlelang", null);
+    } else {
+      const lang = this.player?.getSubtitleTracks?.()?.find((t) => t.id === id)
+        ?.language;
+      this.noteTrackChoice("subtitlelang", lang ?? null);
+    }
+    return out;
+  }
 
   /** Called from attributeChangedCallback for every attribute that backs a
    *  setting the host opted into. */
@@ -29169,7 +29378,10 @@ export class MoviElement extends HTMLElement {
   /** Every setting this element can remember — for a host building its own
    *  preferences UI, so the list lives in one place. */
   static get persistableSettings(): string[] {
-    return Object.keys(MoviElement.PERSISTABLE);
+    return [
+      ...Object.keys(MoviElement.PERSISTABLE),
+      ...MoviElement.PERSISTABLE_LANGS,
+    ];
   }
 
   /** Single keys the player's own shortcuts already claim. A custom hotkey is
