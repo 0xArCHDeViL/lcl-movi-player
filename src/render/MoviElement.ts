@@ -2597,6 +2597,16 @@ export class MoviElement extends HTMLElement {
     }
     const text = tip.querySelector(".movi-btn-tip-text") as HTMLElement | null;
     const key = tip.querySelector(".movi-btn-tip-key") as HTMLElement | null;
+    // Never over an open panel. A tooltip is an answer to "what is this?" and
+    // the panel that just opened IS the answer — a label floating on top of it
+    // is only in the way. Checked here rather than only at the click, because
+    // whether the panel is up one animation frame after the click depends on
+    // which panel it is: the settings menu opens synchronously, others do not,
+    // and the ones that do not left their label hanging over themselves.
+    if (this.isAnyMenuOpen()) {
+      this.hideControlTip();
+      return;
+    }
     if (text) text.textContent = info.text;
     if (key) key.textContent = info.key;
     this.controlTipFor = btn;
@@ -25654,6 +25664,9 @@ export class MoviElement extends HTMLElement {
    * trigger, so the two labels that read state re-render from here.
    */
   private refreshControlTip(): void {
+    // Runs on the UI tick, which is what makes the guard in showControlTip
+    // timing-independent: a panel that opens late still takes the label down on
+    // the next frame rather than leaving it up until the pointer moves.
     if (this.controlTipFor) this.showControlTip(this.controlTipFor);
   }
 
