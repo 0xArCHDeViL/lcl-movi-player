@@ -11883,10 +11883,7 @@ export class MoviElement extends HTMLElement {
     const centerPlayPause = this.shadowRoot?.querySelector(
       ".movi-center-play-pause",
     ) as HTMLElement | null;
-    const loadingIndicator = this.shadowRoot?.querySelector(
-      ".movi-loading-indicator",
-    ) as HTMLElement | null;
-    const spinnerVisible = loadingIndicator?.style.display === "flex";
+    const spinnerVisible = this.centerHiddenBySpinner();
     if (
       centerPlayPause &&
       !spinnerVisible &&
@@ -13125,7 +13122,7 @@ export class MoviElement extends HTMLElement {
     // transient and the host owns the attribute: storing it there would come
     // back on the next load as objectfit="cover" and quietly take the host out
     // of control mode.
-    if (!viaControl && !this._applyingPersisted) {
+    if (!this._applyingPersisted) {
       if (this._persistNames().has("aspect")) this._prefWrite("aspect", fit);
       else if (this.legacySettingsEnabled()) {
         SettingsStorage.getInstance().save({ objectFit: fit });
@@ -13958,8 +13955,14 @@ export class MoviElement extends HTMLElement {
         ) {
           this.showControls();
         }
-        this.updatePlayPauseIcon();
+        // Spinner first, icon second. The centre button's own rule is "not
+        // while something is loading", and it reads that off the spinner's
+        // display — so running it first meant one tick where it read the
+        // previous frame's answer and put the button back up over a spinner
+        // that was about to appear. Ordering is the whole fix: nothing here
+        // needs to know about the other.
         this.updateLoadingIndicator();
+        this.updatePlayPauseIcon();
         this.updateTitle();
         if (!controlsHidden) {
           this.updateTimeDisplay();
@@ -22322,13 +22325,8 @@ export class MoviElement extends HTMLElement {
 
         // Apply the fit the viewer last picked. Same rule as the toggles
         // below: a choice made in the player outlives the page's default.
-        // Never under objectfit="control", where the host owns the attribute
-        // and the pick is deliberately transient.
-        if (
-          settings.objectFit !== undefined &&
-          this._objectFit !== "control"
-        ) {
-          this.setAttribute("objectfit", settings.objectFit);
+        if (settings.objectFit !== undefined) {
+          this.restoreFit(settings.objectFit);
         }
 
         // The two languages are not applied here — the file's tracks do not
@@ -25939,7 +25937,9 @@ export class MoviElement extends HTMLElement {
       const currentState = this.player?.getState();
       const isLoopingEndedTransition = currentState === "ended" && this._loop;
       if (
-        isLoading ||
+        // Not a bare `isLoading`: the opening load keeps the button, because
+        // on touch it is the play control. See centerHiddenBySpinner.
+        (isLoading && this._hasEverPlayed) ||
         this._isUnsupported ||
         this._autoplayStarting ||
         isLoopingEndedTransition
@@ -26987,6 +26987,27 @@ export class MoviElement extends HTMLElement {
     this.refreshControlTip();
   }
 
+  /**
+   * Does the spinner take the centre button off the screen right now?
+   *
+   * Only once something has played. Mid-playback the two are the same
+   * statement made twice — a spinner over a big play button reads as a control
+   * that has stopped responding — so the spinner wins and the button goes.
+   *
+   * Before the first play it is the opposite. On touch the centre button IS
+   * the play control (a tap on the picture only toggles the chrome), so hiding
+   * it during the opening load left the viewer with nothing to press: the tap
+   * fell through to the picture and toggled the bar instead of the playback.
+   * A spinner on the poster is "fetching", not "not responding", and the
+   * button stays.
+   */
+  private centerHiddenBySpinner(): boolean {
+    const loadingIndicator = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement | null;
+    return loadingIndicator?.style.display === "flex" && this._hasEverPlayed;
+  }
+
   private updateLoadingIndicator(state?: string): void {
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
@@ -27089,11 +27110,13 @@ export class MoviElement extends HTMLElement {
 
     if (shouldShow) {
       loadingIndicator.style.display = "flex";
-      // Hide center play button when loading is shown
+      // Hide the centre play button behind it — but not on the opening load,
+      // where it is the only play control a finger has. See
+      // centerHiddenBySpinner.
       const centerPlayPauseBtn = this.shadowRoot?.querySelector(
         ".movi-center-play-pause",
       ) as HTMLElement;
-      if (centerPlayPauseBtn) {
+      if (centerPlayPauseBtn && this.centerHiddenBySpinner()) {
         centerPlayPauseBtn.classList.remove("movi-center-visible");
       }
     } else {
@@ -29490,6 +29513,24 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Put a remembered fit back the way the viewer put it in.
+   *
+   * Under objectfit="control" the fit lives in _currentFit, not on the
+   * attribute — that is the whole of what "control" means, the viewer owning
+   * it rather than the page. Writing the attribute there would answer the
+   * question by removing it: the element would leave control mode and the
+   * host's own setting would be gone.
+   */
+  private restoreFit(fit: string): void {
+    if (this._objectFit === "control") {
+      this._currentFit = fit as typeof this._currentFit;
+      this.updateFitMode();
+    } else {
+      this.setAttribute("objectfit", fit);
+    }
+  }
+
+  /**
    * Put the remembered settings back, before the first load.
    *
    * The stored value WINS over the markup for any setting the host opted into
@@ -29509,6 +29550,10 @@ export class MoviElement extends HTMLElement {
         if (def.boolean) {
           if (stored === "1") this.setAttribute(def.attr, "");
           else this.removeAttribute(def.attr);
+        } else if (name === "aspect") {
+          // Not straight onto the attribute: under objectfit="control" that
+          // would take the element out of control mode. See restoreFit.
+          this.restoreFit(stored);
         } else {
           this.setAttribute(def.attr, stored);
         }
