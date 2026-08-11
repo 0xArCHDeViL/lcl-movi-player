@@ -119,6 +119,10 @@
               "description": "Lets [`autoplay`](#autoplay) start while the tab is **hidden**."
             },
             {
+              "name": "bindav",
+              "description": "Stalls the sound and the picture **together**. On by default."
+            },
+            {
               "name": "renderer",
               "description": "Chooses the rendering backend.",
               "type": {

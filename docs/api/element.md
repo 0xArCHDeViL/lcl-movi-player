@@ -554,6 +554,42 @@ at once are taken as measured rather than snapped: a frame padded twice has no
 single ratio to land on. The seek-bar preview and the timeline strip decode
 separately and still show the bars.
 
+There is a **Crop bars** switch in the settings panel too, next to Aspect,
+which is the same setting reached from the player rather than from the page.
+
+---
+
+#### `bindav`
+
+Stalls the sound and the picture **together**. On by default.
+
+Bound, whichever side runs out empties the other with it and they resume
+together. The cost is that a shortfall you would otherwise have watched or
+listened through becomes a full stop — which is the honest thing to show, since
+a picture running seconds behind its own sound is not playback anyone asked
+for.
+
+```html
+<!-- unbind: let each side carry on alone -->
+<movi-player src="video.mkv" bindav="false"></movi-player>
+```
+
+```javascript
+player.bindav = false;
+```
+
+This is an **opt-out**, and a bare boolean attribute cannot express one — an
+absent attribute has to mean "on". So "off" is carried by the value:
+`bindav="false"`, `"off"`, `"0"` and `"no"` all unbind, and anything else,
+including the attribute being present but empty, binds. The property setter
+writes `"false"` rather than removing the attribute for the same reason.
+
+Unbound, a side running dry only counts as a stall if the other one has run dry
+too: a frozen picture over continuous sound, or continuous picture over sound
+being patched with silence, is taken as the lesser evil. It takes effect on the
+next stall, so changing it mid-playback is enough — there is nothing to undo
+about one already under way.
+
 ---
 
 #### `backgroundplay`

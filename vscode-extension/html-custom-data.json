@@ -374,6 +374,19 @@
           ]
         },
         {
+          "name": "bindav",
+          "description": {
+            "kind": "markdown",
+            "value": "Stalls the sound and the picture **together**. On by default."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#bindav"
+            }
+          ]
+        },
+        {
           "name": "renderer",
           "description": {
             "kind": "markdown",

@@ -162,6 +162,7 @@ const OSD = {
   rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
   muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+  crop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M3 16h18"/></svg>`,
   ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
   seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
   // Plain monitor: the picture's quality changed, without claiming a direction.
@@ -12612,6 +12613,9 @@ export class MoviElement extends HTMLElement {
     stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
     loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
     aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
+    // The frame with the bars still on it, and the picture inside them: what
+    // this switch takes off is the outer pair.
+    crop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M3 16h18"/></svg>`,
   };
 
   private static readonly ASPECT_CHOICES: ReadonlyArray<
@@ -12930,11 +12934,19 @@ export class MoviElement extends HTMLElement {
       rows.push(toggle("stable", "Stable volume", this._stableVolume));
     }
     rows.push(toggle("loop", "Loop", this._loop));
+    // Crop bars sits with Aspect because it is the same question — how the
+    // picture fills the frame — and because the two only make sense together:
+    // cover and zoom scale a letterbox along with the image unless this has
+    // taken it off first. Video only, and off unless someone asks for it: a
+    // player that trimmed the edges of every film by default would be deciding
+    // for the viewer what part of the frame is the film. See the cropbars
+    // attribute, which this switch is a second hand on.
     // Aspect is the canvas renderer's fit mode. The native fallback has no
     // canvas — its setFitMode() is an empty method — so the page would let the
     // viewer pick a fit and then do nothing with it. The control-bar aspect
     // button is already absent there; this row was the one that wasn't.
     if (!audioOnly && this.isControlAvailable("aspect")) {
+      rows.push(toggle("crop", "Crop bars", this._cropBars));
       rows.push(
       `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
       );
@@ -13207,6 +13219,12 @@ export class MoviElement extends HTMLElement {
         } else if (row.dataset.toggle === "loop") {
           this.loop = !this._loop;
           this.showOSD(OSD.loop, this._loop ? "Loop On" : "Loop Off");
+        } else if (row.dataset.toggle === "crop") {
+          this.cropbars = !this._cropBars;
+          this.showOSD(
+            OSD.crop,
+            this._cropBars ? "Crop Bars On" : "Crop Bars Off",
+          );
         }
         // Toggles stay on the panel — the point of a settings list is flipping
         // a couple of things without it closing under you.

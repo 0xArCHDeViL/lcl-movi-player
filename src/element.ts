@@ -235,6 +235,9 @@ export interface MoviPlayerAttributes {
   /** Let `autoplay` start while the tab is hidden. Off by default: a first play
    *  in a background tab runs into a throttled rAF and can park in buffering. */
   backgroundplay?: boolean | "";
+  /** Stall sound and picture together. ON by default, so this is an opt-OUT and
+   *  the value carries it: `bindav="false"` (or off/0/no) unbinds them. */
+  bindav?: boolean | "false" | "";
   /** What to do with a source Movi can't play (`native` → hand to `<video>`). */
   fallback?: "native";
   /**
