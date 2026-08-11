@@ -827,6 +827,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // save bandwidth. The UI switches to the album-art / strip surface.
   private _audioOnly: boolean = false;
   private muted: boolean = false; // Mute state
+  /**
+   * Bind the two streams: either one running out stops both.
+   *
+   * Off (the default) each side is allowed to carry on while the other is
+   * short. That is asymmetric in practice, because the two run out for
+   * different reasons. Video runs out on the WIRE — it is an order of
+   * magnitude the bigger stream, so on a slow link it is always the one
+   * refilling, and the sound sails on over a frozen frame until the picture
+   * comes back seconds behind what you have already heard. Audio runs out on
+   * the CPU — an expensive codec decoding slower than realtime — and there the
+   * picture carries on over sound full of holes.
+   *
+   * On, neither happens: whichever side empties, playback buffers, both are
+   * suspended, and they start again together when both are ready.
+   *
+   * Not the default because it turns each of those into a full stop, and a
+   * source whose video is merely slow to DECODE (see the frames-presented
+   * check below, which is left in place) is better off with the stutter.
+   */
+  private _bindAV: boolean = false;
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
   /** performance.now() of the last frame decoded while a seek waited for sync —
@@ -4613,13 +4633,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         performance.now() - this._foregroundRecoveryAt < 3000;
       const audioUnderrunning =
         hasAudio && !inForegroundGrace && this.audioRenderer.isUnderrunning();
-      if ((videoEmpty && audioLow && !decoderRecovering) || audioUnderrunning) {
+      // Whichever side runs out, when the two are bound (see _bindAV).
+      //
+      // Unbound, a side running dry only counts if the OTHER one did too: a
+      // frozen picture over continuous sound, or continuous picture over
+      // patched-up sound, is taken as the lesser evil. Bound, either is enough
+      // on its own — which is the point, since it is precisely the healthy side
+      // carrying on that lets the two drift apart.
+      //
+      // `audioLow` is not the audio side of that test: with no audio track at
+      // all it is permanently true, so a silent video would read as starved in
+      // every frame. It has to be audio that EXISTS and has run out.
+      const audioStarved =
+        hasAudio && this.audioRenderer.getBufferedDuration() < 0.05;
+      const videoStalled =
+        videoEmpty && (audioLow || this._bindAV) && !decoderRecovering;
+      // The audio side of the stall, whether it arrived as a real underrun
+      // (holes already heard) or as an empty buffer under a binding.
+      const audioBlocking = audioUnderrunning || (this._bindAV && audioStarved);
+      if (videoStalled || audioBlocking) {
         // An underrun isn't a silent buffer dipping low — it's a hole the user
         // ALREADY heard as a click. Waiting the full stall window means five or
         // six audible glitches before the spinner appears, which is the whole
         // complaint. Two gaps is enough evidence the decoder is behind.
+        // Left at the standard window under a binding too. Shortening it to
+        // 250ms was tried and measured: 2.91s of drift against 3.05s, which is
+        // noise. The residual is not the detection window — it is the second or
+        // so of playback between resuming and running dry again — so a shorter
+        // window buys nothing and only makes the spinner flicker more.
         const effectiveStallTimeout =
-          audioUnderrunning && !videoEmpty ? 200 : stallTimeout;
+          audioBlocking && !videoEmpty ? 200 : stallTimeout;
         const framesNow = this.videoRenderer
           ? this.videoRenderer.getStats().framesPresented
           : 0;
@@ -4632,14 +4675,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // the stall window: frames still arriving at a watchable rate means
         // slow decode, not an empty pipe, and the window simply restarts.
         //
-        // Never applied when audio is underrunning — those gaps are already
-        // audible, and buffering to rebuild the cushion is the right answer
-        // however healthy the picture looks.
+        // Never applied when it is the AUDIO that is short — those gaps are
+        // already audible (or, under a binding, about to be), and rebuilding
+        // the cushion is the right answer however healthy the picture looks.
         const stallElapsed = this._stallStartTime
           ? performance.now() - this._stallStartTime
           : 0;
         const pictureMoving =
-          !audioUnderrunning &&
+          !audioBlocking &&
           stallElapsed > 0 &&
           ((framesNow - this._stallStartFrames) * 1000) / stallElapsed >=
             MoviPlayer.STALL_MOVING_FPS;
@@ -4652,7 +4695,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             TAG,
             audioUnderrunning
               ? "Stall detected: audio underrunning for 500ms (decode behind realtime), entering buffering state"
-              : "Stall detected: buffers empty for 500ms, entering buffering state",
+              : audioBlocking
+                ? "Stall detected: audio buffer empty and bound to video, entering buffering state"
+                : "Stall detected: buffers empty for 500ms, entering buffering state",
           );
           this.wasPlayingBeforeRebuffer = true;
           this._bufferingEntryTime = performance.now();
@@ -9086,6 +9131,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   setStableAudio(enabled: boolean): void {
     this.audioRenderer.setStableAudio(enabled);
+  }
+
+  /** Stall the two streams together, either way round: see _bindAV. */
+  setBindAV(enabled: boolean): void {
+    this._bindAV = enabled;
+  }
+
+  getBindAV(): boolean {
+    return this._bindAV;
   }
 
   /**

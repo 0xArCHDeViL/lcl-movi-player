@@ -828,6 +828,9 @@ export class MoviElement extends HTMLElement {
   private _cropBars = false;
   /** Let autoplay start while the tab is hidden — see `backgroundplay`. */
   private _backgroundPlay = false;
+  /** Sound and picture stall together — see MoviPlayer's _bindAV. Read from
+   *  the attribute, pushed to the core on load. */
+  private _bindAV = false;
 
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
   // Audio output device routing (AudioContext.setSinkId). _audioOutputDeviceId
@@ -1068,6 +1071,7 @@ export class MoviElement extends HTMLElement {
       "ambientwrapper",
       "cropbars",
       "backgroundplay",
+      "bindav",
       "renderer",
       "objectfit",
       "rotate",
@@ -22117,6 +22121,7 @@ export class MoviElement extends HTMLElement {
     this._videoId = this.getAttribute("videoid") || "";
     this._resume = this.hasAttribute("resume");
     this._stableVolume = this.hasAttribute("stablevolume");
+    this._bindAV = this.hasAttribute("bindav");
     this._audioOnly = this.hasAttribute("audioonly");
 
     // If no src attribute, check for <source> child elements (Video.js-style)
@@ -22487,6 +22492,12 @@ export class MoviElement extends HTMLElement {
           this.player.setStableAudio(this._stableVolume);
           this.updateStableAudioUI();
         }
+        break;
+      case "bindav":
+        this._bindAV = newValue !== null;
+        // Takes effect on the next stall, so pushing it live is enough — there
+        // is nothing to undo about one already in progress.
+        this.player?.setBindAV(this._bindAV);
         break;
       case "audiooutput":
         // Accepts a concrete deviceId OR a label substring (resolved live).
@@ -23958,6 +23969,7 @@ export class MoviElement extends HTMLElement {
         }
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
+        this.player.setBindAV(this._bindAV);
         this.updateStableAudioUI();
         // Re-evaluate now that the source has loaded (the stream wrapper is set
         // during load, after setupAudioOutputs' first pass): ambient + audio-
@@ -26039,6 +26051,30 @@ export class MoviElement extends HTMLElement {
   set backgroundplay(value: boolean) {
     if (value) this.setAttribute("backgroundplay", "");
     else this.removeAttribute("backgroundplay");
+  }
+
+  /**
+   * Tie the sound and the picture together: either one stops, both stop.
+   *
+   * By default one side running out is only a stall if the other ran out with
+   * it, so each is free to carry on alone. The picture is the side that
+   * usually runs out on a slow link — it is by far the bigger stream — and the
+   * sound then plays on over a frozen frame, seconds ahead of the picture by
+   * the time it catches up. The sound is the side that runs out on a slow
+   * machine, where an expensive codec decodes behind realtime and the picture
+   * carries on over the holes.
+   *
+   * With this set, whichever side empties buffers the other with it, and they
+   * resume together. The cost is that a shortfall you would previously have
+   * watched or listened through now becomes a full stop.
+   */
+  get bindav(): boolean {
+    return this._bindAV;
+  }
+
+  set bindav(value: boolean) {
+    if (value) this.setAttribute("bindav", "");
+    else this.removeAttribute("bindav");
   }
 
   /** What is being cropped right now, as the fraction taken off each edge. */
@@ -28748,6 +28784,7 @@ export class MoviElement extends HTMLElement {
       if (this.player) {
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
+        this.player.setBindAV(this._bindAV);
         this.player.setSubtitleOverlay(this.subtitleOverlay);
         this.updateStableAudioUI();
       }
