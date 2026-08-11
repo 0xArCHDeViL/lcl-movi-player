@@ -25929,9 +25929,7 @@ export class MoviElement extends HTMLElement {
       const currentState = this.player?.getState();
       const isLoopingEndedTransition = currentState === "ended" && this._loop;
       if (
-        // Not a bare `isLoading`: the opening load keeps the button, because
-        // on touch it is the play control. See centerHiddenBySpinner.
-        (isLoading && this._hasEverPlayed) ||
+        isLoading ||
         this._isUnsupported ||
         this._autoplayStarting ||
         isLoopingEndedTransition
@@ -26982,22 +26980,21 @@ export class MoviElement extends HTMLElement {
   /**
    * Does the spinner take the centre button off the screen right now?
    *
-   * Only once something has played. Mid-playback the two are the same
-   * statement made twice — a spinner over a big play button reads as a control
-   * that has stopped responding — so the spinner wins and the button goes.
+   * Whenever it is up, yes. The two on screen together are the same statement
+   * made twice — and worse than that, a play triangle behind a spinner reads
+   * as a control that has stopped responding, when the truth is simply that
+   * data is on its way. One of them has to go and it is not the spinner: the
+   * spinner is the one saying what is happening.
    *
-   * Before the first play it is the opposite. On touch the centre button IS
-   * the play control (a tap on the picture only toggles the chrome), so hiding
-   * it during the opening load left the viewer with nothing to press: the tap
-   * fell through to the picture and toggled the bar instead of the playback.
-   * A spinner on the poster is "fetching", not "not responding", and the
-   * button stays.
+   * The cost is that on touch, where the centre button IS the play control,
+   * the opening load has no big button to press. Play/pause is on the bar
+   * throughout — the disable pass exempts it for exactly this reason.
    */
   private centerHiddenBySpinner(): boolean {
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement | null;
-    return loadingIndicator?.style.display === "flex" && this._hasEverPlayed;
+    return loadingIndicator?.style.display === "flex";
   }
 
   /** Frames per second below which the picture counts as stopped rather than
@@ -27167,7 +27164,7 @@ export class MoviElement extends HTMLElement {
       const centerPlayPauseBtn = this.shadowRoot?.querySelector(
         ".movi-center-play-pause",
       ) as HTMLElement;
-      if (centerPlayPauseBtn && this.centerHiddenBySpinner()) {
+      if (centerPlayPauseBtn) {
         centerPlayPauseBtn.classList.remove("movi-center-visible");
       }
     } else {
