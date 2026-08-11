@@ -14276,7 +14276,7 @@ export class MoviElement extends HTMLElement {
            text on white is what that costs. Public hook all the same. */
         /* The capsule behind the right-hand icon cluster. Public hook: a host
            that wants the old loose row sets it to transparent. */
-        --movi-controls-group-bg: rgba(255, 255, 255, 0.1);
+        --movi-controls-group-bg: rgba(255, 255, 255, 0.065);
         --movi-chrome-bg: rgba(0, 0, 0, 0.92);
         --movi-chrome-border: rgba(255, 255, 255, 0.1);
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
@@ -18211,14 +18211,97 @@ export class MoviElement extends HTMLElement {
         }
 
         .movi-seek-backward,
-        .movi-seek-forward {
+        .movi-seek-forward,
+        /* …and the capsule they were the whole content of. Left standing it
+           was a capsule around nothing: 2px of padding on each side of an
+           empty flex row, drawn as a 4px dot between play and the volume
+           control. Hidden CHILDREN do not collapse a parent — only hiding the
+           parent does. */
+        .movi-seek-group {
           display: none !important;
         }
 
+        /* No capsules down here.
+           The capsules are a wide-bar device: with seek buttons, a chapter
+           pill, a clock and a settings run all in one row, a quiet shape
+           behind each group is what says which controls belong together. A
+           compact bar has none of that to explain — three or four controls,
+           each already as small as it can be — and the capsules stop being
+           grouping and become the clutter. Four of them across a 390px bar
+           was the complaint; merging them into one was no better, because the
+           problem was never how MANY there were. It was that a phone-sized bar
+           has no room to spend on chrome that says nothing.
+
+           So on a compact player the controls are just controls: bare icons
+           and plain text, the whole width going to the content. The wide bar
+           keeps its capsules unchanged. */
+        .movi-controls-left,
+        .movi-controls-right,
+        .movi-controls-left > .movi-play-pause,
+        .movi-controls-left > .movi-custom-btn,
+        .movi-controls-left > .movi-volume-container,
+        .movi-controls-left > .movi-chapter-pill,
+        .movi-controls-left > .movi-time,
+        .movi-control-group {
+          background: none;
+          padding: 0;
+        }
+        /* Without a capsule to sit inside, the buttons space themselves — the
+           2px that read as "one shape" now reads as icons stuck together. */
+        :host .movi-controls-left,
+        .movi-controls-right {
+          gap: 4px;
+        }
+        /* Play was a capsule of one and carried a 2px ring to stand as tall as
+           the capsules beside it. There are none, so it is the same size as
+           every other button again. Specificity, not order: the narrow-viewport
+           block further down sizes buttons with !important. */
+        :host .movi-controls-left > .movi-play-pause,
+        :host .movi-controls-left > .movi-custom-btn {
+          width: var(--movi-btn-size) !important;
+          height: var(--movi-btn-size) !important;
+        }
+        /* Text needs a little air from the icons either side, but far less
+           than a capsule's worth. */
+        :host .movi-controls-left > .movi-time {
+          padding: 0 6px;
+        }
+        :host .movi-controls-left > .movi-chapter-pill {
+          padding: 0 6px;
+          min-width: 0;
+          flex-shrink: 1;
+        }
+        /* The chapter name is the one thing in the row with no length limit,
+           and a full one pushed the settings run clean off the right edge.
+           Everything else is already as small as it goes, so it is the only
+           control allowed to give room up. */
+        .movi-chapter-pill-text {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          min-width: 0;
+        }
+        /* The cluster has flex-shrink: 0 of its own, so the pill inside it was
+           free to shrink and never had to: nothing was squeezing it. The left
+           side gives way, the settings run does not — it is fixed-width icons
+           with nothing to truncate. */
+        :host .movi-controls-left {
+          min-width: 0;
+          flex-shrink: 1;
+        }
+        :host .movi-controls-right {
+          flex-shrink: 0;
+        }
+
         .movi-progress-container {
-          /* Nudge the seek bar down a little on compact players so it isn't
-             hugging the video edge. */
-          padding: 14px 0 4px;
+          /* Enough to keep the seek bar off the video edge and to leave a grab
+             area around a 6px track, and no more. The 14px this used to carry
+             above the bar was sized for a row that wore capsules — with those
+             gone the whole strip is shorter, and the old spacing left the bar
+             floating in the middle of a band of nothing. On a phone the bar is
+             the one piece of chrome permanently over the picture; every pixel
+             it does not need is picture. */
+          padding: 8px 0 4px;
         }
 
         .movi-progress-bar {
@@ -18603,8 +18686,12 @@ export class MoviElement extends HTMLElement {
         .movi-time {
           font-size: 11px;
         }
+        /* Tightest of all the widths, for the same reason as the ≤720 block:
+           the strip lost its capsules and its old spacing was sized around
+           them. On a 390px bar this is the only chrome permanently over the
+           picture. */
         .movi-progress-container {
-          padding: 14px 0 7px;
+          padding: 8px 0 4px;
         }
       }
 
@@ -18802,9 +18889,18 @@ export class MoviElement extends HTMLElement {
            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0s !important;
         }
 
-        /* Override button states to prevent white background flash */
-        .movi-btn {
+        /* Override button states to prevent white background flash.
+           NOT the two buttons on the left that are their own capsule: this
+           rule predates the capsules and its !important stripped the one off
+           play, leaving a bare triangle beside the volume and clock capsules
+           on every touch device. The flash it guards against is a press state,
+           and the :hover/:focus/:active rule below still covers that. */
+        .movi-btn:not(.movi-play-pause):not(.movi-custom-btn) {
           background: transparent !important;
+          transition: none !important;
+        }
+        .movi-play-pause,
+        .movi-custom-btn {
           transition: none !important;
         }
 
@@ -18813,10 +18909,21 @@ export class MoviElement extends HTMLElement {
            icons its transform is not decoration — it is what centres it on the
            title line. Wiping it dropped the gear half its own height below the
            title. */
-        .movi-btn:hover,
-        .movi-btn:focus,
-        .movi-btn:active {
+        .movi-btn:not(.movi-play-pause):not(.movi-custom-btn):hover,
+        .movi-btn:not(.movi-play-pause):not(.movi-custom-btn):focus,
+        .movi-btn:not(.movi-play-pause):not(.movi-custom-btn):active {
           background: transparent !important;
+          box-shadow: none !important;
+        }
+        /* The capsule buttons keep their background through a press — losing it
+           there reads as the control vanishing under the finger — but not the
+           shadow, which is what the flash was. */
+        .movi-play-pause:hover,
+        .movi-play-pause:focus,
+        .movi-play-pause:active,
+        .movi-custom-btn:hover,
+        .movi-custom-btn:focus,
+        .movi-custom-btn:active {
           box-shadow: none !important;
         }
         .movi-btn:not(.movi-gear-btn):hover,
@@ -19327,11 +19434,16 @@ export class MoviElement extends HTMLElement {
         background-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 13%, transparent);
       }
 
-      /* The rail: small, rounded, tucked inside the card's left edge. */
+      /* The rail: small, rounded, tucked inside the card's left edge.
+         At 10px it ended 3px short of the icon — close enough to read as part
+         of the glyph rather than as a marker on the card. The card's own left
+         padding is 16px, so 6px leaves the rail 7px of air on its right and
+         about the same on its left: a mark sitting in the card's margin, which
+         is what it is. */
       .movi-context-menu-item.movi-context-menu-active::before {
         content: '';
         position: absolute;
-        left: 10px;
+        left: 6px;
         top: 50%;
         transform: translateY(-50%);
         width: 3px;
@@ -20878,9 +20990,9 @@ export class MoviElement extends HTMLElement {
           gap: 4px !important;
         }
         .movi-controls-bar {
-          /* Bottom lifted like every other width: the capsules have an edge of
-             their own and 5px reads as them resting on the frame. */
-          padding: 4px 8px 9px !important;
+          /* The 9px underneath was lifting capsules off the frame — bare icons
+             sit on their own baseline and do not need it. */
+          padding: 4px 8px 6px !important;
         }
         .movi-time {
           font-size: 10px !important;
