@@ -425,6 +425,7 @@ const SHORTCUT_ACTIONS: Record<
   },
   audiotrack: { keys: ["b"], canonical: "b", label: "Cycle audio" },
   ambient: { keys: ["g"], canonical: "g", label: "Ambient mode" },
+  crop: { keys: ["c"], canonical: "c", label: "Crop black bars" },
   speedup: { keys: ["+", "="], canonical: "+", label: "Speed up" },
   speeddown: { keys: ["-"], canonical: "-", label: "Speed down" },
   shortcuts: { keys: ["?"], canonical: "?", label: "Shortcuts panel" },
@@ -1683,6 +1684,15 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-status movi-stable-audio-status">Off</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="stableaudio">U</span>
       </div>
+      <div class="movi-context-menu-item" data-action="crop-toggle">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 2v14a2 2 0 0 0 2 2h14"></path>
+          <path d="M18 22V8a2 2 0 0 0-2-2H2"></path>
+        </svg>
+        <span class="movi-context-menu-label">Crop Black Bars</span>
+        <span class="movi-context-menu-status movi-crop-status">Off</span>
+        <span class="movi-context-menu-shortcut" data-shortcut-action="crop">C</span>
+      </div>
       <div class="movi-context-menu-item" data-action="ambient-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="5"></circle>
@@ -2402,6 +2412,7 @@ export class MoviElement extends HTMLElement {
         <div class="movi-shortcuts-col">
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="aspect">A</kbd><span>Aspect Ratio</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="rotate">R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="crop">C</kbd><span>Crop Black Bars</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="loop">L</kbd><span>Loop</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="stableaudio">U</kbd><span>Stable Volume</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="hdr">H</kbd><span>HDR Mode</span></div>
@@ -5383,6 +5394,17 @@ export class MoviElement extends HTMLElement {
             );
           }
           break;
+        case "c":
+        case "C":
+          // C: Crop the black bars baked into the picture
+          e.preventDefault();
+          this.cropbars = !this._cropBars;
+          this.updateCropUI();
+          this.showOSD(
+            OSD.crop,
+            this._cropBars ? "Black Bars Cropped" : "Black Bars Kept",
+          );
+          break;
         case "g":
         case "G":
           // G: Toggle ambient mode
@@ -6416,6 +6438,14 @@ export class MoviElement extends HTMLElement {
             this._stableVolume ? "Stable Volume On" : "Stable Volume Off",
           );
         }
+        hideContextMenu();
+      } else if (action === "crop-toggle") {
+        this.cropbars = !this._cropBars;
+        this.updateCropUI();
+        this.showOSD(
+          OSD.crop,
+          this._cropBars ? "Black Bars Cropped" : "Black Bars Kept",
+        );
         hideContextMenu();
       } else if (action === "ambient-toggle") {
         this.ambientMode = !this._ambientMode;
@@ -13095,8 +13125,11 @@ export class MoviElement extends HTMLElement {
     // transient and the host owns the attribute: storing it there would come
     // back on the next load as objectfit="cover" and quietly take the host out
     // of control mode.
-    if (!viaControl && !this._applyingPersisted && this._persistNames().has("aspect")) {
-      this._prefWrite("aspect", fit);
+    if (!viaControl && !this._applyingPersisted) {
+      if (this._persistNames().has("aspect")) this._prefWrite("aspect", fit);
+      else if (this.legacySettingsEnabled()) {
+        SettingsStorage.getInstance().save({ objectFit: fit });
+      }
     }
     this.updateFitMode();
     this.showAspectOsd(fit);
@@ -22227,35 +22260,40 @@ export class MoviElement extends HTMLElement {
         const wasLoading = this.isLoading;
         this.isLoading = true;
 
-        // Apply volume if not explicitly set by attribute
-        if (!this.hasAttribute("volume") && settings.volume !== undefined) {
+        // A remembered value ALWAYS wins over the HTML default. The attribute
+        // is the integrator's opening position; a stored value is a viewer who
+        // has already answered, and asking again on every reload is not a
+        // default, it is an override.
+        //
+        // These three used to be the exception — applied only when the page
+        // had NOT declared the attribute — while every toggle below applied
+        // regardless. That split had no principle behind it: a page that
+        // declares volume="0.8" pinned the slider back to 80% on every load no
+        // matter what the viewer had set it to, and the same page's
+        // stablevolume attribute politely gave way. One rule now, and it is the
+        // one `persist` already documents.
+        //
+        // (muted is included deliberately. A page that declares `muted` for
+        // autoplay and meets a viewer who has unmuted before gets a blocked
+        // autoplay — which the player already handles: it falls back to muted
+        // playback and puts the unmute pill up.)
+        if (settings.volume !== undefined) {
           this._volume = settings.volume;
           this.updateVolume();
           changed = true;
         }
 
-        // Apply muted if not explicitly set
-        if (!this.hasAttribute("muted") && settings.muted !== undefined) {
+        if (settings.muted !== undefined) {
           this._muted = settings.muted;
           this.updateMuted();
           changed = true;
         }
 
-        // Apply playbackRate if not explicitly set
-        if (
-          !this.hasAttribute("playbackrate") &&
-          settings.playbackRate !== undefined
-        ) {
+        if (settings.playbackRate !== undefined) {
           this._playbackRate = settings.playbackRate;
           this.updatePlaybackRate();
           changed = true;
         }
-
-
-        // User-toggled opt-in preferences ALWAYS win over the HTML default.
-        // Rationale: the attribute is an integrator-set default; once the user
-        // has toggled something via the UI their choice should stick across
-        // reloads, even if the page still declares the attribute.
 
         // Apply stable volume preference
         if (settings.stableVolume !== undefined) {
@@ -22282,6 +22320,36 @@ export class MoviElement extends HTMLElement {
           this.updateAmbientMode();
         }
 
+        // Apply the fit the viewer last picked. Same rule as the toggles
+        // below: a choice made in the player outlives the page's default.
+        // Never under objectfit="control", where the host owns the attribute
+        // and the pick is deliberately transient.
+        if (
+          settings.objectFit !== undefined &&
+          this._objectFit !== "control"
+        ) {
+          this.setAttribute("objectfit", settings.objectFit);
+        }
+
+        // The two languages are not applied here — the file's tracks do not
+        // exist yet. Stashed for applyPersistedTracks, which runs when they do,
+        // and called once now in case they already have.
+        this._legacyAudioLang = settings.audioLang || null;
+        this._legacySubtitleLang = settings.subtitleLang || null;
+        this._legacySettingsLoaded = true;
+
+        // Apply crop-bars preference
+        if (settings.cropBars !== undefined) {
+          this._cropBars = settings.cropBars;
+          if (settings.cropBars) {
+            this.setAttribute("cropbars", "");
+          } else {
+            this.removeAttribute("cropbars");
+          }
+          this.applyBarCrop();
+          this.updateCropUI();
+        }
+
         // Apply HDR preference (defaults to true)
         if (settings.hdr !== undefined) {
           this._hdr = settings.hdr;
@@ -22304,11 +22372,20 @@ export class MoviElement extends HTMLElement {
           // the direct update*() calls above.
           if (settings.volume !== undefined)
             this.setAttribute("volume", settings.volume.toString());
-          if (settings.muted) this.setAttribute("muted", "");
+          // Both directions. Writing the attribute only when the stored value
+          // is TRUE left a page that declares `muted` disagreeing with a
+          // viewer who had unmuted: the state said sound, the attribute said
+          // silence, and anything that re-read the attribute put the silence
+          // back.
+          if (settings.muted !== undefined) {
+            if (settings.muted) this.setAttribute("muted", "");
+            else this.removeAttribute("muted");
+          }
           if (settings.playbackRate !== undefined)
             this.setAttribute("playbackrate", settings.playbackRate.toString());
         }
         this.isLoading = wasLoading;
+        this.applyPersistedTracks();
       });
   }
 
@@ -22532,6 +22609,7 @@ export class MoviElement extends HTMLElement {
       case "cropbars":
         this._cropBars = newValue !== null;
         this.applyBarCrop();
+        this.updateCropUI();
         break;
       case "backgroundplay":
         this._backgroundPlay = newValue !== null;
@@ -26093,6 +26171,15 @@ export class MoviElement extends HTMLElement {
   set cropbars(value: boolean) {
     if (value) this.setAttribute("cropbars", "");
     else this.removeAttribute("cropbars");
+    // Remembered by default, like ambient mode and stable volume beside it in
+    // the same menu. A viewer who takes the bars off a film has said something
+    // about how they want films to look, not about this one file, and being
+    // asked again on every reload is the wrong answer to that. A host that
+    // opts into `persist` takes the whole decision over — see
+    // legacySettingsEnabled.
+    if (this.legacySettingsEnabled()) {
+      SettingsStorage.getInstance().save({ cropBars: this._cropBars });
+    }
   }
 
   /**
@@ -29018,6 +29105,24 @@ export class MoviElement extends HTMLElement {
     this.refreshOpenSettingsSurfaces();
   }
 
+  /** The context-menu row's On/Off, kept in step however the setting changed —
+   *  the row, the settings panel, C, or the host writing the attribute. */
+  private updateCropUI(): void {
+    const menuRoot = this.contextMenuRoot();
+    const row = menuRoot.querySelector(
+      '.movi-context-menu-item[data-action="crop-toggle"]',
+    ) as HTMLElement | null;
+    const status = menuRoot.querySelector(".movi-crop-status");
+    if (status) status.textContent = this._cropBars ? "On" : "Off";
+    // The word alone was not enough. Every other switch in this menu turns the
+    // whole ROW on when it is on — the accent fill, the rail down its left
+    // edge, and the icon and value in the theme colour — and that class is what
+    // does all three. Writing "On" and leaving the row grey read as a row that
+    // had not taken the click.
+    row?.classList.toggle("movi-context-menu-active", this._cropBars);
+    this.buildSettingsRoot();
+  }
+
   private updateAmbientUI(): void {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
@@ -29180,8 +29285,44 @@ export class MoviElement extends HTMLElement {
    */
   private noteTrackChoice(name: string, lang: string | null): void {
     if (this._applyingPersisted) return; // restoring, not choosing
-    if (!this._persistNames().has(name)) return;
-    this._prefWrite(name, lang && lang.trim() ? lang.trim() : "off");
+    const opted = this._persistNames().has(name);
+    // Two stores, one decision: `persist` takes it over completely when the
+    // host uses it, and otherwise the always-on store remembers these the same
+    // way it has always remembered volume and stable audio.
+    const legacy = !opted && this.legacySettingsEnabled();
+    if (!opted && !legacy) return;
+    const write = (v: string | null) => {
+      if (opted) {
+        this._prefWrite(name, v);
+      } else {
+        const field = name === "audiolang" ? "audioLang" : "subtitleLang";
+        SettingsStorage.getInstance().save({ [field]: v ?? "" });
+      }
+    };
+    const tag = MoviElement.usableLang(lang);
+    if (tag) {
+      write(tag);
+      return;
+    }
+    // No language to remember. For subtitles that is a real answer — the
+    // viewer turned them off — and it is stored as one. For audio it is not:
+    // a track can be untagged ("und" is what a Matroska mux writes when nobody
+    // filled the field in) but it can never be "no audio", so the preference
+    // is forgotten instead. Keeping the old one would be worse than having
+    // none: the next file would jump back to a language this viewer has just
+    // moved away from.
+    write(name === "subtitlelang" ? "off" : null);
+  }
+
+  /** A language tag worth storing, or null. "und" is Matroska's way of saying
+   *  the field was never filled in, and matching on it in the next file picks
+   *  whichever track was equally anonymous there. */
+  private static usableLang(lang: string | null | undefined): string | null {
+    const v = (lang || "").trim().toLowerCase();
+    if (!v || v === "und" || v === "unknown" || v === "mis" || v === "zxx") {
+      return null;
+    }
+    return v;
   }
 
   /**
@@ -29213,8 +29354,23 @@ export class MoviElement extends HTMLElement {
   private applyPersistedTracks(): void {
     if (this._persistedTracksApplied || !this.player) return;
     const names = this._persistNames();
-    const wantAudio = names.has("audiolang") ? this._prefRead("audiolang") : null;
-    const wantSubs = names.has("subtitlelang") ? this._prefRead("subtitlelang") : null;
+    // The always-on store answers here too, and it answers late: OPFS resolves
+    // after the first tracksChange on a fast local file. Until it has, there
+    // is nothing to decide — restoreLegacySettings calls back when it lands.
+    const legacy = this.legacySettingsEnabled();
+    if (legacy && !this._legacySettingsLoaded) return;
+    const wantAudio = MoviElement.usableLang(
+      names.has("audiolang") ? this._prefRead("audiolang") : legacy ? this._legacyAudioLang : null,
+    );
+    const storedSubs = names.has("subtitlelang")
+      ? this._prefRead("subtitlelang")
+      : legacy
+        ? this._legacySubtitleLang
+        : null;
+    // "off" is the one stored value that is not a language, and it has to
+    // survive this filter — it is the whole point of storing it.
+    const wantSubs =
+      storedSubs === "off" ? "off" : MoviElement.usableLang(storedSubs);
     if (!wantAudio && !wantSubs) return;
     this._persistedTracksApplied = true;
     this._applyingPersisted = true;
@@ -29282,6 +29438,11 @@ export class MoviElement extends HTMLElement {
 
   private _audioRestored = false;
   private _subsRestored = false;
+  /** What the always-on store had for the two languages, and whether it has
+   *  answered yet. See applyPersistedTracks. */
+  private _legacySettingsLoaded = false;
+  private _legacyAudioLang: string | null = null;
+  private _legacySubtitleLang: string | null = null;
 
   // ── The four ways a track gets picked, funnelled ──────────────────────────
   private pickAudioLang(lang: string) {

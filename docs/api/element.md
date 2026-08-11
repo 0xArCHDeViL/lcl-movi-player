@@ -434,6 +434,11 @@ has no track in that language keeps its own default and the preference waits
 for the next one that does. Turning subtitles off is itself a choice and is
 remembered as such.
 
+A track with no usable language tag — `und`, which is what a Matroska mux
+writes when the field was never filled in — is not a preference. Choosing one
+forgets the stored audio language rather than storing `und`, which would
+otherwise pick whichever track was equally anonymous in the next file.
+
 Opt-in per setting on purpose: a kiosk that starts every clip muted at 1x
 should not inherit the last viewer's choices. A remembered value **wins over
 the markup** — that is what opting in means, so leave a setting out of the list
@@ -444,9 +449,10 @@ Custom controls added with [`addControl()`](#addcontrol-spec) take
 
 ::: tip Replaces the built-in store
 Without `persist`, the element keeps its long-standing behaviour of remembering
-volume, muted, speed, stable volume, ambient and HDR on its own. Setting
-`persist` takes that decision over completely — the old store stops saving and
-restoring, and this list is exactly what is remembered.
+volume, muted, speed, stable volume, ambient, HDR, crop black bars, the fit and
+the audio / subtitle languages on its own. Setting `persist` takes that
+decision over completely — the old store stops saving and restoring, and this
+list is exactly what is remembered.
 :::
 
 ---
@@ -564,8 +570,8 @@ at once are taken as measured rather than snapped: a frame padded twice has no
 single ratio to land on. The seek-bar preview and the timeline strip decode
 separately and still show the bars.
 
-There is a **Crop black bars** switch in the settings panel too, which is the
-same setting reached from the player rather than from the page.
+The same setting is on the player itself: a **Crop black bars** switch in the
+settings panel, a row in the right-click menu, and the **C** key.
 
 ---
 
@@ -2317,7 +2323,7 @@ Press `?` during playback to view the shortcuts panel.
 | `U` | Toggle stable volume | `G` | Toggle ambient mode |
 | `H` | Toggle HDR | `P` | Picture-in-Picture |
 | `+` / `-` | Speed up / down | `Z` / `X` | Subtitle delay -/+ 100ms |
-| `1` – `9` | Seek to 10%–90% | | |
+| `C` | Crop black bars | `1` – `9` | Seek to 10%–90% |
 
 ---
 
