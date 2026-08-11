@@ -1384,27 +1384,40 @@ export class MoviElement extends HTMLElement {
     this.emptyStateIndicator.innerHTML = `
       <div class="movi-empty-container">
         <div class="movi-empty-icon-wrapper">
-          <!-- An empty tray.
-               Two marks were tried here and both were pressed: a play triangle
-               inside a frame, and then a dashed slot. The triangle is the most
-               actionable shape in the product and a dashed box still reads as
-               a drop target — anything shaped like the player invites someone
-               to operate it, and there is nothing here to operate.
-               So the icon stops speaking the player's language and speaks the
-               empty state's: a tray with nothing in it, which is the mark every
-               design system uses for "there is nothing here yet" and which
-               nobody has ever tried to press.
+          <!-- An open, empty box.
+               Three marks were tried before this and the first two were
+               pressed: a play triangle inside a frame, then a dashed slot.
+               Anything shaped like the player invites someone to operate it,
+               and there is nothing here to operate — so this one is not a
+               control at all, it is a small picture of nothing being there.
+               An open carton with its flaps up and nothing inside is the one
+               illustration everybody already reads as "empty", and the specks
+               above it are what just left.
 
-               Monochrome, painted in the chrome's own foreground via the class
-               below: this sits on an otherwise empty stage, where a saturated
-               badge reads as an error rather than a resting state, and a
-               hardcoded white would vanish under the light theme. -->
+               Monochrome, painted in the chrome's own foreground via the
+               classes below: this sits on an otherwise empty stage, where a
+               saturated badge reads as an error rather than a resting state,
+               and a hardcoded white would vanish under the light theme. -->
           <svg viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <rect class="movi-empty-logo-frame" x="14" y="26" width="72" height="48" rx="12" stroke-width="3.5" opacity="0.35"/>
-            <!-- The mouth: the line that makes a box a tray. It dips in the
-                 middle, which is the whole of the shape's meaning — something
-                 would rest in that dip, and nothing is. -->
-            <path class="movi-empty-logo-frame" d="M14 56 H34 L40 65 H60 L66 56 H86" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
+            <!-- What left. Smallest and faintest at the top, so the eye starts
+                 at the box and drifts up rather than the other way round. -->
+            <circle class="movi-empty-logo-fill" cx="50" cy="16" r="2.6" opacity="0.22"/>
+            <circle class="movi-empty-logo-fill" cx="37" cy="24" r="2.1" opacity="0.15"/>
+            <circle class="movi-empty-logo-fill" cx="63" cy="24" r="2.1" opacity="0.15"/>
+            <!-- The flaps. Each one hinges along a real stretch of the top
+                 edge — not a corner — and folds outward, which is what makes
+                 them read as flaps rather than as antennae. They stop short of
+                 each other: the gap between them is the way in, and it is why
+                 the box is OPEN rather than a crate with a lid. -->
+            <path class="movi-empty-logo-frame" d="M21 48 L6 34 L33 31 L48 48 Z" stroke-width="3" stroke-linejoin="round" opacity="0.45"/>
+            <path class="movi-empty-logo-frame" d="M79 48 L94 34 L67 31 L52 48 Z" stroke-width="3" stroke-linejoin="round" opacity="0.45"/>
+            <!-- The body, with the inside of its far wall showing just under
+                 the rim. That dark band is the whole point of the drawing: you
+                 can see in, and there is nothing in there. Inset from the
+                 corners so it never fights the body's rounding. -->
+            <rect class="movi-empty-logo-fill" x="21" y="48" width="58" height="32" rx="6" opacity="0.05"/>
+            <rect class="movi-empty-logo-fill" x="25" y="51" width="50" height="6" rx="3" opacity="0.18"/>
+            <rect class="movi-empty-logo-frame" x="21" y="48" width="58" height="32" rx="6" stroke-width="3.5" opacity="0.65"/>
           </svg>
         </div>
         <div class="movi-empty-text">
@@ -20873,6 +20886,9 @@ export class MoviElement extends HTMLElement {
          instead of being a fixed white that disappears on a light one. */
       .movi-empty-logo-frame {
         stroke: var(--movi-chrome-fg, #fff);
+      }
+      .movi-empty-logo-fill {
+        fill: var(--movi-chrome-fg, #fff);
       }
 
       .movi-empty-icon-wrapper svg {
