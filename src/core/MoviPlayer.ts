@@ -829,6 +829,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private muted: boolean = false; // Mute state
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
+  /** performance.now() of the last frame decoded while a seek waited for sync —
+   *  the signal that the seek is still working. See the seek deadline. */
+  private _seekFrameProgressAt: number = 0;
+  /** How long the video decoder may go silent mid-seek before the seek is
+   *  declared stuck. One 4K AV1 frame is a few tens of ms even on a slow
+   *  machine, so a gap this long means it has stopped, not slowed. */
+  private static readonly SEEK_PROGRESS_IDLE_MS = 400;
+  /** …and the ceiling on extending, because a decoder emitting frames that
+   *  never reach the target is itself a failure to give up on. */
+  private static readonly SEEK_PROGRESS_CAP_MS = 10000;
   /** framesPresented when the current stall window opened — the baseline the
    *  "is the picture still moving?" test measures against. */
   private _stallStartFrames: number = 0;
@@ -6012,13 +6022,50 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Safety timeout: force seek completion if frames don't arrive in time.
       // Shorter timeout for buffered seeks since data is already local.
+      //
+      // The deadline is a floor, not a budget. It used to be a flat 1500ms for
+      // a buffered seek, and on 4K AV1 with a long GOP the decoder simply needs
+      // longer than that to walk from the keyframe to the target — it was still
+      // producing frames when the deadline cut it off. What followed was worse
+      // than waiting: a forced completion with no frame lands in buffering,
+      // black-frame recovery then seeks AGAIN two seconds further on, and the
+      // sound is left a couple of seconds ahead of the picture. Both of the
+      // logs this came from show exactly that chain.
+      //
+      // So the deadline only fires once the decoder has gone QUIET for a
+      // moment. Frames still arriving push it out, up to a hard cap, because a
+      // decoder producing frames nobody wants forever is its own failure.
       const seekTimeoutMs = seekInBufferedRange ? 1500 : 3000;
-      const seekTimeout = setTimeout(() => {
-        if (this.seekSessionId === mySessionId && this.waitingForVideoSync) {
-          Logger.warn(TAG, `Seek timeout after ${seekTimeoutMs}ms, forcing completion at ${seconds}s`);
-          this.notifySeekCompletion(seconds + this.startTime, true);
+      const seekStartedAt = performance.now();
+      this._seekFrameProgressAt = 0;
+      let seekTimeout: ReturnType<typeof setTimeout>;
+      const onSeekDeadline = () => {
+        if (this.seekSessionId !== mySessionId || !this.waitingForVideoSync) return;
+        const now = performance.now();
+        const sinceFrame = now - this._seekFrameProgressAt;
+        const elapsed = now - seekStartedAt;
+        if (
+          this._seekFrameProgressAt > 0 &&
+          sinceFrame < MoviPlayer.SEEK_PROGRESS_IDLE_MS &&
+          elapsed < MoviPlayer.SEEK_PROGRESS_CAP_MS
+        ) {
+          seekTimeout = setTimeout(
+            onSeekDeadline,
+            MoviPlayer.SEEK_PROGRESS_IDLE_MS - sinceFrame,
+          );
+          return;
         }
-      }, seekTimeoutMs);
+        Logger.warn(
+          TAG,
+          `Seek timeout after ${Math.round(elapsed)}ms (${
+            this._seekFrameProgressAt > 0
+              ? `${Math.round(sinceFrame)}ms since the last decoded frame`
+              : "no frame decoded at all"
+          }), forcing completion at ${seconds}s`,
+        );
+        this.notifySeekCompletion(seconds + this.startTime, true);
+      };
+      seekTimeout = setTimeout(onSeekDeadline, seekTimeoutMs);
 
       // Clear timeout if seek completes or is superseded
       const clearSeekTimeout = () => {
@@ -6685,8 +6732,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           borrowSource,
         );
       } else if (sourceConfig) {
-        // File source
-        this.thumbnailSource = await this.createSource(sourceConfig);
+        // File source. A second FileSource over the same File, sharing the main
+        // one's LRU — but explicitly a SECONDARY reader: no preload sweep of its
+        // own, and no cache-clearing on close. Both of those were costing a
+        // whole extra read of the file, which is free on an SSD and very much
+        // not on a Drive-backed virtual file. See FileSource.markSecondary.
+        const thumbSource = await this.createSource(sourceConfig);
+        if (thumbSource instanceof FileSource) thumbSource.markSecondary();
+        this.thumbnailSource = thumbSource;
       } else if (this.source) {
         // No SourceConfig (custom adapter path) — fall back to main source.
         this.thumbnailSource = this.source;
@@ -10311,6 +10364,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         (this.stateManager.getState() === "playing" ||
           this.waitingForVideoSync)
       ) {
+        // A frame arriving while a seek waits for sync is that seek WORKING —
+        // the decoder walking from the keyframe towards the target. Stamped
+        // here, before the drop below, precisely because those dropped frames
+        // are the evidence: they are the walk. The seek deadline reads this to
+        // tell "the decoder is grinding through a long GOP" apart from "nothing
+        // is coming", which is the only case the deadline is for.
+        if (this.waitingForVideoSync) {
+          this._seekFrameProgressAt = performance.now();
+        }
+
         // IMPORTANT: Drop video frames before the seek target time
         // These frames are decoded to build decoder state (reference frames),
         // but we don't display them - we want accurate seeking to the target time

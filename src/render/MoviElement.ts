@@ -1282,41 +1282,25 @@ export class MoviElement extends HTMLElement {
     const loadingIndicator = document.createElement("div");
     loadingIndicator.className = "movi-loading-indicator";
     loadingIndicator.style.display = "none";
-    // The play mark filling itself, over and over.
+    // The play mark, with a segment running round it.
     //
-    // A ring — plain, comet-tailed or otherwise — is the same spinner every
-    // other page on the internet uses, and says nothing about what is being
-    // waited for. This is the player's own triangle, filling from the bottom
-    // and starting again: the shape means "video", and the repeating fill
-    // means "still loading" without borrowing anyone's spinner.
+    // A ring is the spinner every other page uses and says nothing about what
+    // is being waited for. This is the same idea — a short bright arc chasing
+    // its own track — run around the player's own triangle instead of a
+    // circle: the shape means "video", the lap means "working on it". The
+    // outline stays put, so it stays readable as a play mark while it turns.
     //
-    // A mask rather than a clipPath, because a clip ignores stroke — and the
-    // stroke with a round linejoin is what rounds the triangle's corners here,
-    // exactly as it does on the play buttons.
+    // pathLength="100" is what makes the dash maths sane: the perimeter is an
+    // awkward 67-and-change user units, and normalising it means the segment
+    // and its offset are just percentages of the way round.
     loadingIndicator.innerHTML = `
       <div class="movi-loader-container">
         <svg class="movi-loader-mark" viewBox="0 0 48 48" aria-hidden="true">
-          <mask class="movi-loader-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="48" height="48">
-            <path d="M17 13L35 24L17 35Z" fill="#fff" stroke="#fff" stroke-width="7" stroke-linejoin="round"/>
-          </mask>
-          <g>
-            <rect class="movi-loader-bed" x="0" y="0" width="48" height="48"/>
-            <rect class="movi-loader-fill" x="0" y="0" width="48" height="48"/>
-          </g>
+          <path class="movi-loader-track" d="M18 12L36 24L18 36Z" pathLength="100" />
+          <path class="movi-loader-chase" d="M18 12L36 24L18 36Z" pathLength="100" />
         </svg>
       </div>
     `;
-    // The mask has to be referenced by a per-instance id: several players on
-    // one page each get their own shadow root, but a bare url(#id) inside a
-    // <g> attribute is resolved before that scoping in some engines and the
-    // second player masked against the first one's node.
-    {
-      const maskId = `movi-loader-mask-${++MoviElement._loaderMaskSeq}`;
-      const mask = loadingIndicator.querySelector(".movi-loader-mask");
-      const group = loadingIndicator.querySelector("svg > g");
-      mask?.setAttribute("id", maskId);
-      group?.setAttribute("mask", `url(#${maskId})`);
-    }
     shadowRoot.appendChild(loadingIndicator);
 
     // Create centered play/pause button
@@ -8183,8 +8167,6 @@ export class MoviElement extends HTMLElement {
   private static readonly RESTORE_STEADY_MS = 30000;
   private static readonly STARVED_RESCUE_MS = 6000;
   private static readonly VISIBILITY_SETTLE_MS = 4000;
-  /** Hands each loader's SVG mask an id of its own — see the loading indicator. */
-  private static _loaderMaskSeq = 0;
   /** How long the picture may spend catching up to the sound before the wait
    *  earns a spinner. See videoCatchUpElapsedMs. */
   private static readonly CATCHUP_SPINNER_GRACE_MS = 600;
@@ -18869,17 +18851,17 @@ export class MoviElement extends HTMLElement {
         transition: top var(--movi-transition-normal);
       }
 
-      /* The play mark, filling itself, over and over.
+      /* The play mark, with a segment running round it.
 
          A ring is a ring: plain, comet-tailed or dotted, it is the spinner
-         every other page uses and it says nothing about what is being waited
-         for. This one is the player's own triangle — the same rounded shape
-         the play buttons carry — with the fill rising through it and starting
-         again. The shape says "video"; the fill that never gets to stay says
-         "still loading".
+         every other page uses. This is that same arc-chasing-its-track idea
+         drawn on the player's own triangle — outlined rather than solid, so it
+         reads as a mark waiting on something rather than a button asking to be
+         pressed, and stationary, so the shape stays legible while the segment
+         laps it.
 
          Scale lives on the container; everything inside is in the SVG's own
-         48-unit space, so one width change moves the whole thing. */
+         48-unit space, so one width change moves the lot. */
       .movi-loader-container {
         width: 68px;
         height: 68px;
@@ -18894,44 +18876,35 @@ export class MoviElement extends HTMLElement {
         display: block;
       }
 
-      /* What the triangle looks like before the fill reaches it — present
-         enough to hold the shape, quiet enough that the rising part is what
-         the eye follows. */
-      .movi-loader-bed {
-        fill: currentColor;
-        opacity: 0.22;
+      .movi-loader-track,
+      .movi-loader-chase {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 4;
+        /* The round join is what carries the same softened corners the play
+           buttons have; the round cap is what keeps the running segment from
+           ending in a chopped-off square. */
+        stroke-linejoin: round;
+        stroke-linecap: round;
       }
 
-      .movi-loader-fill {
-        fill: currentColor;
-        /* Translated in the SVG's user units, not a percentage: a percentage
-           on an SVG child resolves against its bounding box, and this rect is
-           the full 48 square either way, so units keep it honest. */
-        /* Fast off the mark, easing into the top. ease-in-out was tried and it
-           loiters at the bottom, where the mark is at its dimmest and the
-           loader looks stalled — the opposite of what it is there to say. */
-        animation: movi-loader-fill 1.35s cubic-bezier(0.3, 0, 0.2, 1) infinite;
+      /* Present enough to hold the shape, quiet enough that the segment is
+         what the eye follows. */
+      .movi-loader-track {
+        opacity: 0.2;
       }
 
-      /* Fills, holds for a beat at the top so the eye registers a full mark,
-         then fades out and drops back — a hard reset from full to empty reads
-         as a glitch rather than a loop. */
-      @keyframes movi-loader-fill {
-        0% {
-          transform: translateY(48px);
-          opacity: 1;
-        }
-        70% {
-          transform: translateY(0);
-          opacity: 1;
-        }
-        88% {
-          transform: translateY(0);
-          opacity: 0;
-        }
-        100% {
-          transform: translateY(48px);
-          opacity: 0;
+      .movi-loader-chase {
+        /* Just over a quarter of the way round — long enough to read as a
+           stroke with a direction, short enough that it is clearly a segment
+           and not the outline itself. */
+        stroke-dasharray: 28 72;
+        animation: movi-loader-chase 1.35s linear infinite;
+      }
+
+      @keyframes movi-loader-chase {
+        to {
+          stroke-dashoffset: -100;
         }
       }
 
