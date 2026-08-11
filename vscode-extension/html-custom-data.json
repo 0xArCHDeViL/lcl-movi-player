@@ -335,6 +335,19 @@
           ]
         },
         {
+          "name": "backgroundplay",
+          "description": {
+            "kind": "markdown",
+            "value": "Lets [`autoplay`](#autoplay) start while the tab is **hidden**."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#backgroundplay"
+            }
+          ]
+        },
+        {
           "name": "renderer",
           "description": {
             "kind": "markdown",

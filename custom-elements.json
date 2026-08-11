@@ -107,6 +107,10 @@
               "description": "Crops the black bars that are part of the **picture**."
             },
             {
+              "name": "backgroundplay",
+              "description": "Lets [`autoplay`](#autoplay) start while the tab is **hidden**."
+            },
+            {
               "name": "renderer",
               "description": "Chooses the rendering backend.",
               "type": {
