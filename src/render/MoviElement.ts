@@ -13017,6 +13017,16 @@ export class MoviElement extends HTMLElement {
   }
 
   /** Put a borrowed list back where its own menu expects it. */
+  /** Shut the gear panel, wherever the reason came from. */
+  private closeSettingsMenu(): void {
+    const menu = this.shadowRoot?.querySelector(
+      ".movi-settings-menu",
+    ) as HTMLElement | null;
+    if (!menu || !this.isBottomMenuOpen(menu)) return;
+    this.setBottomMenuOpen(menu, false);
+    this.closeSettingsPage();
+  }
+
   private closeSettingsPage(): void {
     const sr = this.shadowRoot;
     if (!sr || !this._settingsPage) return;
@@ -13214,6 +13224,34 @@ export class MoviElement extends HTMLElement {
       });
       sync();
     }
+
+    // Any other control in the bar closes the panel.
+    //
+    // The gear's own list is a detour: you open it to change one thing and
+    // then go back to watching. Every OTHER control in the row is that going
+    // back — pressing play, scrubbing, muting, fullscreen, a host's own button
+    // — and leaving the panel standing over the picture after one of those
+    // made the viewer close it a second time, by hand.
+    //
+    // Capture, and on the whole BAR rather than each control: the controls stop
+    // this event on their way up (so the click never reaches the video), which
+    // a bubbling listener here would never hear. Host controls added later are
+    // covered for free, which is the other half of why it lives up here — and
+    // the bar rather than the button row, because the seek bar is a sibling
+    // ABOVE that row, so scrubbing left the panel standing.
+    const bar = shadowRoot.querySelector(".movi-controls-bar");
+    bar?.addEventListener(
+      "click",
+      (e) => {
+        if (!this.isBottomMenuOpen(menu)) return;
+        const target = e.target as HTMLElement | null;
+        // Not the gear itself — that is a toggle and owns its own close — and
+        // not a click inside the panel, which lives in the row's subtree.
+        if (target?.closest(".movi-settings-container")) return;
+        this.closeSettingsMenu();
+      },
+      true,
+    );
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -22915,6 +22953,13 @@ export class MoviElement extends HTMLElement {
         if (this._objectFit !== newFitMode) {
           this._objectFit = newFitMode;
           this.updateFitMode();
+          // A host changing the fit from its own button is answering the
+          // question the panel's Aspect page is asking. The panel cannot see
+          // that click — it happens outside the player — so it would sit there
+          // over the picture still offering the choice that has just been
+          // made. Not while restoring: nothing is open at boot, and the
+          // remembered value is not somebody pressing anything.
+          if (!this._applyingPersisted) this.closeSettingsMenu();
         }
         break;
       case "rotate": {
@@ -25591,6 +25636,18 @@ export class MoviElement extends HTMLElement {
    * and resetting the <video> can interfere with the DRM/HLS path.
    */
   dispose(): void {
+    // Every open panel belongs to the source that is going away. The track
+    // menus emptied themselves by rebuilding, which is why they LOOKED like
+    // they closed; the settings panel did not, and it was left standing over a
+    // new video listing the old one's qualities and tracks.
+    //
+    // Here rather than in load(), because that is not where all the source
+    // changes are: setting src to a File — which is what a file picker does —
+    // goes straight to initializePlayer() and never touches load(). dispose()
+    // is the one thing every route runs through.
+    this.closeAllBottomMenus();
+    this.closeSettingsPage();
+
     // Cancel any queued play intent
     this._pendingPlay = false;
     this._preloadGateActive = false;
@@ -27153,6 +27210,16 @@ export class MoviElement extends HTMLElement {
     // below any real frame rate, so it separates "playing badly" from
     // "stopped" and nothing finer.
     if (shouldShow && this.playbackIsMoving()) {
+      shouldShow = false;
+    }
+
+    // …and not while the bar is up. The two occupy the same picture, and
+    // between them the bar is the one the viewer summoned: it has the clock,
+    // the buffered range and a play button, which together say more about what
+    // the player is doing than a spinner can. Reaching for the controls and
+    // being answered with a spinner over them is the player talking over the
+    // viewer.
+    if (shouldShow && this.classList.contains("movi-bar-visible")) {
       shouldShow = false;
     }
 
