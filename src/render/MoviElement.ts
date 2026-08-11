@@ -2496,7 +2496,74 @@ export class MoviElement extends HTMLElement {
       },
       true,
     );
+
+    // Touch gets the same names, on a press-and-hold.
+    //
+    // A finger has no hover, so the names were simply unavailable on a phone —
+    // and the bar is exactly where a name is worth having, since the icons are
+    // all it has to go on. Hold is the gesture that already means "what is
+    // this?" everywhere else. It must not fire on a tap: the timer is what
+    // separates the two, and any movement cancels it, because a finger that
+    // moved is scrubbing or scrolling, not asking.
+    let holdTimer = 0;
+    let holdFrom: { x: number; y: number } | null = null;
+    const cancelHold = () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = 0;
+      }
+      holdFrom = null;
+    };
+    row.addEventListener(
+      "touchstart",
+      (e) => {
+        cancelHold();
+        const t = (e as TouchEvent).touches[0];
+        if (!t) return;
+        const btn = (e.target as HTMLElement | null)?.closest?.(
+          ".movi-btn, .movi-volume-slider, .movi-live-badge, .movi-chapter-pill, .movi-time",
+        ) as HTMLElement | null;
+        if (!btn || !row.contains(btn)) return;
+        holdFrom = { x: t.clientX, y: t.clientY };
+        holdTimer = window.setTimeout(() => {
+          holdTimer = 0;
+          this.showControlTip(btn);
+        }, MoviElement.TIP_HOLD_MS);
+      },
+      { passive: true },
+    );
+    row.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!holdFrom) return;
+        const t = (e as TouchEvent).touches[0];
+        if (!t) return;
+        // A few pixels of drift is a finger resting, not a drag.
+        if (
+          Math.abs(t.clientX - holdFrom.x) > 8 ||
+          Math.abs(t.clientY - holdFrom.y) > 8
+        ) {
+          cancelHold();
+          this.hideControlTip();
+        }
+      },
+      { passive: true },
+    );
+    for (const type of ["touchend", "touchcancel"]) {
+      row.addEventListener(
+        type,
+        () => {
+          cancelHold();
+          this.hideControlTip();
+        },
+        { passive: true },
+      );
+    }
   }
+
+  /** How long a finger has to stay on a control before it is asking what it
+   *  is, rather than pressing it. */
+  private static readonly TIP_HOLD_MS = 400;
 
   private showControlTip(btn: HTMLElement): void {
     const tip = this.controlTipEl;
@@ -14513,8 +14580,10 @@ export class MoviElement extends HTMLElement {
          seek-OSD timing cues. */
 
       /* Light Theme Button Hover */
-      :host([theme="light"]) .movi-btn:hover {
-        background: var(--movi-btn-hover-bg) !important;
+      @media (hover: hover) {
+        :host([theme="light"]) .movi-btn:hover {
+          background: var(--movi-btn-hover-bg) !important;
+        }
       }
 
       /* Light theme controls overlay — use the dark wash that
@@ -15176,13 +15245,10 @@ export class MoviElement extends HTMLElement {
         display: none;
       }
 
-      /* Hover is a mouse idea. A device without one has no way to see this and
-         no way to dismiss it. */
-      @media (hover: none), (pointer: coarse) {
-        .movi-btn-tip {
-          display: none;
-        }
-      }
+      /* Touch reaches this the other way round: it has no hover, so the tip is
+         put up by a press-and-hold and taken down on release — see
+         TIP_HOLD_MS. It used to be hidden outright here, which left a phone
+         with no way at all to find out what an icon does. */
 
       .movi-progress-container {
         width: 100%;
@@ -15481,19 +15547,29 @@ export class MoviElement extends HTMLElement {
         outline: none !important;
       }
 
-      .movi-btn:hover {
-        /* Sober hover: neutral tint over the bar instead of a colour
-           splash, plus a barely-there lift. The aggressive 1.1 scale
-           was reading as "jumpy" against the calm surface. */
-        background: rgba(255, 255, 255, 0.1);
-        transform: scale(1.06);
+      /* Hover is for pointers that HAVE one. A touchscreen reports :hover on
+         the last thing tapped and keeps reporting it until something else is
+         tapped — so the round tint sat on whichever control you last used,
+         looking like a stuck selection. Gated here rather than undone in the
+         touch block, which is what left play needing exceptions to keep its
+         own resting capsule. */
+      @media (hover: hover) {
+        .movi-btn:hover {
+          /* Sober hover: neutral tint over the bar instead of a colour
+             splash, plus a barely-there lift. The aggressive 1.1 scale
+             was reading as "jumpy" against the calm surface. */
+          background: rgba(255, 255, 255, 0.1);
+          transform: scale(1.06);
+        }
       }
 
       /* Light theme bar is now dark too (see --movi-bar-bg), so the
          hover tint should also be the light-on-dark variant — the
          old dark-on-light tint disappeared into the new dark bar. */
-      :host([theme="light"]) .movi-controls-bar .movi-btn:hover {
-        background: rgba(255, 255, 255, 0.1);
+      @media (hover: hover) {
+        :host([theme="light"]) .movi-controls-bar .movi-btn:hover {
+          background: rgba(255, 255, 255, 0.1);
+        }
       }
 
       .movi-btn:active {
@@ -21250,8 +21326,10 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip[theme="light"]) .movi-progress-handle {
         background: #11142d !important;
       }
-      :host(.movi-audio-strip[theme="light"]) .movi-btn:hover {
-        background: rgba(0, 0, 0, 0.06) !important;
+      @media (hover: hover) {
+        :host(.movi-audio-strip[theme="light"]) .movi-btn:hover {
+          background: rgba(0, 0, 0, 0.06) !important;
+        }
       }
       /* Volume slider thumb/track also need to flip in light strip. */
       :host(.movi-audio-strip[theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
