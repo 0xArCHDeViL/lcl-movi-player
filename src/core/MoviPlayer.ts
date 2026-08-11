@@ -9102,7 +9102,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // seek, then the right one. Silent through the correction, audible when
         // it lands: one transition instead of three.
         this.audioRenderer.silenceForResync();
-        // …but only once the context is RUNNING. Seeking first put the re-read
+        // Where the picture is, read NOW — before the resume, not after it.
+        //
+        // A suspended AudioContext freezes its own currentTime, and the audio
+        // clock is a mapping off that, so it goes on reporting the position
+        // where the context went to sleep. While the audio was being dropped
+        // nothing masters off it and the clock tracks the picture; the moment
+        // the context is running again the clock snaps to that stale audio
+        // position instead. Sampling the target inside the .then() therefore
+        // sampled it AFTER the snap, and the seek dutifully took the picture
+        // back to where the audio had been asleep. Measured: picture at 8.48s,
+        // audio clock still reading 5.09s, and the tap sent playback back to
+        // 4.31s — a four-second jump backwards, and then the race forwards to
+        // catch up with the sound.
+        const pictureAt = this.getCurrentTime();
+        // …but the SEEK only once the context is RUNNING. Seeking first put the re-read
         // audio on an anchor that the "running" statechange then discarded,
         // and every buffer decoded in between was already late against a wall
         // clock that had walked the picture on: ~2s of silent video, then a
@@ -9116,12 +9130,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.audioRenderer.releaseResyncSilence();
             return;
           }
-          const at = this.getCurrentTime();
           Logger.info(
             TAG,
-            `Unmute: audio was being dropped — re-reading from ${at.toFixed(2)}s so it lands with the picture`,
+            `Unmute: audio was being dropped — re-reading from ${pictureAt.toFixed(2)}s (where the picture was at the tap) so it lands with it`,
           );
-          this.seek(at)
+          this.seek(pictureAt)
             // Whatever happens — landed, failed, superseded — the hold has to
             // come off, or tap-to-unmute ends in permanent silence.
             .catch(() => {})
