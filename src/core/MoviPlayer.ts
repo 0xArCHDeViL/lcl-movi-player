@@ -4158,8 +4158,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // moment the first frame is actually decoded — no user interaction needed.
     const noVideoFrameYet =
       !!this.videoRenderer && this.videoRenderer.getQueueSize() === 0;
+    // …but NOT while the tab is hidden, where there is no picture to wait for.
+    // Video decode is skipped there on purpose, so "resume into buffering until
+    // a frame decodes" is a wait that cannot end: the next video after a
+    // background auto-advance sat in buffering, silent, until the viewer came
+    // back and the decoder started again. Read off a real session's log —
+    // "notifySeekCompletion … forced=true", "State: seeking -> buffering", and
+    // then nothing at all until "Foreground recovery". Backgrounded, the audio
+    // IS the playback, so let it start. PiP is not backgrounded in this sense:
+    // the picture is on screen and worth waiting for.
+    const pictureIsBeingDecoded = !this.isBackgrounded || this.isPiPActive;
     const forcedWithoutFrame =
-      forced && noVideoFrameYet && !!this.trackManager.getActiveVideoTrack();
+      forced &&
+      noVideoFrameYet &&
+      pictureIsBeingDecoded &&
+      !!this.trackManager.getActiveVideoTrack();
 
     const seekTarget = this.seekTargetTime;
     this.seekTargetTime = -1;
