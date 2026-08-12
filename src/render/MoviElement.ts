@@ -22347,18 +22347,21 @@ export class MoviElement extends HTMLElement {
         // playback and puts the unmute pill up.)
         if (settings.volume !== undefined) {
           this._volume = settings.volume;
+          this.noteStoredChoice("volume", true, String(settings.volume));
           this.updateVolume();
           changed = true;
         }
 
         if (settings.muted !== undefined) {
           this._muted = settings.muted;
+          this.noteStoredChoice("muted", settings.muted);
           this.updateMuted();
           changed = true;
         }
 
         if (settings.playbackRate !== undefined) {
           this._playbackRate = settings.playbackRate;
+          this.noteStoredChoice("playbackrate", true, String(settings.playbackRate));
           this.updatePlaybackRate();
           changed = true;
         }
@@ -22366,6 +22369,7 @@ export class MoviElement extends HTMLElement {
         // Apply stable volume preference
         if (settings.stableVolume !== undefined) {
           this._stableVolume = settings.stableVolume;
+          this.noteStoredChoice("stablevolume", settings.stableVolume);
           if (settings.stableVolume) {
             this.setAttribute("stablevolume", "");
           } else {
@@ -22380,6 +22384,7 @@ export class MoviElement extends HTMLElement {
         // Apply ambient mode preference
         if (settings.ambientMode !== undefined) {
           this._ambientMode = settings.ambientMode;
+          this.noteStoredChoice("ambientmode", settings.ambientMode);
           if (settings.ambientMode) {
             this.setAttribute("ambientmode", "");
           } else {
@@ -22416,6 +22421,7 @@ export class MoviElement extends HTMLElement {
         // Apply HDR preference (defaults to true)
         if (settings.hdr !== undefined) {
           this._hdr = settings.hdr;
+          this.noteStoredChoice("hdr", settings.hdr);
           if (settings.hdr) {
             this.setAttribute("hdr", "");
           } else {
@@ -22580,6 +22586,7 @@ export class MoviElement extends HTMLElement {
         this.player?.setPreviewsEnabled(this._thumb && !this._audioOnly);
         break;
       case "hdr":
+        if (this.hostOverridingStoredChoice("hdr", newValue)) return;
         this.hdr = newValue !== null;
         break;
       case "theme":
@@ -22688,6 +22695,7 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "stablevolume":
+        if (this.hostOverridingStoredChoice("stablevolume", newValue)) return;
         this._stableVolume = newValue !== null;
         if (this.player) {
           this.player.setStableAudio(this._stableVolume);
@@ -22853,6 +22861,7 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "muted":
+        if (this.hostOverridingStoredChoice("muted", newValue)) return;
         this._muted = newValue !== null;
         if (this.video) {
           this.video.muted = this._muted;
@@ -22912,6 +22921,7 @@ export class MoviElement extends HTMLElement {
         // Store but not used yet - would need MoviPlayer to support CORS
         break;
       case "volume":
+        if (this.hostOverridingStoredChoice("volume", newValue)) return;
         if (newValue !== null) {
           this._volume = parseFloat(newValue);
           if (this.player) {
@@ -22920,6 +22930,7 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "playbackrate":
+        if (this.hostOverridingStoredChoice("playbackrate", newValue)) return;
         if (newValue !== null) {
           this._playbackRate = parseFloat(newValue);
           if (this.player) {
@@ -22944,6 +22955,7 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "ambientmode":
+        if (this.hostOverridingStoredChoice("ambientmode", newValue)) return;
         this._ambientMode = newValue !== null;
         this.updateAmbientMode();
         break;
@@ -29747,6 +29759,58 @@ export class MoviElement extends HTMLElement {
     return !this.hasAttribute("persist");
   }
 
+  /**
+   * What the viewer's store says, per attribute, for the settings it owns.
+   *
+   * Filled when a stored value is restored, and updated whenever the viewer
+   * changes one. It exists so the element can tell the two kinds of attribute
+   * write apart: an integrator declaring a default, and a decision.
+   */
+  private _storedChoice = new Map<string, string | null>();
+
+  /** Remember what the store's answer looks like as an attribute. `null` means
+   *  the attribute is absent, which for a boolean setting is the answer "off". */
+  private noteStoredChoice(attr: string, present: boolean, value = ""): void {
+    this._storedChoice.set(attr, present ? value : null);
+  }
+
+  /**
+   * Put a stored answer back over a host that has just re-declared its default.
+   *
+   * "A remembered value always wins over the HTML default" is the rule the
+   * always-on store already documents, and in plain HTML it holds: the markup
+   * sets the attribute once, the store answers later, and that is the end of
+   * it. Under a framework it did not. React re-applies its props on every
+   * render, so a `stablevolume` in JSX was re-asserted seconds after the
+   * restore — and every render after that — which is how movi-tube ended up
+   * unable to remember stable audio being turned off while the player's own dev
+   * page, with the very same attribute in static HTML, remembered it fine.
+   *
+   * So the rule is enforced rather than assumed. Once a setting has been
+   * restored, an attribute write that disagrees with the stored answer is the
+   * host talking over the viewer, and is put back. The viewer's own changes go
+   * through the setters below, which update the record first, so those agree
+   * and pass straight through.
+   */
+  private hostOverridingStoredChoice(attr: string, newValue: string | null): boolean {
+    if (this._applyingPersisted) return false;
+    if (!this._storedChoice.has(attr)) return false;
+    const stored = this._storedChoice.get(attr) ?? null;
+    if (stored === newValue) return false;
+    // Boolean attributes: only presence carries meaning, so "" and "1" agree.
+    if (stored !== null && newValue !== null && (stored === "" || newValue === "")) {
+      return false;
+    }
+    this._applyingPersisted = true;
+    try {
+      if (stored === null) this.removeAttribute(attr);
+      else this.setAttribute(attr, stored);
+    } finally {
+      this._applyingPersisted = false;
+    }
+    return true;
+  }
+
   /** Every setting this element can remember — for a host building its own
    *  preferences UI, so the list lives in one place. */
   static get persistableSettings(): string[] {
@@ -31889,6 +31953,7 @@ export class MoviElement extends HTMLElement {
     // change callback — leaving `_muted` stuck true and the pill click a
     // no-op. Setting it here makes the unmute path attribute-independent.
     this._muted = value;
+    this.noteStoredChoice("muted", this._muted);
     if (value) {
       // Reaching the setter to MUTE is as deliberate as reaching it to unmute.
       this._userChoseMute = true;
@@ -31944,6 +32009,7 @@ export class MoviElement extends HTMLElement {
   set volume(value: number) {
     // 0–2: values above 1 boost audio up to 200% (VLC-style).
     this._volume = Math.max(0, Math.min(this.getMaxVolume(), value));
+    this.noteStoredChoice("volume", true, this._volume.toString());
     this.setAttribute("volume", this._volume.toString());
 
     // If user increases volume while muted, automatically unmute (like YouTube)
@@ -31951,6 +32017,7 @@ export class MoviElement extends HTMLElement {
     if (autoUnmuted) {
       this._muted = false;
       this._userHasUnmuted = true;
+      this.noteStoredChoice("muted", false);
       this.removeAttribute("muted");
       // Update player muted state immediately
       if (this.player) {
@@ -31983,6 +32050,7 @@ export class MoviElement extends HTMLElement {
     // no track is active yet, so attribute init / settings restore still work.
     const ceiling = this.getMaxAllowedRate();
     this._playbackRate = Math.max(0.25, Math.min(ceiling, value));
+    this.noteStoredChoice("playbackrate", true, this._playbackRate.toString());
     this.setAttribute("playbackrate", this._playbackRate.toString());
     this.updatePlaybackRate();
     if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
@@ -32052,6 +32120,7 @@ export class MoviElement extends HTMLElement {
   set ambientMode(value: boolean) {
     const changed = !!value !== !!this._ambientMode;
     this._ambientMode = value;
+    this.noteStoredChoice("ambientmode", !!this._ambientMode);
     if (value) {
       this.setAttribute("ambientmode", "");
     } else {
@@ -32071,6 +32140,9 @@ export class MoviElement extends HTMLElement {
   set stableVolume(value: boolean) {
     const changed = !!value !== this._stableVolume;
     this._stableVolume = !!value;
+    // Before the attribute write: this IS the viewer's answer, so the record
+    // has to agree with it or the guard will put the old one back.
+    this.noteStoredChoice("stablevolume", this._stableVolume);
     if (this._stableVolume) {
       this.setAttribute("stablevolume", "");
     } else {
@@ -33294,6 +33366,7 @@ export class MoviElement extends HTMLElement {
     const v = !!value;
     if (this._hdr === v) return;
     this._hdr = v;
+    this.noteStoredChoice("hdr", this._hdr);
     if (this._hdr) {
       this.setAttribute("hdr", "");
     } else {
