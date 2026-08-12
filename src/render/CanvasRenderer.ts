@@ -1041,7 +1041,37 @@ export class CanvasRenderer {
       // Cubed: the difference between trough and crest stays wide, so this reads
       // as light with a direction to it rather than an even tint.
       i = i * i * i;
-      outColor = vec4(u_colour * i, 1.0);
+      vec3 lit = u_colour * i;
+      // Break the 8-bit staircase.
+      //
+      // What comes out of the waves above is smooth to many decimal places and
+      // then gets written into an 8-bit buffer, so a whole region of it rounds
+      // to one value and the next region to the next — and the boundary between
+      // them is a hard edge running across the bar. On a dim wash the steps are
+      // far apart (a dark colour spends most of its range on very few codes),
+      // which is why they read as distinct contour LINES rather than as
+      // roughness. Nothing about the gradient is wrong; the buffer cannot hold
+      // it.
+      //
+      // A dither smaller than one code, added before that rounding, makes the
+      // choice between the two neighbouring codes a per-pixel one instead of a
+      // per-region one. The edge becomes a mixture and the eye reads the
+      // average, which is the value the maths asked for in the first place.
+      //
+      // Two hashes subtracted, not one: a single uniform sample leaves the
+      // noise correlated with the signal (it biases where it is already near a
+      // boundary). The triangular distribution this makes is the standard
+      // answer and costs one extra hash.
+      //
+      // Keyed on gl_FragCoord ALONE, so it is fixed in screen space. Reseeding
+      // it per frame would turn a still gradient into crawling grain — the wash
+      // is nearly static and any moving noise on it is more visible than the
+      // banding was.
+      vec2 seed = gl_FragCoord.xy;
+      float d1 = fract(sin(dot(seed, vec2(12.9898, 78.233))) * 43758.5453);
+      float d2 = fract(sin(dot(seed, vec2(63.7264, 10.873))) * 32168.4127);
+      lit += (d1 + d2 - 1.0) / 255.0;
+      outColor = vec4(lit, 1.0);
       if (u_round.x > 0.0) {
         vec2 halfSizeR = u_round.yz * 0.5;
         vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
