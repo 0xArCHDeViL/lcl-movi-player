@@ -3904,13 +3904,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer.stopPresentationLoop();
         this.videoRenderer.clearQueue();
       }
-      // Count the split (separate-URL) audio demuxer too — its track isn't in
-      // the main trackManager, so without this the background timer never starts
-      // for split audio and its rAF-driven loop dies the moment the tab hides.
-      const hasAudio =
-        (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
-        !this.disableAudio;
-      if (hasAudio) this.startBackgroundTimer();
+      this.ensureBackgroundPump();
     }
 
     // In WASM split audio-only mode the main (video) demux loop stays parked —
@@ -4371,6 +4365,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       Logger.info(TAG, "Resuming playback after seek");
+      // Playback is starting; if the tab is hidden this is the only thing that
+      // will feed the renderer.
+      this.ensureBackgroundPump();
       // Stamp it: the decoders were flushed by this seek, so playback is
       // restarting on a thin cushion and an underrun in the next moment is our
       // doing, not a starving link (see SELF_INFLICTED_STALL_WINDOW_MS).
@@ -9954,6 +9951,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Start background timer using Web Worker (Safari-safe, not throttled)
    */
+  /**
+   * Make sure the hidden-tab pump is running, whatever route got us playing.
+   *
+   * While the tab is hidden rAF is throttled to nothing, so the audio loop —
+   * which runs on rAF — does not tick and the renderer is handed nothing to
+   * play. The Worker timer is what keeps it fed. play() already starts it, but
+   * play() is not the only way playback begins: a seek completing resumes
+   * straight into "playing", and that is exactly how the next track starts
+   * after a background auto-advance. Read off a real session's log — state
+   * playing, clock started, "AudioRenderer Playing … state: running", and then
+   * not one decoded packet until the viewer came back.
+   */
+  private ensureBackgroundPump(): void {
+    if (!this.isBackgrounded || this.isPiPActive) return;
+    // Split (separate-URL) audio's track is not in the main trackManager, so
+    // count its demuxer too — same reason handleVisibilityChange does.
+    const hasAudio =
+      (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
+      !this.disableAudio;
+    if (hasAudio) this.startBackgroundTimer();
+  }
+
   private startBackgroundTimer(): void {
     if (this.backgroundWorker || this.backgroundIntervalId) return;
     Logger.debug(TAG, "Starting background playback timer");
