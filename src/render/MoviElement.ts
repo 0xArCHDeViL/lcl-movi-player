@@ -922,6 +922,13 @@ export class MoviElement extends HTMLElement {
   // produces audible "audio late" gaps right after speed switches.
   private _lastRateChangeTime: number = 0;
   private static readonly AMBIENT_RATE_CHANGE_COOLDOWN_MS = 600;
+  /** The most of the main thread ambient may take: one part in AMBIENT_DUTY.
+   *  100 is 1% — enough that the glow keeps up on anything, little enough that
+   *  it cannot be heard in audio scheduled from the same thread. */
+  private static readonly AMBIENT_DUTY = 100;
+  private static readonly AMBIENT_MIN_INTERVAL_MS = 200;
+  /** Smoothed cost of one sample on THIS device. */
+  private _ambientCostMs = 0;
   private _ambientSampleInterval: number = 200; // 5fps; cheap now that we read from a renderer-side 16×16 mirror
   private currentAmbientColors: { r: number; g: number; b: number } = {
     r: 0,
@@ -8501,6 +8508,65 @@ export class MoviElement extends HTMLElement {
     if (replace || parsed.length > 0) this._subtitleTracks = parsed;
   }
 
+  /**
+   * Which of several same-language audio streams to open.
+   *
+   * Audio has no ABR: the stream is chosen once and kept, because switching it
+   * mid-playback would mean re-opening the decoder and re-anchoring the clock
+   * for a change nobody asked to hear. So the pick has to be right first time,
+   * and it is made the same way the video ladder's is — from what the link has
+   * actually been measured to carry, not from what the page marked default
+   * (a consumer marks the HIGHEST default, which is right for a manual pick
+   * and wrong for an automatic one).
+   *
+   * The budget is a share of the link rather than the whole of it: the video
+   * rung is chosen from the same pipe and is an order of magnitude larger, so
+   * audio taking its fill would leave the picture paying for it. A floor keeps
+   * the smallest rung always reachable — silence is not an improvement on a
+   * slow link.
+   *
+   * With nothing measured yet the highest is kept, which is what this did
+   * before any of this existed. An unmeasured link is not evidence of a slow
+   * one, and audio is small enough that guessing high is the cheaper mistake.
+   */
+  private pickAudioRendition<T extends { src: string; bandwidth: number; label: string; isDefault: boolean }>(
+    group: T[],
+  ): T {
+    const rated = group.filter((s) => s.bandwidth > 0);
+    if (rated.length < 2) {
+      return group.find((s) => s.isDefault) ?? group[0];
+    }
+    const ladder = [...rated].sort((a, b) => a.bandwidth - b.bandwidth);
+    const link = this._measuredStartBps || loadPersistedLinkBps();
+    if (!(link > 0)) {
+      const top = ladder[ladder.length - 1];
+      Logger.debug(
+        TAG,
+        `Audio ladder: no link measurement yet — opening on ${Math.round(top.bandwidth / 1000)}kbps`,
+      );
+      return top;
+    }
+    const budget = Math.max(
+      link * MoviElement.AUDIO_LINK_SHARE,
+      ladder[0].bandwidth,
+    );
+    let picked = ladder[0];
+    for (const rung of ladder) {
+      if (rung.bandwidth <= budget) picked = rung;
+    }
+    Logger.info(
+      TAG,
+      `Audio ladder: ${ladder.map((r) => `${Math.round(r.bandwidth / 1000)}k`).join(" ")} ` +
+        `| link ${(link / 1e6).toFixed(1)}Mbps, budget ${Math.round(budget / 1000)}kbps ` +
+        `→ ${Math.round(picked.bandwidth / 1000)}kbps`,
+    );
+    return picked;
+  }
+
+  /** The share of a measured link audio may spend. The picture is chosen from
+   *  the same pipe and costs an order of magnitude more. */
+  private static readonly AUDIO_LINK_SHARE = 0.15;
+
   private _parseChildSources(): void {
     if (!this._src && !this._encrypted) {
       const sourceEls = this.querySelectorAll("source");
@@ -8526,7 +8592,7 @@ export class MoviElement extends HTMLElement {
         })).filter((s) => s.src);
 
         // Separate audio sources (kind="audio") from video sources
-        const audioSources = allSources.filter((s) => s.kind === "audio");
+        let audioSources = allSources.filter((s) => s.kind === "audio");
         const videoSources = allSources.filter((s) => s.kind !== "audio");
 
         if (videoSources.length > 0) {
@@ -8594,7 +8660,37 @@ export class MoviElement extends HTMLElement {
         // languages — pointing, of course, at the previous video's URLs.
         // Same reason _parseChildSubtitleTracks replaces rather than merges.
         this._audioTracks = [];
+        // …and the single split-audio URL with them. This was the one field in
+        // the parse that was only ever ASSIGNED, never cleared, so a swap that
+        // declares no audio children — or that is parsed a tick before its
+        // audio children have been appended, which is what a framework render
+        // does — kept pointing at the PREVIOUS track's audio. The new player
+        // then opened that URL and played it until the children settled and
+        // the reload ran again: about a second of the last track over the new
+        // one's picture. Same replace-don't-merge rule the track list above
+        // and the subtitle list already follow.
+        this._audioSrc = null;
         if (audioSources.length > 0) {
+          // Several audio sources can mean two different things, and telling
+          // them apart is the language they declare. Different languages are
+          // parallel TRACKS, offered in a menu. The same language more than
+          // once is a rendition LADDER — one stream at several bitrates — and
+          // the viewer never picks from those; the link does.
+          const byLang = new Map<string, typeof audioSources>();
+          for (const s of audioSources) {
+            const key = (s.srclang || "").toLowerCase();
+            const group = byLang.get(key);
+            if (group) group.push(s);
+            else byLang.set(key, [s]);
+          }
+          for (const [lang, group] of byLang) {
+            if (group.length > 1) {
+              const picked = this.pickAudioRendition(group);
+              byLang.set(lang, [picked]);
+            }
+          }
+          audioSources = [...byLang.values()].map((g) => g[0]);
+
           const langed = audioSources.filter((s) => s.srclang || s.label);
           if (audioSources.length > 1 && langed.length >= 2) {
             this._audioTracks = audioSources.map((s, i) => ({
@@ -11730,6 +11826,72 @@ export class MoviElement extends HTMLElement {
       !!this._sourceAdapter ||
       (this._encrypted && !!this._videoUrl)
     );
+  }
+
+  /**
+   * Put the chrome back the way a freshly-created, source-less player looks.
+   *
+   * Clearing the source ran dispose(), and dispose() does refresh the controls
+   * — but it runs BEFORE `_src` is nulled, so hasMediaSource() was still true
+   * at that moment and the two exemptions that key off it (play/pause and
+   * fullscreen, both deliberately live while a source loads) stayed lit. The
+   * clear-path then only swapped in the empty-state art and never asked the
+   * controls again, so an emptied player sat there with a working play button
+   * and a fullscreen button over nothing at all.
+   *
+   * Called from every route that lands on "no source": the property setter's
+   * two null branches and the attribute callback's removal.
+   */
+  private resetToEmptyState(): void {
+    // A load that was in flight is over — leaving this set keeps the spinner
+    // eligible on a player with nothing to spin for.
+    this.isLoading = false;
+    this._hasEverPlayed = false;
+    if (this.emptyStateIndicator && !this._isUnsupported) {
+      this.emptyStateIndicator.style.display = "flex";
+    }
+    // A never-loaded player sits with its bar down; the one being emptied was
+    // left with the bar UP, wherever the last mousemove put it. That is not a
+    // cosmetic difference: `.movi-bar-collapsed` rides on the bar being hidden,
+    // and it is what pulls the placeholder's reserved bottom space back so the
+    // "nothing here" art centres properly. Hide it and the two states match.
+    this.hideControls();
+
+    // Everything in the bar that only exists BECAUSE of the source that just
+    // went away. Disabling the controls greyed out what you can press; it said
+    // nothing about what they still SHOW, so an emptied player kept the last
+    // video's chapter segments across the seek bar, its chapter name in the
+    // pill and its "HD" chip on the gear — a bar describing a video with the
+    // "Nothing to Play" card sitting over it.
+    //
+    // load() clears all three on the way to the next source. This path never
+    // reaches load(), and the two that are tick-driven (the pill and the chip
+    // both re-derive themselves from the player) can't clear themselves either,
+    // because the tick stopped with the player they read from.
+    this.resetTimeline();
+    if (this.shadowRoot) {
+      const markers = this.shadowRoot.querySelector(
+        ".movi-chapter-markers",
+      ) as HTMLElement | null;
+      if (markers) markers.innerHTML = "";
+      // The dividers are only half of it: the chapter CUTS live as a mask on
+      // the track layers, and emptying the marker container leaves them behind
+      // — a bare seek bar still notched where a chapter used to start. On a
+      // source change renderChapterMarkers() repaints them for the new video,
+      // but it bails on a null player, so the empty case has to clear them.
+      this.applyChapterGaps(this.shadowRoot, [], 0);
+      this.shadowRoot
+        .querySelector(".movi-progress-bar")
+        ?.classList.remove("movi-has-chapters");
+    }
+    this._qualityBadge = "";
+    this._qualityBadgeReported = false;
+    this._renderGearBadge();
+    this.updateChapterPill();
+
+    this.updatePoster();
+    this.updateControlsState();
+    this.updatePlayPauseIcon();
   }
 
   /**
@@ -22866,6 +23028,29 @@ export class MoviElement extends HTMLElement {
             }
           }
 
+          // `removeAttribute("src")` is the declarative half of clearing the
+          // source — `src={null}` in a framework lands here, not on the
+          // property setter — but this branch only ever swapped the artwork.
+          // The player itself was left running: the old video kept decoding
+          // behind the placeholder and every control stayed live on a source
+          // the host had already taken away. Tear it down and reset, the same
+          // as the property setter does.
+          //
+          // Only when there is genuinely nothing left to play. A `<source>`
+          // child list means this is the children-swap reload clearing the
+          // attribute on its way to the next video (it disposes itself), an
+          // adapter or an encrypted url is a source of its own, and a rebuild
+          // rewrites the attribute mid-flight — none of those are an empty.
+          const clearedToNothing =
+            !newValue &&
+            !isRebuild &&
+            !this.hasMediaSource() &&
+            !this.querySelector("source");
+          if (clearedToNothing) {
+            if (this.player) this.dispose();
+            this.resetToEmptyState();
+          }
+
           // Source changed — re-evaluate poster visibility (it's gated on
           // having an actual source so it doesn't paint in the empty state).
           this.updatePoster();
@@ -28496,7 +28681,8 @@ export class MoviElement extends HTMLElement {
     // Reset adaptive interval — a previously-throttled session may have left
     // it ratcheted up to 2s, which would make ambient appear "frozen" until
     // the per-sample recovery slowly walked it back down.
-    this._ambientSampleInterval = 200;
+    this._ambientSampleInterval = MoviElement.AMBIENT_MIN_INTERVAL_MS;
+    this._ambientCostMs = 0;
 
     const loop = (timestamp: number) => {
       // If software decoding is active, pause ambient sampling to save main thread cycles
@@ -28528,28 +28714,49 @@ export class MoviElement extends HTMLElement {
 
         this._lastAmbientSampleTime = timestamp;
 
-        // Adaptive sampling rate based on performance
-        // If taking > 8ms, slow down significantly to avoid blocking main thread
-        if (duration > 8) {
-          this._ambientSampleInterval = Math.min(
-            2000,
-            this._ambientSampleInterval * 1.5,
-          );
-          // Only log periodically or if significant change to avoid spam
-          if (this._ambientSampleInterval < 2000) {
-            Logger.debug(
-              TAG,
-              `Ambient sampling taking too long (${duration.toFixed(1)}ms), slowing down to ${this._ambientSampleInterval.toFixed(0)}ms`,
-            );
-          }
-        } else if (duration < 5 && this._ambientSampleInterval > 200) {
-          // If reasonably fast (<5ms), shrink interval. Threshold was 2ms but
-          // GPU readback variance means a healthy machine rarely dips that
-          // low, so the interval would ratchet up forever after one slow
-          // frame. 5ms still leaves ample headroom on a 16ms (60Hz) budget.
-          this._ambientSampleInterval = Math.max(
-            200,
-            this._ambientSampleInterval * 0.8,
+        // What this sample cost, smoothed. One slow frame is noise; a device
+        // that is slow at this is slow at it every time.
+        this._ambientCostMs =
+          this._ambientCostMs > 0
+            ? this._ambientCostMs * 0.8 + duration * 0.2
+            : duration;
+
+        // The interval is a SHARE of the main thread, not a number of
+        // milliseconds.
+        //
+        // Two fixed thresholds — slow down past 8ms, speed up under 5 — left
+        // this oscillating on any device whose readback lands between them,
+        // which is every phone: 300 -> 450 -> 540 -> 518 -> 398 -> 382 -> 300,
+        // paying ~10ms of blocked main thread on every pass throughout.
+        // Captured on mobile Chrome, where that jitter is audible rather than
+        // visible: the readback is synchronous and a split (WASM) source
+        // schedules its audio from the same thread, so the block arrives as
+        // clicking, not as dropped frames — which is why such a log carries no
+        // underrun line at all.
+        //
+        // A floor proportional to what a sample actually costs settles in one
+        // step and needs no thresholds: a 1ms readback keeps the old 200ms
+        // cadence, a 10ms one is allowed once a second. Ambient is a slow glow
+        // behind a picture — once a second is not a compromise.
+        const floor = Math.max(
+          MoviElement.AMBIENT_MIN_INTERVAL_MS,
+          Math.round(this._ambientCostMs * MoviElement.AMBIENT_DUTY),
+        );
+        const previous = this._ambientSampleInterval;
+        this._ambientSampleInterval = Math.min(
+          2000,
+          Math.max(
+            floor,
+            this._ambientSampleInterval * (duration > 8 ? 1.5 : 0.8),
+          ),
+        );
+        if (
+          this._ambientSampleInterval > previous &&
+          this._ambientSampleInterval < 2000
+        ) {
+          Logger.debug(
+            TAG,
+            `Ambient sampling costs ${duration.toFixed(1)}ms here — every ${this._ambientSampleInterval.toFixed(0)}ms from now`,
           );
         }
       }
@@ -28862,18 +29069,12 @@ export class MoviElement extends HTMLElement {
       } else {
         this.removeAttribute("src");
         this._src = null;
-        // Show empty state when src is cleared
-        if (this.emptyStateIndicator && !this.player && !this._isUnsupported) {
-          this.emptyStateIndicator.style.display = "flex";
-        }
+        this.resetToEmptyState();
       }
     } else {
       this.removeAttribute("src");
       this._src = null;
-      // Show empty state when src is cleared
-      if (this.emptyStateIndicator && !this.player) {
-        this.emptyStateIndicator.style.display = "flex";
-      }
+      this.resetToEmptyState();
     }
   }
 

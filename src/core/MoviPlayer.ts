@@ -3407,6 +3407,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Moves ~500ms creation cost from play() to load() for instant playback start.
         // init() no longer resumes — play() handles resume on user gesture.
         if (!this.disableAudio) {
+          // Tell the renderer the source's rate BEFORE it builds the context.
+          // The context is created once, at whatever rate it is given, and a
+          // context that does not match the source resamples every buffer it
+          // is handed — audibly, as periodic clicking, because each buffer is
+          // resampled with its own filter state and the seams land at the
+          // buffer boundaries. AudioRenderer already knows to ask for the
+          // source rate; it just has to have been told what that is, and
+          // init() is the last moment that is true.
+          //
+          // Only PlaybackController did this. Both paths here went straight to
+          // init(), so _sourceSampleRate was still 0 and the context came up
+          // at the device default — 48000 on Android against a 44100 source,
+          // which is why the clicking was a mobile-only report. Desktop
+          // Chrome usually opens its default context at 44100 and the mismatch
+          // never arises.
+          this.audioRenderer.configure(
+            audioTrack.sampleRate,
+            audioTrack.channels,
+          );
           // Await so we can read destination.maxChannelCount synchronously
           // before deciding the downmix policy. Init is cheap; the
           // perf-sensitive bit (`resume`) is still gated on the user
@@ -4972,7 +4991,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // quickly, so any decode jitter shows up as stutter. Cap at 2x scale
     // so 4x playback doesn't balloon VRAM/audio buffers on heavy sources.
     const rateScale = rate < 1.0 ? 1.0 / rate : Math.min(2.0, rate);
-    const maxAudioBuffered = (isSoftware ? 5.0 : isPostSeek ? 1.5 : 2.0) * rateScale;
+    // Software audio keeps its deep lead on every device. The cost that made
+    // this look device-dependent was on the OUTPUT side — one live source node
+    // per buffered frame, ~215 of them at a 5s lead, which a phone's audio
+    // thread cannot render in time. AudioRenderer holds buffers as data now
+    // and only makes nodes as their turn approaches, so the lead no longer
+    // sets the width of the graph. See scheduleAudioBuffer.
+    const maxAudioBuffered =
+      (isSoftware ? 5.0 : isPostSeek ? 1.5 : 2.0) * rateScale;
     // Renderer queue limits (in frames). Two separate constraints:
     //
     //  1. High-res (≥4K): per-frame VRAM cost is huge (8K HDR ≈ 50MB/frame).
@@ -7990,6 +8016,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.audioSource = null;
         return;
       }
+      // Same as the muxed path above: the rate has to reach the renderer
+      // before the context exists. This is the path a split (separate-URL)
+      // audio stream takes, which is what every YouTube-style source uses.
+      this.audioRenderer.configure(aTrack.sampleRate, aTrack.channels);
       await this.audioRenderer.init();
       const sourceCh = aTrack.channels ?? 2;
       const maxCh = this.audioRenderer.getMaxChannelCount();
