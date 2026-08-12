@@ -27568,25 +27568,16 @@ export class MoviElement extends HTMLElement {
       shouldShow = false;
     }
 
-    if (shouldShow) {
-      this.setSpinnerVisible(true);
-      // Hide the centre play button behind it.
-      const centerPlayPauseBtn = this.shadowRoot?.querySelector(
-        ".movi-center-play-pause",
-      ) as HTMLElement;
-      if (centerPlayPauseBtn) {
-        centerPlayPauseBtn.classList.remove("movi-center-visible");
-      }
-      // Including one that is mid-flash. The class is only half of how this
-      // button reaches the screen — a press animates it visible on its own, and
-      // a flash begun a moment before the spinner appeared would otherwise play
-      // out on top of it. flashCenterIcon declines to start over a spinner; this
-      // is the same rule for one already running.
-      this.cancelCenterFlash();
-    } else {
-      this.setSpinnerVisible(false);
-      // Center play button visibility will be managed by updatePlayPauseIcon
-    }
+    // Just the spinner. "Never the button and the spinner together" is a rule
+    // the stylesheet now states directly — :host(.is-buffering)
+    // .movi-center-play-pause, keyed off the class setSpinnerVisible carries
+    // for exactly as long as the spinner is up. It reaches the button whatever
+    // put it on screen: the visible class, and a mid-flight flash too, since
+    // its !important beats the animation. Stripping the class and cancelling
+    // the flash from here as well only re-stated it, and less reliably — this
+    // code and the code that shows the button run off different events, so the
+    // order between them is not guaranteed, while a rule cannot be raced.
+    this.setSpinnerVisible(shouldShow);
 
     // (is-buffering rides along inside setSpinnerVisible now — strip mode has
     // no spinner and pulses its progress bar off that same class instead; see
