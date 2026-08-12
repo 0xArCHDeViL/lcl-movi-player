@@ -12669,6 +12669,7 @@ export class MoviElement extends HTMLElement {
     stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
     loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
     aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
+    ambient: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
     // Crop marks — the two overhanging L's of the crop tool. A framed
     // rectangle was tried and it was indistinguishable from Aspect's, which is
     // half of why that row moved away from this one.
@@ -12967,8 +12968,23 @@ export class MoviElement extends HTMLElement {
       ".movi-subtitle-track-item",
     );
 
+    // Aspect is the canvas renderer's fit mode. The native fallback has no
+    // canvas — its setFitMode() is an empty method — so the page would let the
+    // viewer pick a fit and then do nothing with it. The control-bar aspect
+    // button is already absent there; this row was the one that wasn't.
+    if (!audioOnly && this.isControlAvailable("aspect")) {
+      rows.push(
+      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
+      );
+    }
+
     const toggle = (toggleKey: string, label: string, on: boolean) =>
       `<button type="button" class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
+    // The divider earns its keep by separating the two KINDS of row: above it
+    // everything opens a list and shows what is currently chosen, below it
+    // everything is a switch. Aspect used to sit alone at the bottom, a
+    // chevron stranded after four toggles — which read as an afterthought and
+    // left the divider separating nothing in particular.
     rows.push(`<div class="movi-settings-divider"></div>`);
     // HDR: defer to the decision the bar's own logic already made.
     // updateHdrVisibility writes "flex" on the container only when HDR is
@@ -12981,6 +12997,27 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!audioOnly && hdrEl?.style.display === "flex" && this.isControlAvailable("hdr")) {
       rows.push(toggle("hdr", "HDR", this._hdr));
+    }
+    // Ambient mode, on the same availability test its context-menu row uses:
+    // the glow samples the WASM renderer's own mirror, and neither an adaptive
+    // stream (its own stream-side renderer never fills that mirror) nor the
+    // native fallback (no canvas at all) can produce one. A switch there would
+    // do nothing.
+    if (
+      !audioOnly &&
+      this.isControlAvailable("ambient") &&
+      !this.player?.isStreamPlayback?.() &&
+      !this._nativeFallbackActive
+    ) {
+      rows.push(toggle("ambient", "Ambient mode", this._ambientMode));
+    }
+    // Stable volume rides Movi's AudioContext compressor, which isn't in the
+    // path when audio plays through a media element — adaptive streams and the
+    // native fallback. The control bar button and the context-menu item are
+    // both hidden there (updateStableAudioUI); this row was not, so the one
+    // surface that could still offer it offered a switch that does nothing.
+    if (this.isControlAvailable("stableaudio")) {
+      rows.push(toggle("stable", "Stable volume", this._stableVolume));
     }
     // Crop black bars. Named for what it removes rather than for what it does
     // — "crop" alone is an editing verb and reads as something that will take
@@ -12997,24 +13034,7 @@ export class MoviElement extends HTMLElement {
     if (!audioOnly && this.isControlAvailable("aspect")) {
       rows.push(toggle("crop", "Crop black bars", this._cropBars));
     }
-    // Stable volume rides Movi's AudioContext compressor, which isn't in the
-    // path when audio plays through a media element — adaptive streams and the
-    // native fallback. The control bar button and the context-menu item are
-    // both hidden there (updateStableAudioUI); this row was not, so the one
-    // surface that could still offer it offered a switch that does nothing.
-    if (this.isControlAvailable("stableaudio")) {
-      rows.push(toggle("stable", "Stable volume", this._stableVolume));
-    }
     rows.push(toggle("loop", "Loop", this._loop));
-    // Aspect is the canvas renderer's fit mode. The native fallback has no
-    // canvas — its setFitMode() is an empty method — so the page would let the
-    // viewer pick a fit and then do nothing with it. The control-bar aspect
-    // button is already absent there; this row was the one that wasn't.
-    if (!audioOnly && this.isControlAvailable("aspect")) {
-      rows.push(
-      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
-      );
-    }
     root.innerHTML = rows.join("");
   }
 
@@ -13339,6 +13359,13 @@ export class MoviElement extends HTMLElement {
         } else if (row.dataset.toggle === "loop") {
           this.loop = !this._loop;
           this.showOSD(OSD.loop, this._loop ? "Loop On" : "Loop Off");
+        } else if (row.dataset.toggle === "ambient") {
+          this.ambientMode = !this._ambientMode;
+          this.updateAmbientUI();
+          this.showOSD(
+            OSD.ambient,
+            this._ambientMode ? "Ambient Mode On" : "Ambient Mode Off",
+          );
         } else if (row.dataset.toggle === "crop") {
           this.cropbars = !this._cropBars;
           this.showOSD(
@@ -29422,6 +29449,9 @@ export class MoviElement extends HTMLElement {
       if (ctxOutline) ctxOutline.style.display = "block";
       if (ctxFilled) ctxFilled.style.display = "none";
     }
+    // The gear panel carries the same switch, so it has to hear about this
+    // however the mode was changed — the row, the panel, or G.
+    this.buildSettingsRoot();
   }
 
   // ---------------------------------------------------------------------------
