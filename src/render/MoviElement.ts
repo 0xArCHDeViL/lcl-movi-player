@@ -29498,6 +29498,14 @@ export class MoviElement extends HTMLElement {
       } else {
         const field = name === "audiolang" ? "audioLang" : "subtitleLang";
         SettingsStorage.getInstance().save({ [field]: v ?? "" });
+        // …and the copy this element actually reads. The store is on disk and
+        // is only read once, at startup, into the two fields below;
+        // applyPersistedTracks then consults THOSE on every source change. Left
+        // stale, the next video restored the answer the viewer gave before the
+        // one they just gave — which is how captions turned themselves back on
+        // after being switched off: "off" reached OPFS and nothing else.
+        if (name === "audiolang") this._legacyAudioLang = v;
+        else this._legacySubtitleLang = v;
       }
     };
     const tag = MoviElement.usableLang(lang);
