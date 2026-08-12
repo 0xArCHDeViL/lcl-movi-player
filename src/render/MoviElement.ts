@@ -2174,6 +2174,9 @@ export class MoviElement extends HTMLElement {
     unmuteOverlay.addEventListener("click", (e) => {
       e.stopPropagation();
       this._userHasUnmuted = true;
+      // The block this pill was offering a way out of is over. A LATER one
+      // sets the flag again, which is what lets the pill come back.
+      this._autoMutedForAutoplay = false;
       this.muted = false;
       // Defensive — updateMuted() should hide it via updateUnmuteOverlay,
       // but if state is mid-flight this guarantees the click feels instant.
@@ -23598,10 +23601,13 @@ export class MoviElement extends HTMLElement {
   private updateUnmuteOverlay() {
     const overlay = this.unmuteOverlay;
     if (!overlay) return;
-    // The user unmuting clears the runtime auto-mute fallback latch too —
-    // both the pill click and the setter set _userHasUnmuted, so this keeps
-    // _autoMutedForAutoplay from re-showing the pill on a later re-mute.
-    if (this._userHasUnmuted) this._autoMutedForAutoplay = false;
+    // NOT cleared here. Clearing the flag on every pass meant "the viewer has
+    // unmuted once" silenced the pill for the rest of the session — so a block
+    // that happened LATER (an auto-advance that could not start with sound, a
+    // policy re-block, a context that came back suspended) took the audio away
+    // with nothing on screen to say so or to get it back. The flag is cleared
+    // where it should be: at the moment the viewer unmutes. A block after that
+    // sets it again, and the pill is theirs again.
     const hasAudio = this.player ? this.player.hasAudibleSource() : true;
     // Two cases surface the pill:
     //  (a) integrator asked for `autoplay muted controls` — the classic
@@ -23612,14 +23618,24 @@ export class MoviElement extends HTMLElement {
     const shouldShow =
       this._muted &&
       hasAudio &&
-      !this._userHasUnmuted &&
       // A mute the VIEWER asked for is not a mute to offer a way out of. The
       // autoplay clause below cannot tell the two apart: on a player with
       // `controls autoplay` — which is most of them — pressing mute produced
       // "Tap to unmute", as though the browser had done it. The pill is for the
       // one case where something was taken away without being asked.
       !this._userChoseMute &&
-      ((this._controls && this._autoplay) || this._autoMutedForAutoplay);
+      // Two routes, and they answer to different histories.
+      //
+      // The declared setup — `autoplay muted controls` — is an opening
+      // position, so it stops offering the pill once the viewer has unmuted
+      // once: they have answered, and the answer holds.
+      //
+      // A mute the BROWSER imposed is not an opening position. It can happen
+      // at any point, it happens to a viewer who has already said they want
+      // sound, and it is the case the pill exists for — so it shows however
+      // many times they have unmuted before.
+      (this._autoMutedForAutoplay ||
+        (!this._userHasUnmuted && this._controls && this._autoplay));
     overlay.style.display = shouldShow ? "flex" : "none";
   }
 
@@ -32048,6 +32064,9 @@ export class MoviElement extends HTMLElement {
       // `_muted` directly without going through this setter, so they
       // can't accidentally trip the latch.
       this._userHasUnmuted = true;
+      // Whatever block put us here is answered. A later one sets this again
+      // and the pill comes back — see updateUnmuteOverlay.
+      this._autoMutedForAutoplay = false;
       this._userChoseMute = false;
       this.removeAttribute("muted");
     }
@@ -32099,6 +32118,7 @@ export class MoviElement extends HTMLElement {
     if (autoUnmuted) {
       this._muted = false;
       this._userHasUnmuted = true;
+      this._autoMutedForAutoplay = false;
       this.noteStoredChoice("muted", false);
       this.removeAttribute("muted");
       // Update player muted state immediately
