@@ -22694,6 +22694,24 @@ export class MoviElement extends HTMLElement {
           this._startAutoplay().catch(() => {});
         }
         break;
+      case "persist":
+      case "persistkey": {
+        // The remembered settings are normally put on in connectedCallback,
+        // before the first load. A framework does not give us that: React sets
+        // its props AFTER appending the element — measured, every attribute but
+        // `wasmurl` arrives with isConnected already true — so at connect time
+        // there is no `persist` to read, _persistNames() is empty, and the
+        // custom store restored nothing at all. (The always-on store was no
+        // help either: it reads the same attribute to decide whether it is
+        // still in charge, and by the time `persist` lands it has stood down.)
+        //
+        // So the restore runs again when the list itself arrives. It is
+        // idempotent — every branch either applies a stored value or skips —
+        // and the tracks half keeps its own once-per-source guard.
+        this.applyPersistedSettings();
+        this.applyPersistedTracks();
+        break;
+      }
       case "stablevolume":
         if (this.hostOverridingStoredChoice("stablevolume", newValue)) return;
         this._stableVolume = newValue !== null;
@@ -29690,6 +29708,16 @@ export class MoviElement extends HTMLElement {
    *  setting the host opted into. */
   private notePersistedAttribute(attr: string, value: string | null): void {
     if (this._applyingPersisted) return; // restoring, not choosing
+    // Nor is a host re-declaring its default a choice. hostOverridingStoredChoice
+    // puts the element back, but this runs off the same attribute change and
+    // would otherwise write the host's value into the store — leaving the store
+    // saying one thing and the player doing another, and handing the next load
+    // back the value the viewer had just overruled.
+    const known = this._storedChoice.get(attr);
+    if (known !== undefined && known !== value) {
+      const bothPresent = known !== null && value !== null;
+      if (!bothPresent || (known !== "" && value !== "")) return;
+    }
     const names = this._persistNames();
     if (names.size === 0) return;
     for (const [name, def] of Object.entries(MoviElement.PERSISTABLE)) {
@@ -29733,6 +29761,11 @@ export class MoviElement extends HTMLElement {
         if (!def) continue;
         const stored = this._prefRead(name);
         if (stored === null) continue;
+        // Recorded as the viewer's answer, the same way the always-on store's
+        // restore does — it is what stops a host re-declaring the attribute
+        // from taking the decision back. See hostOverridingStoredChoice.
+        if (def.boolean) this.noteStoredChoice(def.attr, stored === "1");
+        else if (name !== "aspect") this.noteStoredChoice(def.attr, true, stored);
         if (def.boolean) {
           if (stored === "1") this.setAttribute(def.attr, "");
           else this.removeAttribute(def.attr);
