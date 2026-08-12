@@ -108,6 +108,10 @@ export class AudioRenderer {
 
   // Stable audio: master toggle (off by default, opt-in via element attribute)
   private _stableAudio: boolean = false;
+  /** The state the GRAPH is actually wired for, so a repeated request for the
+   *  state we are already in doesn't tear the chain apart to rebuild it
+   *  identically — see setStableAudio. */
+  private _wiredStableAudio: boolean = false;
 
   // Audio output device (AudioContext.setSinkId). "" = system default.
   // Remembered here so it survives AudioContext re-creation (init runs again
@@ -2029,6 +2033,14 @@ export class AudioRenderer {
    * Enable/disable stable audio mode (dynamic range compression / loudness normalization)
    */
   setStableAudio(enabled: boolean): void {
+    // Rewiring is not free: it disconnects a node that ~40 live sources are
+    // feeding and reconnects it, and the break between the two is a hole in
+    // the output. Doing that for a state we are already in is a click for
+    // nothing — and the logs show every toggle arriving TWICE (the property
+    // and the attribute reflecting back onto each other), so each flip cost
+    // two of them.
+    if (this._wiredStableAudio === enabled) return;
+    this._wiredStableAudio = enabled;
     this._stableAudio = enabled;
     Logger.info(TAG, `Stable audio: ${enabled ? "enabled" : "disabled"}`);
 

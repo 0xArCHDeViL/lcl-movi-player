@@ -6732,6 +6732,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * picture starts to read as mush at 2x DPR, so that is the floor — and if
    * the ladder's smallest rung is lower than that, it is still the cheapest
    * thing on offer and wins by default.
+   *
+   * …but never ABOVE the rung being played. That floor is about how a preview
+   * LOOKS, and it only earns its cost while the picture beside it is better
+   * still. A player that opened on 144p did so because the link could not carry
+   * more, and pulling a 240p stream alongside it to draw hover stills is the
+   * one machine on the one link spending more on the preview than on the video.
+   * There the cheapest rung is also the honest one: a still can hardly be
+   * blurrier than the picture it is previewing.
    */
   private pickPreviewRendition(): {
     url: string;
@@ -6743,7 +6751,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const bySize = rungs
       .slice()
       .sort((a, b) => (a.height || 0) - (b.height || 0));
-    return bySize.find((r) => (r.height || 0) >= 240) || bySize[0];
+    const pick = bySize.find((r) => (r.height || 0) >= 240) || bySize[0];
+    // What is actually streaming, by url — the ladder is the only place a
+    // rendition's height is recorded.
+    const playingHeight =
+      this._dashRenditions.find((r) => r.url === this._activeDashRendition)
+        ?.height || 0;
+    if (playingHeight > 0 && (pick.height || 0) > playingHeight) {
+      // Tallest rung that is no taller than the picture. Falls back to the
+      // smallest when even that is above it, which is the cheapest read there
+      // is and the closest thing to "the same as playback" on offer.
+      return (
+        [...bySize].reverse().find((r) => (r.height || 0) <= playingHeight) ||
+        bySize[0]
+      );
+    }
+    return pick;
   }
 
   private async initPreviewPipeline() {
