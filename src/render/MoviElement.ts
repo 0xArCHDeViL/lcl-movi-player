@@ -27569,15 +27569,15 @@ export class MoviElement extends HTMLElement {
       shouldShow = false;
     }
 
-    // …and not while the bar is up. The two occupy the same picture, and
-    // between them the bar is the one the viewer summoned: it has the clock,
-    // the buffered range and a play button, which together say more about what
-    // the player is doing than a spinner can. Reaching for the controls and
-    // being answered with a spinner over them is the player talking over the
-    // viewer.
-    if (shouldShow && this.classList.contains("movi-bar-visible")) {
-      shouldShow = false;
-    }
+    // Raising the bar does NOT hide it. That was tried the other way round —
+    // the bar has the clock and the buffered range, so it seemed to say more
+    // about the wait than a spinner can — and it reads as the player going
+    // quiet at the moment you ask it what is happening: the picture is frozen,
+    // you reach for the controls, and the one thing that was telling you it is
+    // still working disappears. The bar says where playback IS; the spinner
+    // says it is still trying. They answer different questions and the
+    // stylesheet already lifts the spinner clear of the bar so both fit
+    // (:host(.movi-bar-visible) .movi-loading-indicator).
 
     // Just the spinner. "Never the button and the spinner together" is a rule
     // the stylesheet now states directly — :host(.is-buffering)
