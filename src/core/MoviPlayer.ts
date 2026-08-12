@@ -886,6 +886,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** How long after a rate change or a seek's resume an audio stall is still
    *  attributable to the flush/re-anchor that operation performed itself. */
   private static readonly SELF_INFLICTED_STALL_WINDOW_MS = 1500;
+  /**
+   * How long a bound stall may hold before it gives up and resumes on whatever
+   * it has.
+   *
+   * Generous on purpose. Under a binding the picture is frozen for the whole
+   * wait either way — resuming early does not un-freeze it, it only lets the
+   * sound walk off without it. So the only thing this protects against is a
+   * video pipeline that is not slow but DEAD, and for that the decoder's own
+   * error paths are the real answer; this is the backstop behind them.
+   */
+  private static readonly BOUND_RESUME_ESCAPE_MS = 15000;
   private _playStartTime: number = 0; // When play() was called — grace period for stall detection
   private _primingAudio = false; // true while the first-play buffer is filling its startup cushion
   private _decoderStuckSince: number = 0; // When video decoder was first detected stuck
@@ -4598,13 +4609,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // it starts with whatever cushion it built (a residual stall is possible
       // on such machines — the real fix is off-thread audio decode).
       const maxDwell = this._primingAudio ? 4000 : 3000;
-      // Resume if: (1) both ready after minDwell, (2) audio ready after longer
-      // wait, or (3) the max-dwell fallback (don't wait forever).
+      // Under a binding, audio alone is not enough to leave.
+      //
+      // `bindav` bound the way IN to a stall — either side running dry enters
+      // buffering — and left the way OUT on audio, which on a slow link is the
+      // side that is never short: a YouTube audio track is a fraction of its
+      // video, so it refills in the time the picture needs to fetch one frame.
+      // Measured on Slow 4G: the player entered buffering, served three
+      // seconds, resumed on audio alone, played a beat, and stalled again —
+      // and over 25 seconds of that the sound advanced from 6.8s to 14.2s
+      // while the picture sat at 6.04s throughout. Nothing was lost by the
+      // stalls, which freeze both properly; it was drifting apart in the
+      // moments BETWEEN them. Then the ABR dropped a rung, the video pipeline
+      // caught up in one jump, and the viewer saw playback "resume" eight
+      // seconds late. It had not resumed late — the picture had jumped forward
+      // to meet the sound.
+      //
+      // So when the two are bound, resuming needs both. The escape is far
+      // longer (see BOUND_RESUME_ESCAPE_MS): a bound wait costs nothing but
+      // the wait, since the picture is frozen throughout it either way.
+      const bound = this._bindAV && hasAudioTrack && !this.disableAudio;
+      const escapeMs = bound ? MoviPlayer.BOUND_RESUME_ESCAPE_MS : maxDwell;
+      // Resume if: (1) both ready after minDwell, (2) unbound, audio ready
+      // after a longer wait, or (3) the escape (don't wait forever).
       const canResume = dwellMs >= minDwell && (
         (audioReady && videoReady) ||
-        (audioReady && dwellMs >= 3000) ||
-        dwellMs >= maxDwell
+        (!bound && audioReady && dwellMs >= 3000) ||
+        dwellMs >= escapeMs
       );
+      if (canResume && bound && !(audioReady && videoReady)) {
+        Logger.warn(
+          TAG,
+          `Bound stall gave up after ${Math.round(dwellMs)}ms — audioReady=${audioReady} videoReady=${videoReady}`,
+        );
+      }
       if (canResume) {
         this._primingAudio = false;
         this._bufferingSelfInflicted = false;
