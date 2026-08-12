@@ -15309,8 +15309,14 @@ export class MoviElement extends HTMLElement {
          bottom bar can render over it if they ever collide. */
       .movi-unmute-overlay {
         position: absolute;
-        top: 16px;
-        left: 16px;
+        /* The corner is the host's to claim. A page that puts its own control
+           there — a back button on a full-screen reel, say — has nowhere else
+           to put it, while this pill only needs to be somewhere prominent. Set
+           --movi-unmute-left / --movi-unmute-top and it steps aside; a host
+           that has its own unmute can take it off entirely with
+           controlslist="nounmutepill". */
+        top: var(--movi-unmute-top, 16px);
+        left: var(--movi-unmute-left, 16px);
         z-index: 8;
         display: none;
         align-items: center;
@@ -15337,8 +15343,8 @@ export class MoviElement extends HTMLElement {
       }
       @container movi-host (max-width: 480px) {
         .movi-unmute-overlay {
-          top: 10px;
-          left: 10px;
+          top: var(--movi-unmute-top, 10px);
+          left: var(--movi-unmute-left, 10px);
           padding: 6px 11px;
           font-size: 12px;
         }
@@ -20301,7 +20307,12 @@ export class MoviElement extends HTMLElement {
       :host([controlslist~="nopip"]) .movi-pip-btn,
       :host([controlslist~="nofullscreen"]) .movi-fullscreen-btn,
       :host([controlslist~="nomore"]) .movi-more-btn,
-      :host([controlslist~="noprogress"]) .movi-progress-container {
+      :host([controlslist~="noprogress"]) .movi-progress-container,
+      /* The pill is a way BACK to sound for a viewer the browser silenced. A
+         page that already offers one — a Shorts strip with its own mute button
+         always on screen — is not hiding the way out, it is declining a second
+         one over its picture. */
+      :host([controlslist~="nounmutepill"]) .movi-unmute-overlay {
         display: none !important;
       }
       /* …and the context-menu rows that reach the same controls, so a control
