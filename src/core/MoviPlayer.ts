@@ -906,7 +906,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private animationFrameId: number | null = null;
   private backgroundIntervalId: number | null = null;
   private backgroundWorker: Worker | null = null; // Worker-based timer for Safari
-  private isBackgrounded: boolean = false; // True when tab is hidden (background)
+  /**
+   * True when the tab is hidden.
+   *
+   * Seeded from the document rather than starting false, because a player is
+   * not always born in a visible tab: an auto-advance while the viewer is away
+   * destroys one player and builds the next one, and that new instance never
+   * saw the visibilitychange that put the old one in the background. It came up
+   * believing it was on screen, waited for a video frame that nothing was
+   * decoding, and sat in buffering — silent — until the viewer came back. Every
+   * background-aware branch in this file depends on this flag being right from
+   * the first tick.
+   */
+  private isBackgrounded: boolean =
+    typeof document !== "undefined" && document.visibilityState === "hidden";
   /**
    * The page has said hidden does not mean unwatched — see MoviElement's
    * `backgroundplay`. Two things follow from it: an autoplay may START while
