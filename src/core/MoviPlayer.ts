@@ -6214,7 +6214,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // So the deadline only fires once the decoder has gone QUIET for a
       // moment. Frames still arriving push it out, up to a hard cap, because a
       // decoder producing frames nobody wants forever is its own failure.
-      const seekTimeoutMs = seekInBufferedRange ? 1500 : 3000;
+      // …and none of that reasoning applies while the tab is hidden, where
+      // video decode is skipped on purpose. There the deadline is not waiting
+      // for a slow decoder, it is waiting for one that was never asked to run:
+      // the frame cannot arrive, so the full 1500ms is spent before the next
+      // track can start. Measured on a background auto-advance — "Seek timeout
+      // after 1501ms (no frame decoded at all)". Complete on the next tick
+      // instead; the audio is the playback there and it is ready now. PiP is
+      // excluded: the picture is on screen and IS being decoded.
+      const noPictureComing = this.isBackgrounded && !this.isPiPActive;
+      const seekTimeoutMs = noPictureComing
+        ? 0
+        : seekInBufferedRange
+          ? 1500
+          : 3000;
       const seekStartedAt = performance.now();
       this._seekFrameProgressAt = 0;
       let seekTimeout: ReturnType<typeof setTimeout>;
