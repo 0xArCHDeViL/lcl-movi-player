@@ -8281,15 +8281,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return playedOut || reachedEnd || duration === 0;
   }
 
-  /** In audio-only mode the main processLoop (which normally emits "ended") is
-   *  parked, so the split-audio path must detect end-of-track itself — else a
-   *  finished track never fires "ended" and the host can't auto-advance. Emits
-   *  once the demuxer hit EOF (not a pause/stop) and the tail has drained.
-   *  Returns true when it ended. Safe from both the rAF loop and the background
-   *  timer. */
+  /** When the main processLoop (which normally emits "ended") is parked, the
+   *  split-audio path must detect end-of-track itself — else a finished track
+   *  never fires "ended" and the host can't auto-advance. Emits once the
+   *  demuxer hit EOF (not a pause/stop) and the tail has drained. Returns true
+   *  when it ended. Safe from both the rAF loop and the background timer.
+   *
+   *  Two ways the main loop is parked, and only the first was covered:
+   *
+   *    audio-only — there is no video pipeline to run.
+   *
+   *    BACKGROUNDED — rAF is throttled to nothing and video decode is skipped
+   *    on purpose, so the background timer runs the audio pump and nothing
+   *    else. A video watched with the tab hidden therefore played its audio
+   *    to the very end and then simply stopped: no EOF, no "ended", no
+   *    auto-advance, and the queue sat there until the viewer came back and
+   *    the main loop resumed. Read off a real session's log — audio draining
+   *    3901ms → 650ms while hidden, then "EOF reached / Playback ended" only
+   *    after "Foreground recovery". PiP is excluded because the video IS being
+   *    shown there, so the main loop is running and owns the transition. */
   private maybeEndSplitAudio(): boolean {
+    const mainLoopParked =
+      this._audioOnly || (this.isBackgrounded && !this.isPiPActive);
     if (
-      this._audioOnly &&
+      mainLoopParked &&
       this._splitAudioEof &&
       (this.stateManager.is("playing") || this.stateManager.is("buffering")) &&
       this.isSplitAudioPlayedOut()
@@ -8310,7 +8325,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // ticking until the buffered tail drains, then end — otherwise it stopped
     // for a pause/state change and we just idle.
     if (
-      this._audioOnly &&
+      (this._audioOnly || (this.isBackgrounded && !this.isPiPActive)) &&
       this._splitAudioEof &&
       (this.stateManager.is("playing") || this.stateManager.is("buffering"))
     ) {
