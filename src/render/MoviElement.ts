@@ -8584,6 +8584,13 @@ export class MoviElement extends HTMLElement {
         // declared with `srclang`/`label`, treat them as parallel language
         // tracks so the player surfaces the audio-language menu. Otherwise
         // fall back to the legacy single split-audio source path.
+        // This video's tracks REPLACE the last one's. The list was only ever
+        // assigned, never cleared, so a video with dubs left its languages
+        // behind: swapping to one without them skipped the branch below
+        // entirely and the menu went on offering the previous video's
+        // languages — pointing, of course, at the previous video's URLs.
+        // Same reason _parseChildSubtitleTracks replaces rather than merges.
+        this._audioTracks = [];
         if (audioSources.length > 0) {
           const langed = audioSources.filter((s) => s.srclang || s.label);
           if (audioSources.length > 1 && langed.length >= 2) {
