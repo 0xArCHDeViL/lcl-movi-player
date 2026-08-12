@@ -260,9 +260,32 @@ export interface MoviControlSpec {
   /** Position against a built-in: "play", "back10", "forward10", "volume",
    *  "time", "audio", "cc", "quality", "speed", "stableaudio", "hdr", "loop",
    *  "settings", "aspect", "pip", "fullscreen", "more". In the context menu,
-   *  the built-in's action name instead. Unknown or absent → the end. */
-  before?: string;
-  after?: string;
+   *  the built-in's action name instead. Unknown or absent → the end.
+   *
+   *  A LIST is tried in order, first match wins. That is not a nicety: half
+   *  the bar is conditional — the audio-track button exists only for a video
+   *  with dubs, HDR only for an HDR source, captions only when there are any —
+   *  so "the leftmost control in the right-hand capsule" cannot be named by a
+   *  single anchor. ["audio", "hdr", "cc"] says it once and keeps saying it
+   *  whichever of them the video turns out to have. */
+  before?: string | string[];
+  after?: string | string[];
+  /** Per-SURFACE placement, for when one pair cannot serve both.
+   *
+   *  The bar and the context menu are different lists with different
+   *  neighbours: a control can belong at the left edge of the bar's settings
+   *  capsule and directly under Loop in the menu, and before/after above can
+   *  only describe one of those. Anything given here wins for that surface;
+   *  anything left out falls back to before/after, so a host that only cares
+   *  about one surface never has to mention the other.
+   *
+   *  (The gear panel is not a surface a host control can be placed in — it
+   *  renders the player's own settings only. `placement` is bar, menu, or
+   *  both, and this mirrors it.) */
+  anchors?: {
+    bar?: { before?: string | string[]; after?: string | string[] };
+    menu?: { before?: string | string[]; after?: string | string[] };
+  };
   /** WHICH capsule it sits in — the bar draws one behind each group of
    *  controls, and this says which group this one belongs to.
    *
@@ -30772,8 +30795,7 @@ export class MoviElement extends HTMLElement {
     spec: MoviControlSpec,
     isMenu = false,
   ): void {
-    const find = (name?: string): Element | null => {
-      if (!name) return null;
+    const one = (name: string): Element | null => {
       if (isMenu) {
         return parent.querySelector(
           `.movi-context-menu-item[data-action="${name}"]`,
@@ -30786,12 +30808,24 @@ export class MoviElement extends HTMLElement {
       // the two stay adjacent when the tray collapses.
       return parent.querySelector(sel);
     };
-    const before = find(spec.before);
+    // A list is a set of fallbacks, in order: the first anchor that is actually
+    // on the bar wins. See `before` on the spec for why that matters.
+    const find = (name?: string | string[]): Element | null => {
+      if (!name) return null;
+      for (const n of Array.isArray(name) ? name : [name]) {
+        const el = n ? one(n) : null;
+        if (el) return el;
+      }
+      return null;
+    };
+    // Whatever this surface was given, falling back to the shared pair.
+    const surface = (isMenu ? spec.anchors?.menu : spec.anchors?.bar) ?? {};
+    const before = find(surface.before ?? spec.before);
     if (before?.parentElement) {
       before.parentElement.insertBefore(node, before);
       return;
     }
-    const after = find(spec.after);
+    const after = find(surface.after ?? spec.after);
     if (after?.parentElement) {
       after.parentElement.insertBefore(node, after.nextSibling);
       return;

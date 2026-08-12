@@ -4510,6 +4510,11 @@ export class CanvasRenderer {
    *  just inside it must be for that edge to be a real one. */
   private static readonly BAR_DARK = 18;
   private static readonly BAR_EDGE = 34;
+  /** What a REAL bar reads. Black bars come out of a decoder at essentially
+   *  zero; BAR_DARK is deliberately looser than that so compression noise and
+   *  banding still count as bar. The gap between the two is the ambiguous
+   *  band — see the walk-back in detectBars. */
+  private static readonly BAR_BLACK = 6;
   /** A bar this thick is not a bar. Nothing legitimate takes a quarter of the
    *  frame off each end. */
   private static readonly BAR_MAX = 0.25;
@@ -4668,6 +4673,33 @@ export class CanvasRenderer {
     if (!(right > 0 && colMax(size - 1 - right) > CanvasRenderer.BAR_EDGE)) {
       right = 0;
     }
+
+    // …and now give back the lines that were only DARK, not black.
+    //
+    // The mirror is 16 rows, so one row is a sixteenth of the frame — and the
+    // row the bar ends inside is a blend of bar and picture. Where the picture
+    // is dark at that edge (a night scene, a fade, a shot that opens on black)
+    // the blend still comes in under BAR_DARK and the whole row is taken as
+    // bar: 6% of the frame, 65 lines on a 1080p file, cut off a picture that
+    // was there. Worse, the bad measurement moves the computed aspect out of
+    // the snapping window below, so the one thing that would have corrected it
+    // never runs.
+    //
+    // A real bar is not dark, it is black. Walking back over the merely-dark
+    // lines costs at most one line of bar left on screen, and that is the
+    // right way round: a sliver of black nobody notices, instead of a strip of
+    // film nobody gets back.
+    //
+    // AFTER the test above, not before. That test asks whether the line just
+    // past the bar is bright, which is how a bar is told from a fade — and the
+    // line this walk-back hands over is the dim one, so testing against it
+    // answers "no bar at all" and crops nothing.
+    while (top > 0 && rowMax(size - 1 - (top - 1)) > CanvasRenderer.BAR_BLACK) {
+      top--;
+    }
+    while (bottom > 0 && rowMax(bottom - 1) > CanvasRenderer.BAR_BLACK) bottom--;
+    while (left > 0 && colMax(left - 1) > CanvasRenderer.BAR_BLACK) left--;
+    while (right > 0 && colMax(size - right) > CanvasRenderer.BAR_BLACK) right--;
 
     const found = {
       top: top / size,
