@@ -204,23 +204,30 @@ export class MoviAudioDecoder {
     }
   }
 
-  private needsSoftwareDecoding(codec: string): boolean {
-    const transcodingCodecs = [
-      "eac3",
-      "ac3",
-      "dts",
-      "dca",
-      "truehd",
-      "mlp",
-      "opus",
-      // FLAC's WebCodecs path reliably throws "EncodingError: Decoding error"
-      // (the FLAC STREAMINFO description it wants is finicky / browser-specific).
-      // The error→software fallback recovers in some browsers but not others, so
-      // decode FLAC in software from the start — like opus. (FFmpeg WASM handles
-      // it fine; verified producing samples.)
-      "flac",
-    ];
-    return transcodingCodecs.includes(codec.toLowerCase());
+  /**
+   * Every codec, in software. FFmpeg WASM decodes all of them; WebCodecs is no
+   * longer asked for any.
+   *
+   * It used to be a list — eac3, ac3, dts, dca, truehd, mlp, opus, flac — each
+   * added after its own WebCodecs failure: packet gaps it choked on, a FLAC
+   * description it would not accept, channel layouts it dropped. What that list
+   * really recorded is that the browser's audio decoders disagree with each
+   * other and with the demuxer feeding them, and that every disagreement was
+   * found by a user hearing it rather than by a test.
+   *
+   * The split had a second cost that only showed up once audio gained a
+   * bitrate ladder: with AAC native and opus in WASM, choosing a rung meant
+   * choosing a decoder, so a cheaper stream could cost more CPU than the
+   * expensive one and the ladder could not simply follow the link. One path
+   * makes bitrate the only variable again.
+   *
+   * The price is real and worth saying: AAC now decodes in WASM rather than in
+   * the browser's own code, which is more CPU per packet on exactly the phones
+   * where audio is already tight. Multi-channel and the error path came here
+   * anyway, so this is the same code that was already carrying the hard cases.
+   */
+  private needsSoftwareDecoding(_codec: string): boolean {
+    return true;
   }
 
   /**
