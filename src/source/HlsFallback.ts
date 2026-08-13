@@ -93,8 +93,15 @@ function resolveUrl(uri: string, base: string): string {
 async function fetchText(
   url: string,
   headers?: Record<string, string>,
+  // The owner's lifetime. A manifest is small, but the fetch is not the cost —
+  // a playlist that arrives after teardown gets PARSED, and everything the plan
+  // it produces goes on to open is work for a player that no longer exists.
+  signal?: AbortSignal,
 ): Promise<string> {
-  const res = await fetch(url, headers ? { headers } : undefined);
+  const res = await fetch(url, {
+    ...(headers ? { headers } : {}),
+    ...(signal ? { signal } : {}),
+  });
   if (!res.ok) throw new Error(`HLS playlist HTTP ${res.status}`);
   return res.text();
 }
@@ -310,9 +317,10 @@ export function buildVttFromSegments(texts: string[]): string {
 export async function loadHlsVariant(
   variantUrl: string,
   headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<{ segments: HlsSegment[]; initSegment?: string } | null> {
   try {
-    const text = await fetchText(variantUrl, headers);
+    const text = await fetchText(variantUrl, headers, signal);
     const track = parseMediaPlaylist(text, variantUrl);
     return track.segments.length
       ? { segments: track.segments, initSegment: track.initSegment }
@@ -326,9 +334,10 @@ export async function loadHlsVariant(
 async function loadMediaTrack(
   url: string,
   headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<HlsMediaTrack | null> {
   try {
-    const text = await fetchText(url, headers);
+    const text = await fetchText(url, headers, signal);
     const track = parseMediaPlaylist(text, url);
     return track.segments.length > 0 ? track : null;
   } catch (e) {
@@ -345,9 +354,10 @@ export async function analyzeHlsFallback(
   url: string,
   headers?: Record<string, string>,
   forceVariantUrl?: string,
+  signal?: AbortSignal,
 ): Promise<HlsFallbackPlan | null> {
   try {
-    const text = await fetchText(url, headers);
+    const text = await fetchText(url, headers, signal);
 
     // Media playlist directly (muxed, no alternate renditions).
     if (!isMaster(text)) {
@@ -379,7 +389,7 @@ export async function analyzeHlsFallback(
       return null;
     }
 
-    const videoTrack = await loadMediaTrack(best.url, headers);
+    const videoTrack = await loadMediaTrack(best.url, headers, signal);
     if (!videoTrack) {
       Logger.warn(TAG, "best variant media playlist unusable");
       return null;
@@ -429,7 +439,7 @@ export async function analyzeHlsFallback(
       }
       const loaded = await Promise.all(
         [...byLang.values()].map(async (t) => {
-          const track = await loadMediaTrack(t.uri!, headers);
+          const track = await loadMediaTrack(t.uri!, headers, signal);
           if (!track) return null;
           const lang = t.language || "und";
           const rendition: HlsAudioRendition = {
@@ -459,7 +469,7 @@ export async function analyzeHlsFallback(
       }
       const loaded = await Promise.all(
         [...byLang.values()].map(async (t) => {
-          const track = await loadMediaTrack(t.uri!, headers);
+          const track = await loadMediaTrack(t.uri!, headers, signal);
           if (!track) return null;
           const lang = t.language || "und";
           const rendition: HlsSubtitleRendition = {

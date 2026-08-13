@@ -732,7 +732,9 @@ export class NativeVideoWrapper extends EventEmitter<PlayerEventMap> {
         // CORS-enabled — a real limit, since the native fallback often exists
         // BECAUSE the media is no-CORS, though subtitle files are usually served
         // separately. On failure subtitles stay off; playback is untouched.
-        const res = await fetch(track.url);
+        const res = await fetch(track.url, {
+          signal: this.lifetimeAbort.signal,
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         this.cueBlobUrl = URL.createObjectURL(
           new Blob([srtToVtt(await res.text())], { type: "text/vtt" }),
@@ -1213,7 +1215,11 @@ export class NativeVideoWrapper extends EventEmitter<PlayerEventMap> {
     this.audio = null;
   }
 
+  /** Aborted by destroy(), so a subtitle fetch can't outlive the wrapper. */
+  private readonly lifetimeAbort = new AbortController();
+
   destroy(): void {
+    this.lifetimeAbort.abort();
     if (this._destroyed) return;
     this._destroyed = true;
     this._playIntent = false;

@@ -55,6 +55,7 @@ import { ShakaPlayerWrapper } from "../render/ShakaPlayerWrapper";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
 import { DASHPlayerWrapper } from "../render/DASHPlayerWrapper";
 import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
+import { childAbort } from "../utils/abort";
 
 // Any of the three adaptive-streaming engines (Shaka primary; hls.js / dash.js
 // as fallbacks). They share the same surface; the Shaka-only extras (isLive,
@@ -517,6 +518,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // continuation must bail instead of configuring/rendering onto the now-shared
   // canvas of the successor player (which showed as a black frame).
   private _destroyed: boolean = false;
+  /**
+   * Aborted by destroy(), and the signal every request this player makes is
+   * expected to carry.
+   *
+   * The sources already cancelled their own work; nothing else did, because
+   * nothing else had a handle to cancel WITH. A probe built its AbortController
+   * as a local and only ever aborted it on its own timer; the subtitle loaders
+   * passed no signal at all. So a player torn down mid-startup kept pulling
+   * megabytes for a video that was already gone — off the link the replacement
+   * player was trying to start on.
+   */
+  private _lifetimeAbort = new AbortController();
+
+  /** The signal for anything fetched on this player's behalf. */
+  get lifetimeSignal(): AbortSignal {
+    return this._lifetimeAbort.signal;
+  }
   // PTS (media time) of the last split-audio packet handed to the decoder. The
   // audio loop bounds its lead against the CLOCK using this — not the
   // AudioRenderer buffer, which mis-reports while the AudioContext is suspended
@@ -1372,7 +1390,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // in which case we fall back to the normal stream path below.
       if (this.config.forceStreamDemux && isDash) {
         try {
-          const plan = await analyzeDashFallback(streamUrl!, src?.headers);
+          const plan = await analyzeDashFallback(streamUrl!, src?.headers, this.lifetimeSignal);
           if (plan) {
             Logger.info(
               TAG,
@@ -1442,6 +1460,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             streamUrl!,
             src?.headers,
             this.config.forceVideoRendition,
+            this.lifetimeSignal,
           );
           if (plan) {
             Logger.info(
@@ -1592,7 +1611,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         let fellBack = false;
         if (isDash) {
           try {
-            const plan = await analyzeDashFallback(streamUrl!, src?.headers);
+            const plan = await analyzeDashFallback(streamUrl!, src?.headers, this.lifetimeSignal);
             if (plan) {
               Logger.info(TAG, "Falling back to the FFmpeg demuxer");
               this.source = await this.createSource({
@@ -1931,7 +1950,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     let newSource: SourceAdapter;
     try {
       if (isHls) {
-        const variant = await loadHlsVariant(newRenditionUrl, headers);
+        const variant = await loadHlsVariant(newRenditionUrl, headers, this.lifetimeSignal);
         if (!variant) return endSwitch(false);
         newSource = new SegmentStreamSource(
           variant.segments,
@@ -2300,6 +2319,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       rungs[Math.min(rungs.length - 1, Math.floor(rungs.length / 2))];
     const bits = await probeLinkBandwidth(probe.url, {
       headers: this.config.headers,
+      signal: this.lifetimeSignal,
     });
     if (this._destroyed || bits <= 0) return;
     // Seed only if playback hasn't already measured a HIGHER sustained rate
@@ -3040,7 +3060,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const TIMED_BYTES = 600_000; // enough to be a measurement
     const TIMED_MS = 500;
     const PROBE_BYTES = 2_000_000; // hard ceiling, rarely reached
-    const ctl = new AbortController();
+    // Its own 6s cap AND the player's lifetime: a probe is up to 2MB of a link
+    // the viewer may already have navigated away from, and the local controller
+    // this used to build was invisible to destroy().
+    const ctl = childAbort(this.lifetimeSignal);
     const timer = setTimeout(() => ctl.abort(), 6000);
     try {
       const startedAt = performance.now();
@@ -8100,10 +8123,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   ): Promise<SubtitleSourceEntry[]> {
     const out: SubtitleSourceEntry[] = [];
     for (const r of renditions) {
+      // A rendition is one request PER SEGMENT — dozens of them, fired at once
+      // and none of them cancellable, which made this the largest single source
+      // of traffic outliving a torn-down player. The signal goes on every one,
+      // and the loop stops between renditions too so a long list doesn't start
+      // a fresh batch after teardown.
+      if (this._lifetimeAbort.signal.aborted) break;
       try {
         const texts = await Promise.all(
           r.segments.map((s) =>
-            fetch(s.url, headers ? { headers } : undefined)
+            fetch(s.url, {
+              ...(headers ? { headers } : {}),
+              signal: this.lifetimeSignal,
+            })
               .then((res) => (res.ok ? res.text() : ""))
               .catch(() => ""),
           ),
@@ -8833,7 +8865,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     try {
       // Fetch subtitle file
-      const res = await fetch(track.url);
+      const res = await fetch(track.url, { signal: this.lifetimeSignal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
 
@@ -10948,6 +10980,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   destroy(): void {
     Logger.info(TAG, "Destroying player");
     this._destroyed = true;
+    // First, before any of the teardown below. Everything this player has in
+    // flight — probes, subtitle segments, manifest fetches, ranged reads —
+    // carries this signal, and the point of it is that they stop the moment the
+    // player does rather than finishing into a void. The sources are closed
+    // further down as well; that is belt and braces, not the mechanism.
+    this._lifetimeAbort.abort();
 
     // Stop driving a host subtitle renderer, but DON'T destroy it — the renderer
     // is owned by whoever registered it (the element re-applies it to the fresh

@@ -147,10 +147,13 @@ function contentTypeOf(
 export async function analyzeDashFallback(
   manifestUrl: string,
   headers?: Record<string, string>,
+  // The owner's lifetime, so a manifest for a player that has been torn down
+  // stops rather than arriving and being parsed into a plan nobody will open.
+  signal?: AbortSignal,
 ): Promise<DashFallbackPlan | null> {
   let xml: string;
   try {
-    const res = await fetch(manifestUrl, { headers });
+    const res = await fetch(manifestUrl, { headers, signal });
     if (!res.ok) return null;
     xml = await res.text();
   } catch (e) {

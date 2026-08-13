@@ -709,6 +709,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
         session.addEventListener("message", async (e) => {
           // Request license from server
           const response = await fetch(licenseUrl, {
+          signal: this.lifetimeAbort.signal,
             method: "POST",
             body: e.message,
             headers: {
@@ -914,7 +915,11 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     return false;
   }
 
+  /** Aborted by destroy(), so a DRM licence request can't outlive the wrapper. */
+  private readonly lifetimeAbort = new AbortController();
+
   destroy(): void {
+    this.lifetimeAbort.abort();
     this.stopFrameLoop();
 
     if (this.hls) {

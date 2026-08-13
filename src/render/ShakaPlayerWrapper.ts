@@ -906,7 +906,10 @@ export class ShakaPlayerWrapper extends EventEmitter<PlayerEventMap> {
     if (!p) {
       p = (async () => {
         try {
-          const res = await fetch(uri, { mode: "cors" });
+          const res = await fetch(uri, {
+            mode: "cors",
+            signal: this.lifetimeAbort.signal,
+          });
           if (!res.ok) return null;
           return await createImageBitmap(await res.blob());
         } catch (e) {
@@ -1106,7 +1109,11 @@ export class ShakaPlayerWrapper extends EventEmitter<PlayerEventMap> {
     return false;
   }
 
+  /** Aborted by destroy(), so a thumbnail/image fetch can't outlive the wrapper. */
+  private readonly lifetimeAbort = new AbortController();
+
   destroy(): void {
+    this.lifetimeAbort.abort();
     this.stopFrameLoop();
 
     // Release cached thumbnail sprite sheets.

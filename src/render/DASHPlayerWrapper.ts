@@ -634,6 +634,7 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
         const session = keys.createSession();
         session.addEventListener("message", async (e) => {
           const response = await fetch(licenseUrl, {
+          signal: this.lifetimeAbort.signal,
             method: "POST",
             body: e.message,
             headers: {
@@ -818,7 +819,11 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
     return false;
   }
 
+  /** Aborted by destroy(), so a DRM licence request can't outlive the wrapper. */
+  private readonly lifetimeAbort = new AbortController();
+
   destroy(): void {
+    this.lifetimeAbort.abort();
     this.stopFrameLoop();
 
     if (this.dash) {

@@ -34,6 +34,7 @@ import { VERSION } from "../version";
 import { IS_SLIM, BUILD } from "../build-flags";
 import { setWasmUrl } from "../wasm/FFmpegLoader";
 import { probeLinkBandwidth } from "../utils/bandwidthProbe";
+import { childAbort } from "../utils/abort";
 
 const TAG = "MoviElement";
 
@@ -9290,6 +9291,7 @@ export class MoviElement extends HTMLElement {
       skipBytes: 2_000_000,
       measureBytes: 900_000,
       timeoutMs: 6000,
+      signal: this._sourceAbort.signal,
     });
     if (bits <= 0) {
       // Unmeasurable — keep the smallest rung. Logged with the elapsed time
@@ -9513,7 +9515,9 @@ export class MoviElement extends HTMLElement {
   private async _probeHeadAndWarm(url: string): Promise<number> {
     const BURST_BYTES = 1_000_000; // ignored for timing — this is the burst
     const HEAD_BYTES = 3_000_000; // enough for moov + the first GOP
-    const ctl = new AbortController();
+    // Its own 6s cap AND the source's lifetime — 3MB is not something to keep
+    // pulling for a video the viewer has already navigated past.
+    const ctl = childAbort(this._sourceAbort.signal);
     const timer = setTimeout(() => ctl.abort(), 6000);
     const startedAt = performance.now();
     try {
@@ -22854,6 +22858,8 @@ export class MoviElement extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // Nothing fetched for a player that is no longer in the document is wanted.
+    this._sourceAbort.abort();
     // Drop any pending rounding re-applies — see connectedCallback.
     for (const t of this._roundingTimers) clearTimeout(t);
     this._roundingTimers.clear();
@@ -26187,7 +26193,29 @@ export class MoviElement extends HTMLElement {
    * element — the canvas owns a WebGL2 context that the next renderer reuses,
    * and resetting the <video> can interfere with the DRM/HLS path.
    */
+  /**
+   * Aborted whenever the current source goes away — a new src, a dispose, a
+   * disconnect — and carried by every request the ELEMENT makes on its own
+   * behalf (the pre-play probe, the head-burst probe).
+   *
+   * These run before a player exists, so the player's own lifetime signal
+   * cannot cover them, and they are the largest of the lot: the pre-play probe
+   * alone asks for 2.9MB. The element already noticed when they were pointless
+   * — "Init superseded during the pre-play probe — dropping" — but it dropped
+   * the RESULT while the download carried on, on the link the replacement was
+   * trying to start on.
+   */
+  private _sourceAbort = new AbortController();
+
+  /** Retire the current source's requests and open a fresh scope for the next. */
+  private abortSourceRequests(): void {
+    this._sourceAbort.abort();
+    this._sourceAbort = new AbortController();
+  }
+
   dispose(): void {
+    // Whatever the outgoing source still had in flight is waste now.
+    this.abortSourceRequests();
     // Every open panel belongs to the source that is going away. The track
     // menus emptied themselves by rebuilding, which is why they LOOKED like
     // they closed; the settings panel did not, and it was left standing over a
