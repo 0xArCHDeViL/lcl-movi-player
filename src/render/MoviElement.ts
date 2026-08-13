@@ -13898,12 +13898,17 @@ export class MoviElement extends HTMLElement {
    *  Must track the 0.68 offset in the keyframes below — everything before it
    *  sits at full opacity. */
   private static readonly CENTER_FLASH_FADE_AT = 0.68;
+  /** The other shape: a press on a button that is ALREADY on screen. There is
+   *  nothing to pop in, so it is all exit — a short hold, then the same fade.
+   *  Shorter than the full flash because the hold is only there to let the
+   *  glyph register, not to bring an icon into view. */
+  private static readonly CENTER_FLASH_EXIT_MS = 520;
+  private static readonly CENTER_FLASH_EXIT_FADE_AT = 0.34;
   private _centerFlashAnim: Animation | null = null;
   private _centerFlashTimer: number | null = null;
-  /** Whether the flash in flight ends by fading out (armed while the button's
-   *  resting state was hidden) rather than holding solid. Only a fading one
-   *  can disagree with a button that has since become a persistent control. */
-  private _centerFlashFades = false;
+  /** When the flash in flight starts fading, in ms from its own start. Stored
+   *  per flash because the two shapes hold for different lengths. */
+  private _centerFlashFadeAtMs = 0;
   private _centerFlashSettleTimer: number | null = null;
 
   /**
@@ -13932,7 +13937,7 @@ export class MoviElement extends HTMLElement {
   private cancelCenterFlash(): void {
     this._centerFlashAnim?.cancel();
     this._centerFlashAnim = null;
-    this._centerFlashFades = false;
+    this._centerFlashFadeAtMs = 0;
     if (this._centerFlashTimer) {
       clearTimeout(this._centerFlashTimer);
       this._centerFlashTimer = null;
@@ -13964,10 +13969,8 @@ export class MoviElement extends HTMLElement {
    */
   private settleCenterFlashSolid(): void {
     const anim = this._centerFlashAnim;
-    // A flash that already ends solid agrees with the class — leave it alone.
-    if (!anim || !this._centerFlashFades) return;
-    const fadeAt =
-      MoviElement.CENTER_FLASH_MS * MoviElement.CENTER_FLASH_FADE_AT;
+    if (!anim) return;
+    const fadeAt = this._centerFlashFadeAtMs;
     const at = typeof anim.currentTime === "number" ? anim.currentTime : 0;
     if (at >= fadeAt) {
       // Already fading — the flicker is imminent, so take it now.
@@ -13978,84 +13981,6 @@ export class MoviElement extends HTMLElement {
     this._centerFlashSettleTimer = window.setTimeout(() => {
       this._centerFlashSettleTimer = null;
       if (this._centerFlashAnim === anim) this.cancelCenterFlash();
-    }, fadeAt - at);
-  }
-
-  /**
-   * The mirror case: the button has STOPPED being a persistent control while a
-   * flash armed as one is still in flight.
-   *
-   * That flash was built to end solid — at press time the button's resting
-   * state was visible, so there was nothing to fade back to. Pressing play on
-   * the poster is exactly that, and the class comes off within a frame or two
-   * of the press because the intent is now "playing". The animation then holds
-   * the button at full opacity for the rest of its 800ms and, having no fill,
-   * drops to the resting style at the end — straight to hidden, in one frame.
-   * Measured: opacity 1 from 20ms, motionless, then 0 at 817ms. That freeze
-   * and snap is what reads as the icon being stuck.
-   *
-   * So give it the ending it would have had. Let the pop and hold finish, then
-   * take over at the fade boundary with the same tail a receipt on a hidden
-   * button uses, so both endings look alike.
-   */
-  private settleCenterFlashHidden(): void {
-    const anim = this._centerFlashAnim;
-    // A flash that already fades leaves correctly on its own.
-    if (!anim || this._centerFlashFades) return;
-    const fadeAt =
-      MoviElement.CENTER_FLASH_MS * MoviElement.CENTER_FLASH_FADE_AT;
-    const at = typeof anim.currentTime === "number" ? anim.currentTime : 0;
-    const fadeOut = () => {
-      const btn = this.shadowRoot?.querySelector(
-        ".movi-center-play-pause",
-      ) as HTMLElement | null;
-      this.cancelCenterFlash();
-      // The class can come back while this was pending — a replay, a tap that
-      // raised the chrome on touch. Then the button is meant to be solid and
-      // there is nothing to fade.
-      if (!btn || btn.classList.contains("movi-center-visible")) return;
-      const tail = btn.animate(
-        [
-          {
-            visibility: "visible",
-            opacity: 1,
-            transform: "translate(-50%, -50%) scale(1)",
-            easing: "ease-out",
-          },
-          {
-            visibility: "visible",
-            opacity: 0,
-            transform: "translate(-50%, -50%) scale(1.08)",
-          },
-        ],
-        {
-          duration:
-            MoviElement.CENTER_FLASH_MS *
-            (1 - MoviElement.CENTER_FLASH_FADE_AT),
-          fill: "none",
-        },
-      );
-      // Tracked like any other flash so the glyph stays put while it runs and
-      // the usual cleanup applies.
-      this._centerFlashAnim = tail;
-      this._centerFlashFades = true;
-      const clear = () => {
-        if (this._centerFlashAnim === tail) {
-          this._centerFlashAnim = null;
-          this._centerFlashFades = false;
-        }
-      };
-      tail.addEventListener("finish", clear);
-      tail.addEventListener("cancel", clear);
-    };
-    if (at >= fadeAt) {
-      fadeOut();
-      return;
-    }
-    if (this._centerFlashSettleTimer) return;
-    this._centerFlashSettleTimer = window.setTimeout(() => {
-      this._centerFlashSettleTimer = null;
-      if (this._centerFlashAnim === anim) fadeOut();
     }, fadeAt - at);
   }
 
@@ -14121,61 +14046,74 @@ export class MoviElement extends HTMLElement {
     // it, settles ON it, and drifts a touch over as it goes. Ending well past
     // that (the old 1.22) read as a second, oversized button; staying entirely
     // under it read as a shrunken one.
-    const anim = btn.animate(
-      [
-        {
-          offset: 0,
-          visibility: "visible",
-          opacity: 1,
-          transform: "translate(-50%, -50%) scale(0.82)",
-          easing: "ease-out",
-        },
-        // Pop settles here (~220ms) and then nothing moves…
-        {
-          offset: 0.25,
-          visibility: "visible",
-          opacity: 1,
-          transform: "translate(-50%, -50%) scale(1)",
-        },
-        // …for a third of a second, which is enough to read without the icon
-        // starting to feel like it is sitting there.
-        {
-          offset: 0.68,
-          visibility: "visible",
-          opacity: 1,
-          transform: "translate(-50%, -50%) scale(1)",
-          easing: "ease-out",
-        },
-        {
-          offset: 1,
-          visibility: "visible",
-          // A button whose resting state is HIDDEN fades out — the flash is the
-          // only reason it was on screen, so it leaves the way it came. One
-          // that is a persistent control stays at full opacity instead: fading
-          // it would fight the class holding it solid, and the last frame (no
-          // fill) would snap it back to 1 — the flicker this used to trade the
-          // whole animation away to avoid. Only the tail differs; the pop the
-          // viewer is actually reading is identical either way.
-          opacity: persistent ? 1 : 0,
-          transform: persistent
-            ? "translate(-50%, -50%) scale(1)"
-            : "translate(-50%, -50%) scale(1.08)",
-        },
-      ],
-      {
-        duration: MoviElement.CENTER_FLASH_MS,
-        // No fill: when it ends the element simply returns to its resting
-        // style (hidden, or solid when persistent), so there is nothing to
-        // clean up and no chance of a stuck frame if the finish handler never
-        // runs.
-        fill: "none",
-      },
-    );
+    // An icon already on screen must not pop IN again. It is sitting at full
+    // size and full opacity; starting the receipt at 0.82 shrinks it and grows
+    // it back, which reads as the button leaving and returning before it
+    // finally goes — "click pe fir se pop hoke aaya then fir gaya". Pressing
+    // the poster's play button is the case, and there the only motion that
+    // means anything is the icon going away. So the exit shape holds where the
+    // button already is and then leaves; the pop belongs to the other shape,
+    // where the button is coming from nowhere and has to arrive first.
+    //
+    // Scale is tuned against the button's resting size: the pop starts a touch
+    // under it, settles ON it, and both shapes drift a touch over as they go.
+    // Ending well past that (the old 1.22) read as a second, oversized button;
+    // staying entirely under it read as a shrunken one.
+    const held = "translate(-50%, -50%) scale(1)";
+    const gone = "translate(-50%, -50%) scale(1.08)";
+    const frames = persistent
+      ? [
+          { offset: 0, visibility: "visible", opacity: 1, transform: held },
+          {
+            offset: MoviElement.CENTER_FLASH_EXIT_FADE_AT,
+            visibility: "visible",
+            opacity: 1,
+            transform: held,
+            easing: "ease-out",
+          },
+          { offset: 1, visibility: "visible", opacity: 0, transform: gone },
+        ]
+      : [
+          {
+            offset: 0,
+            visibility: "visible",
+            opacity: 1,
+            transform: "translate(-50%, -50%) scale(0.82)",
+            easing: "ease-out",
+          },
+          // Pop settles here (~220ms) and then nothing moves…
+          { offset: 0.25, visibility: "visible", opacity: 1, transform: held },
+          // …for a third of a second, which is enough to read without the icon
+          // starting to feel like it is sitting there.
+          {
+            offset: MoviElement.CENTER_FLASH_FADE_AT,
+            visibility: "visible",
+            opacity: 1,
+            transform: held,
+            easing: "ease-out",
+          },
+          { offset: 1, visibility: "visible", opacity: 0, transform: gone },
+        ];
+    const duration = persistent
+      ? MoviElement.CENTER_FLASH_EXIT_MS
+      : MoviElement.CENTER_FLASH_MS;
+    const anim = btn.animate(frames, {
+      duration,
+      // No fill: when it ends the element simply returns to its resting style,
+      // so there is nothing to clean up and no chance of a stuck frame if the
+      // finish handler never runs.
+      fill: "none",
+    });
     this._centerFlashAnim = anim;
-    // Only a non-persistent flash ends by fading, and only a fading one can
-    // fall out of step with a button that becomes solid mid-air — see
-    // settleCenterFlashSolid.
-    this._centerFlashFades = !persistent;
+    // Both shapes fade out now. A button that is STILL a persistent control
+    // when the fade is due has that tail dropped instead — see
+    // settleCenterFlashSolid — which is what keeps a fade from fighting the
+    // class holding it solid.
+    this._centerFlashFadeAtMs =
+      duration *
+      (persistent
+        ? MoviElement.CENTER_FLASH_EXIT_FADE_AT
+        : MoviElement.CENTER_FLASH_FADE_AT);
     // Set after the animation exists, because setSpinnerVisible(false) above
     // clears this flag — and it is what tells done() to ask for the spinner
     // back. (A spinner that wants to appear DURING the flash sets it too.)
@@ -14183,7 +14121,7 @@ export class MoviElement extends HTMLElement {
     const done = () => {
       if (this._centerFlashAnim === anim) {
         this._centerFlashAnim = null;
-        this._centerFlashFades = false;
+        this._centerFlashFadeAtMs = 0;
       }
       // Retire this flash's settle timer. It already checks that the animation
       // it fires for is still the current one, so it cannot cancel a later
@@ -26921,23 +26859,10 @@ export class MoviElement extends HTMLElement {
             // now handled by NOT gating on isSuppressedSeek (so spinner-less
             // buffering blips don't churn the icon) plus the isLoading guard,
             // so a sync add no longer races a remove.
-            // A flash still in flight has to be reconciled with the class.
-            // flashCenterIcon() skips the fade when the button is ALREADY a
-            // persistent control, but the two can arrive in the other order:
-            // on an engine whose paused state lands asynchronously (the native
-            // fallback takes it from the <video>'s own `pause` event) the
-            // press fires the flash first and this class a beat later. The
-            // flash then fades a button the class says should be solid, and on
-            // its last frame — no fill — the element snaps back to opacity 1.
-            // Measured on the fallback: visible at 322ms, fading from 914ms,
-            // back to full at 1141ms. That snap IS the flicker.
-            //
-            // This used to cancel the flash outright, which killed the whole
-            // receipt rather than just its fade — see settleCenterFlashSolid,
-            // which drops only the tail.
-            if (!centerPlayPauseBtn.classList.contains("movi-center-visible")) {
-              this.settleCenterFlashSolid();
-            }
+            // Reconciling a flash with this class is handled once, at the end
+            // of this method, where the settled state is known — see there.
+            // It used to happen on this line, and by cancelling outright,
+            // which killed the whole receipt rather than just its tail.
             centerPlayPauseBtn.classList.add("movi-center-visible");
           } else {
             centerPlayPauseBtn.classList.remove("movi-center-visible");
@@ -26947,16 +26872,16 @@ export class MoviElement extends HTMLElement {
     }
 
     // Every branch above has had its say on the class, so this is the first
-    // point that knows the button's settled resting state. A flash armed for
-    // the other one has to be reconciled with it: a solid-ending flash on a
-    // button now hidden needs a fade. (The opposite case is handled at the add
-    // site above, because only that branch can be sure the class is going on.)
-    // A no-op unless there is a mismatched flash in flight.
+    // point that knows the button's settled resting state — and every flash
+    // now ends by fading out. On a button that is settling SOLID that tail is
+    // wrong: it would fade something the class holds visible and then snap it
+    // back on the last frame. Drop the tail there. A no-op when no flash is in
+    // flight, which is almost always.
     if (
       centerPlayPauseBtn &&
-      !centerPlayPauseBtn.classList.contains("movi-center-visible")
+      centerPlayPauseBtn.classList.contains("movi-center-visible")
     ) {
-      this.settleCenterFlashHidden();
+      this.settleCenterFlashSolid();
     }
 
     // The bar names what a click will DO, and that just changed.
