@@ -2213,6 +2213,17 @@ export class HttpSource implements SourceAdapter {
   }
 
   /**
+   * The file size if it is already known, -1 before it has been resolved.
+   *
+   * getSize() is the way to ASK for it (it will go and fetch it); this is for
+   * callers on a synchronous path — a UI tick reading the buffered range — that
+   * want the answer only if it is already in hand.
+   */
+  getKnownSize(): number {
+    return this.size;
+  }
+
+  /**
    * Get the current buffered end position in bytes
    * This represents the furthest byte that has been buffered
    * Uses the maximum of current buffer window and historical max position,

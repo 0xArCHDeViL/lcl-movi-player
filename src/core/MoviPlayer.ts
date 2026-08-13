@@ -10228,6 +10228,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           : this.clock.getTime();
     Logger.debug(TAG, `${reason}: video-only seek to ${audioTime.toFixed(2)}s`);
 
+    // "Video-only" is the whole point of this recovery — and the one thing a
+    // binding does not allow. The sound is asked to carry on while the picture
+    // is re-fetched and re-decoded, which on a healthy link is a blink and on a
+    // failing one is the complaint itself: audio-only switched back to video,
+    // the video would not fetch, the spinner came up, and the sound played
+    // straight through it without ever waiting for the picture.
+    //
+    // Worse, this is the one recovery that can take the pipeline with it. It
+    // cancels the loop below and then blocks on demuxer.seek(); if that seek
+    // never lands — a link that died in the same moment — processLoop is never
+    // restarted, and processLoop is where stall detection, the resume gate and
+    // the demux timeout all live. Read off the session this came from: 5,628
+    // further log lines, not one buffering event, the sound running on over a
+    // picture that stopped at 42s. Holding here fixes both — the viewer gets
+    // the spinner and silence that match what is actually happening, and if the
+    // seek does hang we hang in the honest state instead of a false "playing".
+    const boundHold =
+      this._bindAV &&
+      !this.disableAudio &&
+      (!!this.audioDemuxer || !!this.trackManager.getActiveAudioTrack()) &&
+      this.stateManager.is("playing");
+    if (boundHold) {
+      this.wasPlayingBeforeRebuffer = true;
+      this._bufferingEntryTime = performance.now();
+      // Our own doing, not a starved pipeline: resume on readiness rather than
+      // serving the cushion meant for a decoder that fell behind.
+      this._bufferingSelfInflicted = true;
+      this.stateManager.setState("buffering");
+      this.clock.pause();
+      this.audioRenderer?.suspendForBuffering();
+      this.videoRenderer?.stopPresentationLoop();
+    }
+
     // Cancel any in-flight processLoop to avoid demux conflicts during seek
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
@@ -10283,8 +10316,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.seekCraSeen = 0;
       this.videoChainBrokenUntilKeyframe = false;
 
-      // Restart video pipeline
-      if (this.videoRenderer) {
+      // Restart video pipeline. Held (see boundHold), the presentation loop
+      // stays down so the catch-up's frames ACCUMULATE — that queue is what the
+      // resume gate measures before it lets sound and picture go together, and
+      // a loop running through the wait would consume each frame as it landed
+      // and leave the gate with nothing to find.
+      if (this.videoRenderer && !boundHold) {
         this.videoRenderer.startPresentationLoop();
       }
       this.processLoop();
@@ -10540,6 +10577,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const duration = this.mediaInfo.duration;
     if (duration <= 0) {
       return 0;
+    }
+
+    // Audio-only: the bar has to answer for the AUDIO, since that is the only
+    // thing still being fetched. The video source's prefetch is paused by this
+    // very mode, so its read cursor and its window cannot move — the forward
+    // delta the maths below computes is frozen, and `currentTime + a constant`
+    // is a bar that grows only because the playhead does. That is exactly what
+    // it looks like: a buffer that tracks the progress instead of leading it.
+    //
+    // A linear byte→time map is honest for audio in a way it is not for video:
+    // an AAC/Opus track holds its bitrate, so bytes and seconds stay in step.
+    if (this._audioOnly && this.audioSource instanceof HttpSource) {
+      const audio = this.audioSource;
+      if (audio.isFullyCached()) return duration;
+      const size = audio.getKnownSize();
+      const end = audio.getBufferedEnd();
+      if (size > 0 && end > 0) {
+        return Math.min(duration, (end / size) * duration);
+      }
     }
 
     // For HttpSource, report the buffered-end *relative* to the source's
