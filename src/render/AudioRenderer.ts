@@ -31,6 +31,23 @@ let sharedAudioContext: AudioContext | null = null;
 // wakes it during init(), before autoplay's block-check runs. Stays false until
 // the first real gesture so a brand-new page's poster-seek can't leak audio.
 let sharedContextActivated = false;
+/**
+ * "Somebody suspended this context on purpose."
+ *
+ * Module scope, because the context is module scope. This was an instance
+ * field, and on a shared context that made every renderer's watchdog judge a
+ * suspension by whether IT had asked for one. Two renderers overlap routinely
+ * — a quality switch builds the next before retiring the last — and the older
+ * one is not paused, it is simply superseded, so it still reads as playing.
+ * The live renderer would suspend for a user's pause and the stale one's
+ * watchdog would call that unexplained and resume the context: the sound
+ * carried on after the button, then stopped again once something else caught
+ * up. The logs showed it plainly — ten "suspended unexpectedly" warnings and
+ * twenty-one "recovered to running", two handlers answering every transition.
+ *
+ * The intent belongs to the context, so it is stored where the context is.
+ */
+let contextSuspendIntent = false;
 
 export class AudioRenderer {
   private audioContext: AudioContext | null = null;
@@ -934,7 +951,7 @@ export class AudioRenderer {
     // flag synchronously here lets those early frames schedule; they sit in
     // the AudioContext queue and play once it resumes.
     this.isPlaying = true;
-    this.intentionalSuspend = false;
+    contextSuspendIntent = false;
 
     // Don't initialize AudioContext during muted autoplay (browser policy)
     // It will be initialized when user unmutes (user gesture)
@@ -973,7 +990,7 @@ export class AudioRenderer {
     // though the Clock keeps ticking via fallback time.
     if (
       this.audioContext?.state === "suspended" &&
-      (!this._muted || this.intentionalSuspend)
+      (!this._muted || contextSuspendIntent)
     ) {
       try {
         await this.audioContext.resume();
@@ -1134,7 +1151,7 @@ export class AudioRenderer {
    * Pause playback
    */
   // Flag to prevent auto-recovery when we intentionally suspend during buffering
-  private intentionalSuspend: boolean = false;
+
 
   pause(): void {
     this.isPlaying = false;
@@ -1155,7 +1172,7 @@ export class AudioRenderer {
     // If we clear sources, we lose the buffered audio (e.g. 2 seconds worth), causing the
     // player to jump forward by that amount on resume.
     if (this.audioContext && this.audioContext.state === "running") {
-      this.intentionalSuspend = true;
+      contextSuspendIntent = true;
       this.audioContext.suspend().catch((err) => {
         Logger.error(TAG, "Failed to suspend audio context", err);
       });
@@ -1174,7 +1191,7 @@ export class AudioRenderer {
    * Suppresses auto-recovery so the context stays suspended until resumeFromBuffering().
    */
   suspendForBuffering(): void {
-    this.intentionalSuspend = true;
+    contextSuspendIntent = true;
     if (this.audioContext && this.audioContext.state === "running") {
       this.audioContext.suspend().catch((err) => {
         Logger.error(TAG, "Failed to suspend audio context for buffering", err);
@@ -1200,7 +1217,7 @@ export class AudioRenderer {
    */
   primeForBuffering(): void {
     this.isPlaying = true;
-    this.intentionalSuspend = true;
+    contextSuspendIntent = true;
     if (!this.audioContext && !this._muted) {
       // Context deferred (never created yet) — bring it up, then hold it
       // suspended. Any audio decoded before init resolves has nowhere to
@@ -1209,7 +1226,7 @@ export class AudioRenderer {
       // just a safety net.
       this.init()
         .then(() => {
-          if (this.intentionalSuspend && this.audioContext?.state === "running") {
+          if (contextSuspendIntent && this.audioContext?.state === "running") {
             this.audioContext.suspend().catch(() => {});
           }
         })
@@ -1227,7 +1244,7 @@ export class AudioRenderer {
    * Resume audio after buffering. Clears the intentional suspend flag.
    */
   resumeFromBuffering(): void {
-    this.intentionalSuspend = false;
+    contextSuspendIntent = false;
     if (this.audioContext && this.audioContext.state === "suspended") {
       this.audioContext.resume().catch((err) => {
         Logger.error(TAG, "Failed to resume audio context from buffering", err);
@@ -1671,7 +1688,7 @@ export class AudioRenderer {
       !!this.audioContext &&
       this.audioContext.state === "suspended" &&
       !this._muted &&
-      !this.intentionalSuspend
+      !contextSuspendIntent
     );
   }
 
@@ -1762,7 +1779,7 @@ export class AudioRenderer {
   isDroppingAudio(): boolean {
     return (
       this._muted &&
-      !this.intentionalSuspend &&
+      !contextSuspendIntent &&
       this.audioContext?.state === "suspended"
     );
   }
@@ -2120,7 +2137,7 @@ export class AudioRenderer {
       if (!this.audioContext) return;
       const state = this.audioContext.state;
 
-      if (state === "interrupted" || (state === "suspended" && this.isPlaying && !this._muted && !this.intentionalSuspend)) {
+      if (state === "interrupted" || (state === "suspended" && this.isPlaying && !this._muted && !contextSuspendIntent)) {
         Logger.warn(TAG, `AudioContext ${state} unexpectedly during playback, attempting recovery`);
         this.attemptContextRecovery();
       } else if (state === "running") {
