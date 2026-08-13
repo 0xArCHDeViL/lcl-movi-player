@@ -813,6 +813,18 @@ export class MoviElement extends HTMLElement {
   };
   private _ambientMode: boolean = false;
   private _renderer: RendererType = "canvas";
+  /**
+   * How the POSTER is fitted, when it should not be fitted the way the video
+   * is. Empty means "follow the video", which is what it did before this
+   * existed and is still the default.
+   *
+   * The two are genuinely different pictures. A vertical page can want its
+   * video letterboxed at its true shape and its cover image filling the box
+   * behind it — which is what YouTube's Shorts does — and deriving one fit
+   * from the other made that impossible to ask for.
+   */
+  private _posterFit: string = "";
+
   private _objectFit: "contain" | "cover" | "fill" | "zoom" | "control" =
     "contain"; // Configuration mode
   // Declarative rotation from the `rotate` attribute (0/90/180/270), re-applied
@@ -1157,6 +1169,7 @@ export class MoviElement extends HTMLElement {
       "probesize",
       "probeduration",
       "poster",
+      "posterfit",
       "width",
       "height",
       "crossorigin",
@@ -19727,7 +19740,13 @@ export class MoviElement extends HTMLElement {
       }
       .movi-subtitle-overlay {
         position: absolute;
-        bottom: 12%;
+        /* How far off the bottom the caption sits. A variable rather than the
+           bare 12% it was, because 12% of a 9:16 reel is not 12% of a 16:9
+           player: on a tall frame that lands the line much further up the
+           picture than it does on a wide one, and a host laying out a vertical
+           page has no other way to say so. Set --movi-sub-bottom on the
+           element; unset, nothing changes. */
+        bottom: var(--movi-sub-bottom, 12%);
         left: 0;
         right: 0;
         z-index: 5;
@@ -22397,6 +22416,7 @@ export class MoviElement extends HTMLElement {
     this._preload =
       (this.getAttribute("preload") as "none" | "metadata" | "auto") || "auto";
     this._poster = this.getAttribute("poster") || "";
+    this._posterFit = this.getAttribute("posterfit") || "";
     const volumeAttr = this.getAttribute("volume");
     if (volumeAttr) this._volume = parseFloat(volumeAttr);
     const playbackRateAttr = this.getAttribute("playbackrate");
@@ -23248,6 +23268,14 @@ export class MoviElement extends HTMLElement {
         this._poster = newValue || "";
         this.updatePoster();
         break;
+      case "posterfit":
+        this._posterFit = newValue || "";
+        // The fit is written onto the <img> as the poster lands, so a poster
+        // already on screen has to be told separately.
+        if (this.posterElement) {
+          this.posterElement.style.objectFit = this.posterObjectFit();
+        }
+        break;
       case "subtitlesize":
       case "subtitlecolor":
       case "subtitlebg":
@@ -24075,6 +24103,13 @@ export class MoviElement extends HTMLElement {
   // custom modes (zoom, control) to the closest visual match for the poster
   // overlay, since the canvas-side custom math doesn't apply to a plain <img>.
   private posterObjectFit(): string {
+    // Asked for outright, and then it is not this method's business what the
+    // video is doing. Only the values CSS object-fit actually takes; anything
+    // else falls through to the video's fit rather than writing a value the
+    // browser will drop on the floor.
+    if (/^(contain|cover|fill|none|scale-down)$/.test(this._posterFit)) {
+      return this._posterFit;
+    }
     const fit = this._objectFit === "control" ? this._currentFit : this._objectFit;
     if (fit === "zoom") return "cover";
     if (fit === "fill") return "fill";
@@ -33009,6 +33044,15 @@ export class MoviElement extends HTMLElement {
   /** VLC-style API alias from the feature request issue. */
   getSubtitleDelay(): number {
     return this._subtitleDelay;
+  }
+
+  /** How the poster is fitted; "" (the default) follows the video's own fit. */
+  get posterFit(): string {
+    return this._posterFit;
+  }
+  set posterFit(value: string) {
+    if (value) this.setAttribute("posterfit", value);
+    else this.removeAttribute("posterfit");
   }
 
   get ambientMode(): boolean {

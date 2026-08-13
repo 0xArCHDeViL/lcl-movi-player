@@ -57,6 +57,10 @@
               "description": "Displays an image before playback starts."
             },
             {
+              "name": "posterfit",
+              "description": "How the poster is fitted, when it should not be fitted the way the video is."
+            },
+            {
               "name": "width",
               "description": "Sets element dimensions (CSS preferred)."
             },

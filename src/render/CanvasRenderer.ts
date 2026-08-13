@@ -2270,7 +2270,7 @@ export class CanvasRenderer {
         // Responsive bottom padding is relative to the video's visual height
         // in its own frame (overlayHeight), not the container.
         const bottomPadding =
-          CanvasRenderer.computeSubtitleBottomPadding(overlayHeight);
+          this.subtitleBottomPadding(overlayHeight);
 
         // Reset overlay positioning to ensure it stays aligned with canvas
         this.subtitleOverlay.style.position = "absolute";
@@ -3381,7 +3381,7 @@ export class CanvasRenderer {
         // backbuffer and would inflate the padding 2× on retina.
         const h = this.containerHeight || 672;
         this.subtitleOverlay.style.paddingBottom =
-          `${CanvasRenderer.computeSubtitleBottomPadding(h)}px`;
+          `${this.subtitleBottomPadding(h)}px`;
       }
     }
   }
@@ -3603,7 +3603,7 @@ export class CanvasRenderer {
         (canvasHeight - subtitleVideoHeight * baseScale) / 2;
 
       const bottomPadding =
-        CanvasRenderer.computeSubtitleBottomPadding(canvasHeight);
+        this.subtitleBottomPadding(canvasHeight);
 
       // Position at bottom center (above controls), similar to text subtitles
       // For image subtitles, always position at bottom if no explicit position.
@@ -3676,7 +3676,7 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.overflow = "hidden"; // Prevent overflow outside canvas
       this.subtitleOverlay.style.padding = "0";
       const bottomPaddingImg =
-        CanvasRenderer.computeSubtitleBottomPadding(ovH);
+        this.subtitleBottomPadding(ovH);
       const effectivePaddingImg = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPaddingImg;
       this.subtitleOverlay.style.paddingBottom = `${effectivePaddingImg}px`;
       this.subtitleOverlay.style.textAlign = "center";
@@ -3772,6 +3772,36 @@ export class CanvasRenderer {
   private static computeSubtitleBottomPadding(overlayHeight: number): number {
     if (!Number.isFinite(overlayHeight) || overlayHeight <= 0) return 24;
     return Math.max(Math.min(80, overlayHeight * 0.08), 24);
+  }
+
+  /**
+   * How far the caption sits off the bottom of the video.
+   *
+   * The default above is 8% of the picture's height, clamped to 24-80px, which
+   * reads well on a wide player. It does not travel: on a 9:16 reel the same 8%
+   * is a much shorter distance in a much taller frame, and the caption lands on
+   * whatever the page has put along the bottom.
+   *
+   * `--movi-sub-bottom` on the element says otherwise - a percentage of the
+   * picture's height, or a plain px value. The clamp is deliberately NOT
+   * applied to it: a host that names a distance has asked for that distance.
+   * The overlay's CSS rule carries the same variable for the non-canvas path;
+   * this is the one that matters on the canvas path, where the overlay is
+   * positioned by inline style and the CSS `bottom` never applies.
+   */
+  private subtitleBottomPadding(overlayHeight: number): number {
+    const raw = this.subtitleOverlay
+      ? getComputedStyle(this.subtitleOverlay)
+          .getPropertyValue("--movi-sub-bottom")
+          .trim()
+      : "";
+    if (raw && Number.isFinite(overlayHeight) && overlayHeight > 0) {
+      const pct = /^([\d.]+)%$/.exec(raw);
+      if (pct) return (overlayHeight * parseFloat(pct[1])) / 100;
+      const px = /^([\d.]+)px$/.exec(raw);
+      if (px) return parseFloat(px[1]);
+    }
+    return CanvasRenderer.computeSubtitleBottomPadding(overlayHeight);
   }
 
   /**
@@ -3952,7 +3982,7 @@ export class CanvasRenderer {
       const ovTxtW = swappedTxt ? overlayH : overlayW;
       const ovTxtH = swappedTxt ? overlayW : overlayH;
       const bottomPadding =
-        CanvasRenderer.computeSubtitleBottomPadding(ovTxtH);
+        this.subtitleBottomPadding(ovTxtH);
 
       this.subtitleOverlay.style.position = "absolute";
       this.subtitleOverlay.style.right = "auto";

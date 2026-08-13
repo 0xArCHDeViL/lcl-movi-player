@@ -274,6 +274,25 @@ Displays an image before playback starts.
 
 ---
 
+#### `posterfit`
+
+How the poster is fitted, when it should not be fitted the way the video is.
+Takes any CSS `object-fit` value — `contain`, `cover`, `fill`, `none`,
+`scale-down`. Omit it and the poster follows `objectfit`, which is the default
+and what happens without this attribute.
+
+They are genuinely different pictures, and a page can want different things of
+them. A vertical layout may want its video letterboxed at its true shape — so a
+landscape clip is not cropped or stretched — while the cover image behind it
+fills the box, the way YouTube's Shorts page does.
+
+```html
+<!-- video shown whole; cover image cropped to fill the frame -->
+<movi-player src="clip.mp4" poster="cover.jpg" objectfit="contain" posterfit="cover"></movi-player>
+```
+
+---
+
 #### `postertime`
 
 Generates a native-resolution poster frame from a timestamp instead of (or as a fallback for) `poster`. Useful when you don't have a pre-rendered thumbnail but want to show a representative frame.

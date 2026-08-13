@@ -162,6 +162,19 @@
           ]
         },
         {
+          "name": "posterfit",
+          "description": {
+            "kind": "markdown",
+            "value": "How the poster is fitted, when it should not be fitted the way the video is."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#posterfit"
+            }
+          ]
+        },
+        {
           "name": "width",
           "description": {
             "kind": "markdown",

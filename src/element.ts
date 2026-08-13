@@ -126,6 +126,7 @@ export type { QoEEvent, QoESink, QoESession } from './utils/QoE';
 export interface MoviPlayerAttributes {
   src?: string;
   poster?: string;
+  posterfit?: string;
   postertime?: string;
   controls?: boolean | "";
   autoplay?: boolean | "";
