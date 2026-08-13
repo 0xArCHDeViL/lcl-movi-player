@@ -14612,6 +14612,19 @@ export class MoviElement extends HTMLElement {
       if (st === "playing") this._stuckRecoveries = 0;
       return;
     }
+    // Nothing to nudge ONTO while the machine is offline. The nudge exists for
+    // one byte range that will not come on a connection that otherwise works —
+    // seeking past it issues a fresh request that usually does. Offline, the
+    // fresh request cannot succeed either, so all the nudge achieves is walking
+    // the playhead forward through content nobody watched: three sessions of a
+    // dropped connection show it stepping 64.1s → 66.1s → 70.1s → 76.1s, the
+    // timeline creeping over a frozen picture with the spinner up the whole
+    // time. Sit still instead; MoviPlayer re-seeks for a clean recovery when the
+    // connection comes back.
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      this._stuckRecoverySince = 0;
+      return;
+    }
     // NEVER fight a seek this element deliberately started. "No playhead
     // progress" is the DEFINING condition of an in-flight seek, not evidence of
     // a stuck pipeline — so the nudge below used to fire mid-seek and re-seek to
@@ -14664,8 +14677,16 @@ export class MoviElement extends HTMLElement {
     this._stuckRecoveries++;
     this._stuckRecoverySince = 0;
     // Nudge forward onto data that IS arriving — a bit further each attempt.
+    //
+    // …except under a binding, where moving the playhead is the one thing this
+    // must not do. `bindav` is a promise that the timeline only advances when
+    // sound and picture do, and a nudge advances it while neither is running —
+    // it is the whole of what the viewer sees as "the timer ran on by itself".
+    // Re-seek to where we already are: same fresh request against the range
+    // that is not answering, which is what actually unsticks it, without
+    // skipping content the viewer has not seen.
     const base = t > 0 ? t : Math.max(0, this._recoveryResumeTime);
-    const target = base + 2 * this._stuckRecoveries;
+    const target = this._bindAV ? base : base + 2 * this._stuckRecoveries;
     Logger.warn(
       TAG,
       `Playback stuck in "${st}" ${this._stuckRecoveries}× (no playhead/buffer progress) — nudging seek to ${target.toFixed(1)}s + play`,

@@ -52,6 +52,11 @@ export class MoviVideoDecoder {
   private onFrame: ((frame: VideoFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private waitingForKeyframe: boolean = false;
+  // When the current keyframe wait began (0 while not waiting). The wait itself
+  // has no bound: it ends when a keyframe arrives, and if packets stop arriving
+  // it never does. Callers that suppress behaviour across the wait (the stall
+  // detector) need to know how long it has been running so they can cap it.
+  private keyframeWaitSince: number = 0;
   // Optional listener: notified whenever the decoder enters or exits its
   // "skip non-keyframes" recovery window. MoviPlayer uses this to flip into
   // buffering state during playback so audio + clock pause instead of running
@@ -134,6 +139,7 @@ export class MoviVideoDecoder {
     if (waiting) this.chunksSinceKeyframeWait = 0;
     if (this.waitingForKeyframe === waiting) return;
     this.waitingForKeyframe = waiting;
+    this.keyframeWaitSince = waiting ? performance.now() : 0;
     if (this.onKeyframeWaitChange) {
       try {
         this.onKeyframeWaitChange(waiting);
@@ -1662,6 +1668,20 @@ export class MoviVideoDecoder {
     if (this.waitingForKeyframe) return true;
     if (this.lastRecreateTime === 0) return false;
     return performance.now() - this.lastRecreateTime < graceMs;
+  }
+
+  /**
+   * How long the decoder has been waiting for its keyframe, 0 when it isn't.
+   *
+   * A wait normally ends within a GOP. It ends never when the packets stop —
+   * and since isRecentlyRecovering() is true for the whole of it, anything
+   * gated on that is switched off for as long as the wait lasts. This is what
+   * lets a caller put a ceiling on that.
+   */
+  keyframeWaitMs(): number {
+    return this.keyframeWaitSince === 0
+      ? 0
+      : performance.now() - this.keyframeWaitSince;
   }
 
   /**

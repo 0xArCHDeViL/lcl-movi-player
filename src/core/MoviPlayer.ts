@@ -922,7 +922,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * error paths are the real answer; this is the backstop behind them.
    */
   private static readonly BOUND_RESUME_ESCAPE_MS = 15000;
+  /**
+   * How much video, in seconds of queued frames, a bound stall wants back
+   * before it lets go. One frame is not a picture that is running again — it is
+   * a picture that will freeze one frame later, with the sound released for the
+   * whole grace that follows.
+   */
+  private static readonly BOUND_RESUME_CUSHION_S = 0.2;
+  /** The stall-detection grace given to a resume that came out of a stall
+   *  rather than out of a cold start. Long enough for the queue we just waited
+   *  for to start playing, short enough that the sound cannot walk. */
+  private static readonly BOUND_RESUME_GRACE_MS = 500;
+  /** How long the decoder may sit waiting for a keyframe, picture frozen, with
+   *  the stall detector suppressed, before a binding calls it a stall. Ends the
+   *  wait that never ends when the packets stop arriving. */
+  private static readonly BOUND_KEYFRAME_HOLD_MS = 1500;
+  /** How long a superseded seek waits for whoever took its session to resolve
+   *  the "seeking" state before doing it itself. */
+  private static readonly ORPHANED_SEEK_BACKSTOP_MS = 750;
   private _playStartTime: number = 0; // When play() was called — grace period for stall detection
+  /** performance.now() of the last buffering→playing resume (0 = never). */
+  private _stallResumeAt: number = 0;
   private _primingAudio = false; // true while the first-play buffer is filling its startup cushion
   private _decoderStuckSince: number = 0; // When video decoder was first detected stuck
   private _lastDesyncSeekTime: number = 0; // performance.now() of last desync-triggered resync
@@ -2193,6 +2213,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Resume the video loop from the current position.
     this.processLoop();
+
+    // The session bump above superseded whatever seek was in flight, and that
+    // seek is not coming back to finish: it returns at its own superseded check
+    // having already set "seeking" and paused the clock. If it notices in time
+    // it resolves that itself; if the bump landed after its last check it
+    // cannot, and the player is left frozen under a spinner that only a manual
+    // seek clears (which is exactly how this was reported). The swap took the
+    // session, so the swap finishes the seek.
+    this.resumeAfterOrphanedSeek("an in-place rendition swap");
 
     // --- Tear down the old video pipeline (audio pipeline untouched). ---
     try { oldDemuxer.close(); } catch {}
@@ -4619,7 +4648,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Continue processing to allow new audio to be decoded and scheduled
     } else if (this.stateManager.getState() === "buffering" && this.wasPlayingBeforeRebuffer) {
       // Resume after minimum dwell time to accumulate enough data
-      const hasAudioTrack = !!this.trackManager.getActiveAudioTrack();
+      //
+      // Split (separate-URL) audio has no track in the MAIN demuxer's
+      // trackManager — it is decoded from its own demuxer straight into the
+      // audio renderer — so asking the track manager alone reads as "no audio
+      // at all" on every split source. The stall detector below already counts
+      // `audioDemuxer` for exactly this reason; the resume gate did not, and
+      // the consequence was worse than a loose audioReady: `bound` (see below)
+      // was false, so on precisely the sources this player streams — YouTube's
+      // separate video and audio URLs — `bindav` held the way IN to a stall and
+      // then let go the way OUT on audio alone. That is the drift the binding
+      // exists to prevent.
+      const hasAudioTrack =
+        !!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer;
       // The first-play cold prime needs a REAL cushion before it starts: the
       // software decode is still sub-realtime (and gets even slower once video
       // decode/render competes for CPU), so resuming on a thin 0.1s buffer just
@@ -4654,7 +4695,37 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.disableAudio ||
         !hasAudioTrack ||
         this.audioRenderer.getBufferedDuration() > audioTargetS;
-      const videoReady = !this.videoRenderer || this.videoRenderer.getQueueSize() > 0;
+      // Bound, sound and picture stall together and start together — see the
+      // long note at the resume decision below, and MoviPlayer's _bindAV.
+      //
+      // …but only where there IS a picture. Data-saver audio-only and a hidden
+      // tab both skip video decode on purpose, so the video queue is empty for
+      // a reason that has nothing to do with the link: binding to it would hold
+      // the sound for a picture nobody asked to be decoded.
+      const pictureRunning =
+        !this._audioOnly && (!this.isBackgrounded || this.isPiPActive);
+      const bound =
+        this._bindAV && hasAudioTrack && !this.disableAudio && pictureRunning;
+      // …and bound, "a frame exists" is not "the picture is running again". One
+      // frame satisfies a `> 0` test the instant it lands; the presentation
+      // loop shows it, the queue is empty again, and the post-play grace then
+      // covers the next three seconds during which the stall detector may not
+      // even look — so the sound gets all of it. Repeated on a link that is
+      // delivering the odd frame and nothing more, it ratchets: stall, resume,
+      // ~3.5s of audio over a picture that never moved, stall again. Ask
+      // instead for enough queue to actually play through that grace. The
+      // presentation loop is stopped for the whole of buffering, so this counts
+      // only frames that ACCUMULATED — and the escape below still caps the wait.
+      const fps =
+        this.trackManager.getActiveVideoTrack()?.frameRate ||
+        (this.mediaInfo as any)?.videoFrameRate ||
+        24;
+      const videoTargetFrames = bound
+        ? Math.max(2, Math.round(fps * MoviPlayer.BOUND_RESUME_CUSHION_S))
+        : 1;
+      const videoReady =
+        !this.videoRenderer ||
+        this.videoRenderer.getQueueSize() >= videoTargetFrames;
       const dwellMs = performance.now() - this._bufferingEntryTime;
       // A rate change is NOT a stall. AudioRenderer.isRebuffering() is raised
       // only for the rate-change re-anchor, and while it's up the clock is
@@ -4690,14 +4761,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // So when the two are bound, resuming needs both. The escape is far
       // longer (see BOUND_RESUME_ESCAPE_MS): a bound wait costs nothing but
       // the wait, since the picture is frozen throughout it either way.
-      const bound = this._bindAV && hasAudioTrack && !this.disableAudio;
       const escapeMs = bound ? MoviPlayer.BOUND_RESUME_ESCAPE_MS : maxDwell;
+      // The escape is for a picture that is BEHIND, not one that is absent.
+      // With nothing at all in the renderer, resuming is not "letting go on
+      // what we have" — it is starting the sound over a still frame, which is
+      // the exact thing a binding is asked to prevent. Two sessions of a
+      // dropped connection show what it costs: the wait ran its 15 seconds,
+      // gave up on `videoReady=false`, played a second of audio, stalled, and
+      // came back to do it again — and once, with EOF having quietly switched
+      // the stall detector off, it ran twenty-one seconds before the viewer
+      // seeked by hand. Bound and empty, keep waiting: the spinner is the
+      // honest state, and the rescues that matter (the ABR's downshift, the
+      // element's stuck watchdog, the decoder's own recreate) all run inside
+      // buffering anyway.
+      const somethingToShow = (this.videoRenderer?.getQueueSize() ?? 0) > 0;
+      const mayEscape = !bound || somethingToShow;
       // Resume if: (1) both ready after minDwell, (2) unbound, audio ready
       // after a longer wait, or (3) the escape (don't wait forever).
       const canResume = dwellMs >= minDwell && (
         (audioReady && videoReady) ||
         (!bound && audioReady && dwellMs >= 3000) ||
-        dwellMs >= escapeMs
+        (dwellMs >= escapeMs && mayEscape)
       );
       if (canResume && bound && !(audioReady && videoReady)) {
         Logger.warn(
@@ -4708,6 +4792,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (canResume) {
         this._primingAudio = false;
         this._bufferingSelfInflicted = false;
+        // Stamp the resume so the stall detector can tell this — a warm
+        // pipeline picking back up — from a cold first play, and not hand it
+        // the full three-second grace (see playGraceMs).
+        this._stallResumeAt = performance.now();
         this.stateManager.setState("paused");
         this.wasPlayingBeforeRebuffer = false;
         // Resume AudioContext before play() so audio picks up from where it was
@@ -4742,9 +4830,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const currentFps = (this.mediaInfo as any)?.videoFrameRate ?? 30;
     const isSlowHighFps = currentRate < 0.99 && currentFps >= 50;
     const stallTimeout = isSlowHighFps ? 2000 : 500;
+    // Is there sound that can walk away from a frozen picture? (Split audio
+    // lives in its own demuxer, outside the track manager — see the resume
+    // gate.) Only then does a binding have anything to hold together.
+    const boundToAudio =
+      this._bindAV &&
+      !this.disableAudio &&
+      !this._audioOnly &&
+      (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer);
     // Grace period after play() starts: allow decode pipeline to fill before stall detection.
     // Without this, clicking play on a poster triggers a false stall → buffering → loading spinner.
-    const playGraceMs = 3000;
+    //
+    // That is a COLD start — play() on a poster, nothing decoded yet. A resume
+    // out of a stall is not: the pipeline was already running and the gate only
+    // let go because frames were there. Handing it the full three seconds is
+    // how a bound stream drifts anyway — the queue runs dry again immediately
+    // and the sound has three clear seconds before the detector may even look,
+    // once per stall. Five of those in a row is where the audio in the reported
+    // session got 17 seconds ahead of a picture that never moved. Bound, a
+    // resume off the stall path gets a short grace instead.
+    const sinceStallResume = performance.now() - this._stallResumeAt;
+    const playGraceMs =
+      boundToAudio && this._stallResumeAt > 0 && sinceStallResume < 3000
+        ? MoviPlayer.BOUND_RESUME_GRACE_MS
+        : 3000;
     const inPlayGrace = this._playStartTime > 0 && (performance.now() - this._playStartTime) < playGraceMs;
     // Grace while the video decoder is recovering from a transient decode
     // error (recreate + wait-for-keyframe). The video queue is legitimately
@@ -4759,9 +4868,37 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // branch below could never fire — precisely when the user is hearing the
     // glitches and needs the spinner. The two are independent: the video
     // decoder rebuilding says nothing about whether audio is keeping up.
+    //
+    // …and that suppression has to END. isRecentlyRecovering() is true for the
+    // whole keyframe wait, and a keyframe only arrives if packets do: when the
+    // link dies mid-recovery the wait never ends and the detector is switched
+    // off for good. Read off the reported session — the decoder recreated at
+    // 2607s, the network went offline in the same breath, and the sound (a
+    // separate source with its bytes already in hand) played on for 57 seconds
+    // over a picture frozen on one frame, timeline running the whole way, no
+    // spinner at any point. Bound, that is exactly what must not happen, so cap
+    // the hold: past the cap an empty video queue is a stall like any other.
+    // Unbound the documented behaviour is untouched — clock and audio carry on
+    // and the picture catches up at the next keyframe.
+    const keyframeHoldTooLong =
+      boundToAudio &&
+      (this.videoDecoder?.keyframeWaitMs() ?? 0) >
+        MoviPlayer.BOUND_KEYFRAME_HOLD_MS;
     const decoderRecovering =
-      !!this.videoDecoder && this.videoDecoder.isRecentlyRecovering();
-    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace) {
+      !!this.videoDecoder &&
+      this.videoDecoder.isRecentlyRecovering() &&
+      !keyframeHoldTooLong;
+    // EOF normally means the picture is finished rather than stalled: the queue
+    // drains, playback ends, and a spinner over that would be wrong. But the
+    // demuxer's read cursor runs well ahead of the decode, so "no more packets"
+    // can arrive with most of the video still unshown — in one session the
+    // video demuxer read out to the end of the file while the playhead sat at
+    // 97s of 142s, and the flag silenced the detector for the rest of the
+    // session: the sound ran on alone for twenty-one seconds and only a manual
+    // seek brought the picture back. Bound, EOF stops speaking for the picture;
+    // the genuine end of playback is already covered by `nearEnd` below.
+    const eofSilencesStall = this.eofReached && !boundToAudio;
+    if (this.stateManager.getState() === "playing" && !eofSilencesStall && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       // Split (separate-URL) audio has no track in the MAIN demuxer's
       // trackManager — it's decoded from its own demuxer into audioRenderer. So
@@ -5913,6 +6050,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // notifySeekCompletion bails when this no longer matches seekSessionId, so a
   // superseded seek's late frame/timeout can't stomp state or consume intent.
   private seekArmedSessionId = 0;
+  // The session a live seek() is actually driving. Everything else that bumps
+  // seekSessionId — an in-place rendition swap, a subtitle prefetch, a recovery
+  // re-seek — does so only to INVALIDATE whatever seek is in flight, and leaves
+  // this alone. That difference is how a seek walking away from its own
+  // supersession can tell "a newer seek owns the state machine now" from
+  // "nobody does" (see abandonSupersededSeek).
+  private _liveSeekSession = -1;
   private wasPlayingBeforeSeek = false;
 
   // True while an internal seek with no real interruption is in flight: the
@@ -6044,6 +6188,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekKeyframeOffset = 0;
 
     const mySessionId = ++this.seekSessionId;
+    // Claim the session: from here until this seek finishes or is superseded,
+    // a seek — not a swap, not a prefetch — owns the state machine.
+    this._liveSeekSession = mySessionId;
     this._lastSeekAt = performance.now();
     // Retire the ABR's buffer baseline with it. A seek restarts the buffered
     // range at the new playhead, so the next tick would compare a fresh ~2s
@@ -6090,14 +6237,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           if (this.seekSessionId !== mySessionId) {
             // This seek was superseded, reset demuxInFlight to allow new seek to proceed
             this.demuxInFlight = false;
-            return; // Superceded
+            return this.abandonSupersededSeek(mySessionId);
           }
           await new Promise((r) => setTimeout(r, 10));
           retries++;
         }
       }
 
-      if (this.seekSessionId !== mySessionId) return; // Superceded
+      if (this.seekSessionId !== mySessionId)
+        return this.abandonSupersededSeek(mySessionId);
 
       // Flush decoders
       Logger.info(TAG, `seek: flushing video decoder...`);
@@ -6130,7 +6278,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Flush audio renderer (clears buffers)
       this.audioRenderer.reset();
 
-      if (this.seekSessionId !== mySessionId) return; // Superceded
+      if (this.seekSessionId !== mySessionId)
+        return this.abandonSupersededSeek(mySessionId);
 
       // Tell the source a seek is coming so it repositions its stream at the
       // landing offset. Otherwise it can only infer the seek from a run of
@@ -6225,7 +6374,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       this.seekTime = performance.now();
 
-      if (this.seekSessionId !== mySessionId) return; // Superceded
+      if (this.seekSessionId !== mySessionId)
+        return this.abandonSupersededSeek(mySessionId);
 
       // Start processing loop to find and decode the target frame/packet.
       // notifySeekCompletion will be called once the first valid frame is received.
@@ -6315,6 +6465,81 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.emit("error", error as Error);
       }
       throw error;
+    }
+  }
+
+  /**
+   * A seek that was superseded mid-flight, letting go.
+   *
+   * If a NEWER SEEK took the session there is nothing to do: it set "seeking"
+   * itself and its own completion will resolve it. The other case is the one
+   * this exists for. An in-place rendition swap, a subtitle prefetch and the
+   * network-recovery re-seek all bump seekSessionId purely to invalidate an
+   * in-flight seek — none of them is a seek, and none of them finishes what
+   * this one started. What it leaves behind is a player in "seeking" with a
+   * paused clock, a stopped split-audio pump, and (past the arming point)
+   * waitingForVideoSync raised for a session that can never complete, so every
+   * frame that arrives afterwards just re-enters notifySeekCompletion's
+   * stale-session branch and bails.
+   *
+   * Read off the reported session: the network came back, the recovery seek
+   * went out, the ABR swap that had been stuck on the dead link completed
+   * half a second later and took the session — and the player sat frozen under
+   * a spinner, first frame decoded and on screen, until the viewer dragged the
+   * scrubber by hand. That manual seek was doing what this does here.
+   */
+  private abandonSupersededSeek(mySessionId: number): void {
+    // Drop our arming first, whoever owns the session now: left set, it is a
+    // completion nothing will ever fire.
+    if (this.seekArmedSessionId === mySessionId) {
+      this.waitingForVideoSync = false;
+      this.seekingToKeyframe = false;
+    }
+    // A backstop, not a race. Whatever took the session gets its chance first:
+    // the rendition swap resolves the state as its last act, and the subtitle
+    // prefetch and the recovery re-seek run resumes of their own. Only if the
+    // player is STILL sitting in "seeking" a moment later did nobody, and only
+    // then does this step in.
+    setTimeout(() => {
+      if (this._destroyed) return;
+      this.resumeAfterOrphanedSeek("a non-seek operation");
+    }, MoviPlayer.ORPHANED_SEEK_BACKSTOP_MS);
+  }
+
+  /**
+   * Hand the pipeline back to playback after the seek that owned it was taken
+   * over by something that is not a seek. Called from both ends of that race:
+   * the seek itself when it notices (abandonSupersededSeek), and the operation
+   * that took the session — the in-place rendition swap — when the seek was
+   * already past its last check and cannot. Whichever gets there first, the
+   * other finds the state resolved and does nothing.
+   */
+  private resumeAfterOrphanedSeek(takenBy: string): void {
+    // A live seek holds the session — it owns the resume.
+    if (this._liveSeekSession === this.seekSessionId) return;
+    if (!this.stateManager.is("seeking")) return;
+    const resume = this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer;
+    this.wasPlayingBeforeSeek = false;
+    this.wasPlayingBeforeRebuffer = false;
+    this.waitingForVideoSync = false;
+    this.seekingToKeyframe = false;
+    Logger.info(
+      TAG,
+      `seek superseded by ${takenBy} — resolving the seeking state (${
+        resume ? "resuming" : "staying paused"
+      })`,
+    );
+    this.stateManager.setState("paused");
+    // The seek stopped the split-audio pump before seeking its demuxer and
+    // never reached the line that restarts it.
+    this.startAudioLoop();
+    this.emit("seeked", Math.max(0, this.clock.getTime() - this.startTime));
+    if (resume) {
+      void this.play().catch((err) => {
+        Logger.error(TAG, "Failed to resume after a superseded seek:", err);
+      });
+    } else {
+      this.startPauseBuffering();
     }
   }
 
