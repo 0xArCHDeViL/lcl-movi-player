@@ -23031,30 +23031,11 @@ export class MoviElement extends HTMLElement {
         this._audioOutputDeviceId = newValue || "";
         this.applyAudioOutput();
         break;
-      case "encrypted": {
-        const on = newValue !== null;
-        const wasOn = this._encrypted;
-        this._encrypted = on;
-        if (on && !wasOn) {
-          // Native raises `encrypted` when it meets initialisation data it
-          // needs a key for. This player is told up front instead, so the
-          // equivalent moment is the source declaring itself encrypted —
-          // which is what a listener waiting to fetch a licence wants.
-          this.dispatchEvent(
-            new CustomEvent("encrypted", {
-              detail: {
-                initDataType: this.getAttribute("drm") || "",
-                licenseUrl: this.getAttribute("licenseurl") || "",
-              },
-            }),
-          );
-          // …and with no licence route declared it cannot play at all.
-          if (!this.hasAttribute("licenseurl") && !this.hasAttribute("tokenurl")) {
-            this.dispatchEvent(new Event("waitingforkey"));
-          }
-        }
+      case "encrypted":
+        // Only the flag. The `encrypted` EVENT belongs to the moment a key is
+        // actually needed, not to the attribute being written — see load().
+        this._encrypted = newValue !== null;
         break;
-      }
       case "tokenurl":
         this._tokenUrl = newValue || "";
         break;
@@ -24136,6 +24117,23 @@ export class MoviElement extends HTMLElement {
 
     // If encrypted mode, use loadEncrypted instead
     if (this._encrypted && this._tokenUrl && this._videoUrl && !this.isLoading && !this.player) {
+      // Native raises `encrypted` when it meets initialisation data it cannot
+      // decode without a key. The equivalent here is the load that is about to
+      // go and ask for one — which is also the only moment a listener could
+      // usefully act on, since the token endpoint is what answers it.
+      //
+      // Note the attribute of the same name is a different thing: it is the
+      // host declaring the source encrypted. They do not collide (an attribute
+      // and an event never do) but they are not the same event either, so the
+      // event fires from the handshake rather than from the declaration.
+      this.dispatchEvent(
+        new CustomEvent("encrypted", {
+          detail: { initDataType: "token", tokenUrl: this._tokenUrl, videoUrl: this._videoUrl },
+        }),
+      );
+      // …and playback is held until that token lands, which is exactly what
+      // native reports with `waitingforkey`.
+      this.dispatchEvent(new Event("waitingforkey"));
       try {
         const { generateFingerprint } = await import("../utils/Fingerprint");
         const fingerprint = await generateFingerprint();
