@@ -5297,20 +5297,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     const maxVideoBuffered = Math.round((isSoftware ? 60 : baseHwQueue) * rateScale);
 
-    // Skip video backpressure when video isn't being consumed:
-    // - Background (not PiP): video decode is skipped entirely
-    // - Buffering: presentation loop stopped, frames accumulate but aren't consumed
-    //   (must keep demuxing so audio data flows and isRebufferingForRateChange clears)
-    // The buffering case exists to keep AUDIO flowing while the presentation
-    // loop is stopped. When audio is being thrown away instead (muted with a
-    // browser-suspended context), nothing flows and nothing ever ends the read:
-    // the audio buffer can't grow, so the resume gate waits out its full dwell
-    // while this loop reads with no ceiling on either side — tens of seconds of
-    // an audio-dense file in one burst. Keep video backpressure in that state;
-    // it is the only remaining brake.
-    const skipVideoBackpressure =
-      (this.isBackgrounded && !this.isPiPActive) ||
-      (currentState === "buffering" && !this.audioRenderer.isDroppingAudio());
+    // Skip video backpressure only where video genuinely isn't being consumed:
+    // backgrounded (not PiP), where decode is skipped outright.
+    //
+    // Buffering used to be exempt too, on the reasoning that the presentation
+    // loop is stopped so the queue can't drain and the cap would block the loop
+    // forever. That reasoning described a queue that never filled — frames
+    // decoded while buffering were being dropped before they reached it — so
+    // the exemption was a no-op on the video side and a licence to read without
+    // any ceiling at all. Measured during one stall: 14MB pulled in a single
+    // uninterrupted burst, the demuxer racing off through the file while the
+    // renderer stayed empty. Now that the frames are kept, the cap means
+    // something and is the brake. Nothing deadlocks behind it: split audio runs
+    // its own loop, and muxed audio starving with the video queue full is
+    // exactly what the delta-skip below is for.
+    const skipVideoBackpressure = this.isBackgrounded && !this.isPiPActive;
 
     // Stuck decoder detection: if video decoder queue is full but renderer queue
     // stays empty for too long, the decoder is hung (e.g. 8K content too heavy).
@@ -11079,9 +11080,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Queue frames for smooth presentation with A/V sync
       // Allow processing if playing OR if we are seeking (waiting for sync)
+      //
+      // …and while BUFFERING, which is the state whose whole purpose is to
+      // refill this queue. Leaving it out closed a loop with no way out of it:
+      // buffering waits for the video queue to come back, and every frame
+      // decoded to fill it was thrown away here because we were buffering. The
+      // queue could only ever hold what survived from BEFORE the stall — and a
+      // stall is declared on an empty queue, so it held nothing. Everything odd
+      // in three sessions of logs is this: a bound wait that never once saw
+      // `videoReady` true and always left on its 15s escape; the demuxer racing
+      // flat-out through 14MB of file during a stall, because the renderer
+      // never filled and never applied backpressure; a hold for the picture
+      // that sat there while the picture was decoded and discarded a frame at a
+      // time, until the viewer seeked by hand. The presentation loop is stopped
+      // throughout buffering, so nothing here reaches the screen early — the
+      // frames simply wait, which is what the resume gate is waiting to find.
       if (
         this.videoRenderer &&
         (this.stateManager.getState() === "playing" ||
+          this.stateManager.getState() === "buffering" ||
           this.waitingForVideoSync)
       ) {
         // A frame arriving while a seek waits for sync is that seek WORKING —
