@@ -8433,6 +8433,10 @@ export class MoviElement extends HTMLElement {
   private _stuckLastBytes = -1;
   private _stuckRecoveries = 0;
   private static readonly MAX_STUCK_RECOVERIES = 3;
+  // Latched once the watchdog has run out of nudges and told the viewer so, to
+  // keep the error from being raised again on every subsequent tick. Cleared
+  // the moment playback actually recovers, alongside _stuckRecoveries.
+  private _stuckGaveUp = false;
   // Set only by the decode-downshift recreate so its own load() keeps the ceiling
   // (every other load clears it, so the next source re-attempts its top rung).
   private _preserveDecodeCapOnce = false;
@@ -14609,7 +14613,17 @@ export class MoviElement extends HTMLElement {
       this._stuckRecoveryLastTime = -1;
       this._stuckLastBuffered = -1;
       this._stuckLastBytes = -1;
-      if (st === "playing") this._stuckRecoveries = 0;
+      // The nudge budget belongs to one stretch of one source. "playing" means
+      // the pipeline recovered; "idle"/"loading" mean a different source is
+      // coming up entirely. Neither is reachable from a stall — a stall holds
+      // the state at seeking/buffering — so refilling on them cannot hide a
+      // live one. Without the load cases, a video that exhausted its budget
+      // left the NEXT one with no nudges at all, and (since the exhausted
+      // budget now ends playback) primed to give up on its first stall.
+      if (st === "playing" || st === "idle" || st === "loading") {
+        this._stuckRecoveries = 0;
+        this._stuckGaveUp = false;
+      }
       return;
     }
     // Nothing to nudge ONTO while the machine is offline. The nudge exists for
@@ -14673,7 +14687,28 @@ export class MoviElement extends HTMLElement {
     // it at the rebuffer's 6s just interrupted seeks that were working.
     const stuckBudget = st === "seeking" ? 30000 : 6000;
     if (now - this._stuckRecoverySince < stuckBudget) return;
-    if (this._stuckRecoveries >= MoviElement.MAX_STUCK_RECOVERIES) return;
+    // Out of nudges. This used to return silently, and silence is the wrong
+    // answer: the state stays "buffering", so the spinner keeps turning over a
+    // video that is never coming back, with nothing on screen — and nothing in
+    // the `error` event a host could act on — to say why. Ending here is the
+    // honest outcome, and the same overlay a fatal load error already shows.
+    if (this._stuckRecoveries >= MoviElement.MAX_STUCK_RECOVERIES) {
+      if (this._stuckGaveUp) return;
+      this._stuckGaveUp = true;
+      // Prefer the source's own reason — an expired link, a revoked token —
+      // over the generic stall, so the overlay can say something true.
+      const failure = p.getSourceFailure?.() ?? null;
+      Logger.error(
+        TAG,
+        `Playback stuck in "${st}" after ${MoviElement.MAX_STUCK_RECOVERIES} recovery attempts — giving up`,
+        failure,
+      );
+      p.failFatally?.(
+        failure ??
+          new Error("Playback stalled: no data arrived after repeated retries"),
+      );
+      return;
+    }
     this._stuckRecoveries++;
     this._stuckRecoverySince = 0;
     // Nudge forward onto data that IS arriving — a bit further each attempt.
@@ -25703,6 +25738,13 @@ export class MoviElement extends HTMLElement {
       } else if (raw.includes("Stream failed after")) {
         title = "Connection Lost";
         message = "The connection dropped while playing. Check your network, then try again.";
+      } else if (raw.includes("Playback stalled")) {
+        // The stuck watchdog ran out of nudges without the source naming a
+        // reason. Nothing here points at the decoder, so this must not fall
+        // through to the generic branch — that one offers "Try Software
+        // Decoding", which cannot help a pipeline that is receiving no bytes.
+        title = "Playback Stopped";
+        message = "The video stopped loading. Check your connection, then try again.";
       } else if (
         raw.toLowerCase().includes("cors") ||
         raw.includes("Failed to fetch video resource")

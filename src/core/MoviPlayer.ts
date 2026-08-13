@@ -6122,6 +6122,38 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // cleared on seek completion (notifySeekCompletion).
   suppressSeekSpinner = false;
 
+  /**
+   * The failure the source will not come back from, if there has been one.
+   *
+   * An expired or revoked link answers every subsequent byte range the same
+   * way, so HttpSource latches the refusal and re-throws it on every read
+   * without touching the network again. That latch is the only honest signal
+   * that the video is over — the demuxer cannot supply one, because a read
+   * that FAILED and a read that reached the end of the file both reach C as
+   * "no bytes".
+   */
+  getSourceFailure(): Error | null {
+    return (
+      (this.source as { getFatalError?: () => Error | null } | null)
+        ?.getFatalError?.() ?? null
+    );
+  }
+
+  /**
+   * End playback on a failure nothing downstream can recover from.
+   *
+   * Pausing without this leaves the state machine in "buffering", which the
+   * UI renders as a spinner that never resolves — the viewer is told the
+   * video is loading when it is not coming at all.
+   */
+  failFatally(error: Error): void {
+    if (this.stateManager.getState() === "error") return;
+    Logger.error(TAG, `Fatal playback failure: ${error.message}`);
+    this.pause();
+    this.stateManager.setState("error");
+    this.emit("error", error);
+  }
+
   async seek(
     seconds: number,
     opts?: { suppressSpinner?: boolean; preservePlaying?: boolean },
@@ -6214,6 +6246,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Safety check - though PlayerState now permits it
     if (!this.stateManager.canSeek()) {
       Logger.warn(TAG, `seek blocked: canSeek=false, state=${currentState}`);
+      return;
+    }
+
+    // A source that has permanently refused will refuse every byte this seek
+    // asks for too. Seeking anyway spends the whole deadline waiting for a
+    // frame that cannot be decoded, forces completion without one, and lands
+    // in "buffering" — where the element's stuck watchdog seeks forward and
+    // starts the same round again. A log of an expired link shows exactly
+    // that: 587s → 591s → 597s, the timeline creeping under a spinner that
+    // never resolves. The source is dead; say so instead of walking the
+    // playhead through it.
+    const preSeekFailure = this.getSourceFailure();
+    if (preSeekFailure) {
+      Logger.error(
+        TAG,
+        `seek(${seconds.toFixed(2)}) refused: the source has failed permanently`,
+      );
+      this.failFatally(preSeekFailure);
       return;
     }
 
@@ -6488,6 +6538,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             onSeekDeadline,
             MoviPlayer.SEEK_PROGRESS_IDLE_MS - sinceFrame,
           );
+          return;
+        }
+        // The source can die mid-seek — the refusal that latches it may land
+        // between seek() and this deadline. Forcing completion then buffers on
+        // bytes that will never arrive, so check before pretending the seek
+        // merely ran slow.
+        const midSeekFailure = this.getSourceFailure();
+        if (midSeekFailure && this._seekFrameProgressAt === 0) {
+          Logger.error(
+            TAG,
+            `Seek to ${seconds}s produced no frame because the source failed: ${midSeekFailure.message}`,
+          );
+          this.waitingForVideoSync = false;
+          this.failFatally(midSeekFailure);
           return;
         }
         Logger.warn(
