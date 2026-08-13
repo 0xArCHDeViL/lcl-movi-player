@@ -2361,6 +2361,105 @@ player.addEventListener("error", (e: CustomEvent<Error>) => {
 });
 ```
 
+`e.detail` is the raw `Error` — `"HTTP 403 (Fatal)"`, an FFmpeg abort, and so
+on. For the sentence the viewer is actually being shown, listen for
+`errordisplay` instead.
+
+---
+
+### Error Screen
+
+Fires whenever an error screen goes up, carrying the wording on it. Unlike
+`error`, it also covers the format and codec failures that never produce a
+runtime error.
+
+```typescript
+player.addEventListener("errordisplay", (e: CustomEvent) => {
+  const { title, message, canRetry, canTrySoftware } = e.detail;
+  // e.g. "Not Found" / "It isn't at that address any more."
+  showMyOwnBanner(title, message);
+});
+```
+
+It can fire more than once for one failure, because the player narrows the
+cause as it goes: a first pass may report the generic `"Playback Error"`
+before a later one identifies it as, say, a 404. Render the latest — the
+built-in screen updates the same way. It does **not** re-fire for a repaint
+of a screen already showing the same words.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `title` | `string \| null` | Heading, e.g. `"Can't Play This"` |
+| `message` | `string \| null` | Body text |
+| `canRetry` | `boolean` | Whether `load()` is worth offering |
+| `canTrySoftware` | `boolean` | Whether `enableSoftwareDecoding()` is worth offering |
+
+The same wording is readable at any time from `player.errorTitle` and
+`player.errorMessage` (both `null` when no error screen is up).
+
+---
+
+## Customizing the Error Screen
+
+### Restyle it — `::part()`
+
+The pieces of the built-in screen are exposed as parts, so they can be styled
+from the page without replacing the markup:
+
+```css
+movi-player::part(error-screen)  { background: #101014; }
+movi-player::part(error-icon)    { display: none; }
+movi-player::part(error-title)   { font-family: "Söhne", sans-serif; }
+movi-player::part(error-message) { color: #8a8a94; }
+movi-player::part(error-button)  { border-radius: 2px; }
+```
+
+| Part | Piece |
+|---|---|
+| `error-screen` | The full-bleed backdrop |
+| `error-container` | The centred column |
+| `error-icon` | Icon tile (its `<svg>` inherits `currentColor`) |
+| `error-text` | Title + message + buttons wrapper |
+| `error-title` | Heading |
+| `error-message` | Body text |
+| `error-button` | Both buttons |
+| `error-retry-button` | Retry only |
+| `error-software-button` | "Try Software Decoding" only |
+
+### Replace it — `slot="error"`
+
+A light-DOM child with `slot="error"` replaces the built-in screen entirely.
+The backdrop stays (it is what covers the last painted frame); override
+`::part(error-screen)` to drop it.
+
+```html
+<movi-player src="video.mkv">
+  <div slot="error" class="my-error">
+    <img src="/sad-cat.svg" alt="" />
+    <h2 id="err-title"></h2>
+    <p id="err-message"></p>
+    <button id="err-retry">Try again</button>
+  </div>
+</movi-player>
+```
+
+```javascript
+const player = document.querySelector("movi-player");
+
+player.addEventListener("errordisplay", (e) => {
+  document.getElementById("err-title").textContent = e.detail.title;
+  document.getElementById("err-message").textContent = e.detail.message;
+  document.getElementById("err-retry").hidden = !e.detail.canRetry;
+});
+
+// The two recoveries the built-in buttons offer:
+document.getElementById("err-retry").onclick = () => player.load();
+// player.enableSoftwareDecoding();  // when canTrySoftware is true
+```
+
+To suppress the error screen with no replacement, use the `noerrorscreen`
+attribute.
+
 ---
 
 ## Keyboard Shortcuts

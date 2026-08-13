@@ -562,6 +562,11 @@ export class MoviElement extends HTMLElement {
    *  this and its pill still appears. */
   private _userChoseMute: boolean = false;
   private brokenIndicator: HTMLElement | null = null;
+  // The wording currently on the error screen. Kept because a host rendering
+  // its own screen needs the sentence the player worked out, not the raw
+  // "HTTP 403 (Fatal)" the `error` event carries. Null until one is shown.
+  private _errorTitle: string | null = null;
+  private _errorMessage: string | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
   /** Shown in the page while the canvas is living in a PiP window. */
   private pipPlaceholder: HTMLElement | null = null;
@@ -1452,9 +1457,15 @@ export class MoviElement extends HTMLElement {
     this.brokenIndicator = document.createElement("div");
     this.brokenIndicator.className = "movi-broken-indicator";
     this.brokenIndicator.style.display = "none";
+    // part= on every piece a host might want to restyle. ::part() reaches
+    // into the shadow root without exposing the markup as an API — the
+    // internals stay free to change as long as the named pieces keep meaning
+    // the same thing. The slot below is the escape hatch for hosts that want
+    // to replace the markup outright rather than restyle it.
     this.brokenIndicator.innerHTML = `
-      <div class="movi-broken-container">
-        <div class="movi-broken-icon-wrapper">
+      <slot name="error"></slot>
+      <div class="movi-broken-container" part="error-container">
+        <div class="movi-broken-icon-wrapper" part="error-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10.75 3H13.25C17.5 3 21 6.5 21 10.75V13.25C21 17.5 17.5 21 13.25 21H10.75C6.5 21 3 17.5 3 13.25V10.75C3 6.5 6.5 3 10.75 3Z" fill="rgba(255, 68, 68, 0.05)"/>
             <path d="M12 8V12" stroke="#ff4444"/>
@@ -1462,10 +1473,10 @@ export class MoviElement extends HTMLElement {
             <path d="M3 3L21 21" stroke="white" stroke-opacity="0.2"/>
           </svg>
         </div>
-        <div class="movi-broken-text">
-          <h3 class="movi-broken-title">Format Unsupported</h3>
-          <p class="movi-broken-message">This video codec is not supported by your browser's hardware acceleration.</p>
-          <button class="movi-sw-fallback-btn" style="display: none;">
+        <div class="movi-broken-text" part="error-text">
+          <h3 class="movi-broken-title" part="error-title">Format Unsupported</h3>
+          <p class="movi-broken-message" part="error-message">This video codec is not supported by your browser's hardware acceleration.</p>
+          <button class="movi-sw-fallback-btn" part="error-button error-software-button" style="display: none;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
               <path d="M3 3v5h5"/>
@@ -1474,7 +1485,7 @@ export class MoviElement extends HTMLElement {
             </svg>
             Try Software Decoding
           </button>
-          <button class="movi-retry-btn" style="display: none;">
+          <button class="movi-retry-btn" part="error-button error-retry-button" style="display: none;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
               <path d="M3 3v5h5"/>
@@ -1486,6 +1497,7 @@ export class MoviElement extends HTMLElement {
         </div>
       </div>
     `;
+    this.brokenIndicator.setAttribute("part", "error-screen");
     shadowRoot.appendChild(this.brokenIndicator);
 
     // Setup software fallback button handler
@@ -21229,6 +21241,14 @@ export class MoviElement extends HTMLElement {
         animation: movi-slide-up 0.6s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
+      /* A host that slots its own error markup replaces the built-in one
+         rather than stacking on top of it. The backdrop stays — it is what
+         covers the last painted frame — and is overridable through
+         ::part(error-screen) for hosts that want their own. */
+      .movi-broken-indicator.movi-custom-error .movi-broken-container {
+        display: none;
+      }
+
       @keyframes movi-slide-up {
         from { transform: translateY(20px); opacity: 0; }
         to { transform: translateY(0); opacity: 1; }
@@ -25968,6 +25988,10 @@ export class MoviElement extends HTMLElement {
     // re-arms it for the new one if still hidden.
     this._autoplayPendingVisible = false;
     if (this.brokenIndicator) this.brokenIndicator.style.display = "none";
+    // The previous source's wording must not answer errorTitle/errorMessage
+    // for this one — a host polling them on load would read a stale failure.
+    this._errorTitle = null;
+    this._errorMessage = null;
     // A fresh source may well support Range — clear any linear-mode lock.
     this._linearMode = false;
     this.classList.remove("movi-linear");
@@ -28344,6 +28368,15 @@ export class MoviElement extends HTMLElement {
       }
     }
 
+    // Which recoveries this failure actually offers — reported to the host
+    // below so a slotted screen can render the same two buttons, and only
+    // the ones that would do something.
+    let canTrySoftware = false;
+    let canRetry = false;
+    // Read before the show below overwrites it — _publishErrorScreen needs to
+    // know whether this is a fresh screen or a repaint of the one already up.
+    const screenWasUp = this.brokenIndicator?.style.display === "flex";
+
     // Show broken indicator
     if (this.brokenIndicator) {
       this.brokenIndicator.style.display = "flex";
@@ -28380,6 +28413,7 @@ export class MoviElement extends HTMLElement {
           // nothing, it just re-runs the same stream engine and fails identically
           // (e.g. Safari MSE rejecting a HE-AAC track). Never offer it for streams.
           !this.player?.isStreamPlayback?.();
+        canTrySoftware = shouldShowSwButton;
         swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
       }
 
@@ -28402,9 +28436,21 @@ export class MoviElement extends HTMLElement {
         ".movi-retry-btn",
       ) as HTMLElement;
       if (retryBtn) {
+        canRetry = true;
         retryBtn.style.display = "flex";
       }
     }
+
+    // Fall back to whatever the screen already said when this call passed no
+    // wording of its own — the markup still shows the previous text, so the
+    // host must be told the same thing.
+    this._publishErrorScreen(
+      title ?? this._errorTitle,
+      message ?? this._errorMessage,
+      canRetry,
+      canTrySoftware,
+      screenWasUp,
+    );
 
     // Hide loading indicator
     this.setSpinnerVisible(false);
@@ -28458,35 +28504,99 @@ export class MoviElement extends HTMLElement {
     if (typeof WebAssembly === "undefined") {
       Logger.warn(TAG, "WebAssembly unavailable — this browser can't run the player");
       if (this.brokenIndicator) {
+        const wasmScreenWasUp =
+          this.brokenIndicator.style.display === "flex";
         this.brokenIndicator.style.display = "flex";
         if (this.emptyStateIndicator) {
           this.emptyStateIndicator.style.display = "none";
         }
+        const wasmTitle = "Browser not supported";
+        const wasmMessage =
+          "This player needs WebAssembly, which lite / proxy browsers (like Opera Mini) don't provide. Please open it in Chrome, Firefox, Safari, Edge, or full Opera.";
         const titleEl =
           this.brokenIndicator.querySelector(".movi-broken-title");
-        if (titleEl) titleEl.textContent = "Browser not supported";
+        if (titleEl) titleEl.textContent = wasmTitle;
         const messageEl = this.brokenIndicator.querySelector(
           ".movi-broken-message",
         );
-        if (messageEl) {
-          messageEl.textContent =
-            "This player needs WebAssembly, which lite / proxy browsers (like Opera Mini) don't provide. Please open it in Chrome, Firefox, Safari, Edge, or full Opera.";
-        }
+        if (messageEl) messageEl.textContent = wasmMessage;
         const swFallbackBtn = this.brokenIndicator.querySelector(
           ".movi-sw-fallback-btn",
         ) as HTMLElement;
         if (swFallbackBtn) {
           swFallbackBtn.style.display = "none";
         }
+        // Neither recovery exists here — there is no WebAssembly to reload
+        // into, so a retry would land on this same screen.
+        this._publishErrorScreen(
+          wasmTitle,
+          wasmMessage,
+          false,
+          false,
+          wasmScreenWasUp,
+        );
       }
       this._isUnsupported = true;
     }
   }
 
   /**
-   * Enable software decoding and reload the video
+   * Record the wording an error screen is showing and tell the host about it.
+   *
+   * Every path that paints the screen goes through here, so `errorTitle` /
+   * `errorMessage` and the `errordisplay` event stay in step with what is
+   * actually on screen — including the WebAssembly-unavailable check, which
+   * never reaches handleUnsupportedVideo.
    */
-  private async enableSoftwareDecoding(): Promise<void> {
+  private _publishErrorScreen(
+    title: string | null,
+    message: string | null,
+    canRetry: boolean,
+    canTrySoftware: boolean,
+    wasAlreadyUp: boolean,
+  ): void {
+    // One failed load reaches handleUnsupportedVideo twice — the player's
+    // runtime `error` event and the init-catch both route here — and the
+    // second pass repaints the same screen. Repainting is harmless; telling
+    // the host twice is not, since anything counting error impressions would
+    // double-count. Same screen, same words: nothing new to report.
+    const isRepaint =
+      wasAlreadyUp &&
+      title === this._errorTitle &&
+      message === this._errorMessage;
+    this._errorTitle = title;
+    this._errorMessage = message;
+    // A host that slots its own markup gets the built-in container hidden;
+    // re-checked on every screen because light-DOM children can arrive after
+    // the element upgrades (frameworks set them post-mount).
+    this.brokenIndicator?.classList.toggle(
+      "movi-custom-error",
+      !!this.querySelector('[slot="error"]'),
+    );
+    if (isRepaint) return;
+    // Separate from the `error` event, which is documented as
+    // CustomEvent<Error> and stays that way: this one carries the wording the
+    // viewer is actually being shown, and fires for every screen — including
+    // the format/codec failures that never produce a runtime error. Composed
+    // so it crosses a host's own shadow boundary like the other events.
+    this.dispatchEvent(
+      new CustomEvent("errordisplay", {
+        detail: { title, message, canRetry, canTrySoftware },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /**
+   * Enable software decoding and reload the video.
+   *
+   * Public because a host that slots its own error screen has to be able to
+   * offer the same recovery the built-in "Try Software Decoding" button does
+   * — worth offering only when `errordisplay` reported canTrySoftware. The
+   * matching retry is `load()`.
+   */
+  async enableSoftwareDecoding(): Promise<void> {
     Logger.info(TAG, "User requested software decoding fallback");
 
     // Reset unsupported state
@@ -34453,6 +34563,22 @@ export class MoviElement extends HTMLElement {
 
   private cleanVideoTitle(filename: string): string {
     return MoviElement.cleanVideoTitle(filename);
+  }
+
+  /**
+   * The heading currently on the error screen, or null if none is up.
+   *
+   * The viewer-facing sentence, not the diagnostic: a refused link reads
+   * "Can't Play This" here and "HTTP 403 (Fatal)" in the `error` event. A
+   * host rendering into the `error` slot wants this one.
+   */
+  get errorTitle(): string | null {
+    return this._errorTitle;
+  }
+
+  /** The body text currently on the error screen, or null if none is up. */
+  get errorMessage(): string | null {
+    return this._errorMessage;
   }
 
   get duration(): number {
