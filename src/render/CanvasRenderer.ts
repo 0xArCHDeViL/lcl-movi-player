@@ -3120,6 +3120,16 @@ export class CanvasRenderer {
       // there for. A flat tint HERE was tried to guarantee ambient reached the
       // bars in fullscreen, and it does, but flat is exactly what ambient was
       // moved off: it put the old solid band back.
+      // …and SAY transparent, rather than trusting whatever was set last. The
+      // ambient mirror pass below sets an opaque clear colour for its 16x16
+      // buffer and never puts it back, so with ambient on the next frame
+      // cleared the whole canvas to opaque black — corners included. The
+      // shader's corner cut only governs what the SHADER draws, so the cut
+      // pixels showed that slab instead of the element's rounded background.
+      // Chrome hides it behind the canvas clip; Firefox composites the canvas
+      // as its own layer and honours neither that clip nor an ancestor's
+      // overflow, so the corners went square there.
+      gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       this.syncLetterboxBackground();
       // Ambient light goes down first; the picture is drawn over it below.
