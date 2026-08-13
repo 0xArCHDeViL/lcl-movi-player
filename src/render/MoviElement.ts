@@ -13959,6 +13959,84 @@ export class MoviElement extends HTMLElement {
     }, fadeAt - at);
   }
 
+  /**
+   * The mirror case: the button has STOPPED being a persistent control while a
+   * flash armed as one is still in flight.
+   *
+   * That flash was built to end solid — at press time the button's resting
+   * state was visible, so there was nothing to fade back to. Pressing play on
+   * the poster is exactly that, and the class comes off within a frame or two
+   * of the press because the intent is now "playing". The animation then holds
+   * the button at full opacity for the rest of its 800ms and, having no fill,
+   * drops to the resting style at the end — straight to hidden, in one frame.
+   * Measured: opacity 1 from 20ms, motionless, then 0 at 817ms. That freeze
+   * and snap is what reads as the icon being stuck.
+   *
+   * So give it the ending it would have had. Let the pop and hold finish, then
+   * take over at the fade boundary with the same tail a receipt on a hidden
+   * button uses, so both endings look alike.
+   */
+  private settleCenterFlashHidden(): void {
+    const anim = this._centerFlashAnim;
+    // A flash that already fades leaves correctly on its own.
+    if (!anim || this._centerFlashFades) return;
+    const fadeAt =
+      MoviElement.CENTER_FLASH_MS * MoviElement.CENTER_FLASH_FADE_AT;
+    const at = typeof anim.currentTime === "number" ? anim.currentTime : 0;
+    const fadeOut = () => {
+      const btn = this.shadowRoot?.querySelector(
+        ".movi-center-play-pause",
+      ) as HTMLElement | null;
+      this.cancelCenterFlash();
+      // The class can come back while this was pending — a replay, a tap that
+      // raised the chrome on touch. Then the button is meant to be solid and
+      // there is nothing to fade.
+      if (!btn || btn.classList.contains("movi-center-visible")) return;
+      const tail = btn.animate(
+        [
+          {
+            visibility: "visible",
+            opacity: 1,
+            transform: "translate(-50%, -50%) scale(1)",
+            easing: "ease-out",
+          },
+          {
+            visibility: "visible",
+            opacity: 0,
+            transform: "translate(-50%, -50%) scale(1.08)",
+          },
+        ],
+        {
+          duration:
+            MoviElement.CENTER_FLASH_MS *
+            (1 - MoviElement.CENTER_FLASH_FADE_AT),
+          fill: "none",
+        },
+      );
+      // Tracked like any other flash so the glyph stays put while it runs and
+      // the usual cleanup applies.
+      this._centerFlashAnim = tail;
+      this._centerFlashFades = true;
+      const clear = () => {
+        if (this._centerFlashAnim === tail) {
+          this._centerFlashAnim = null;
+          this._centerFlashFades = false;
+        }
+      };
+      tail.addEventListener("finish", clear);
+      tail.addEventListener("cancel", clear);
+    };
+    if (at >= fadeAt) {
+      fadeOut();
+      return;
+    }
+    if (this._centerFlashSettleTimer) return;
+    this._centerFlashSettleTimer = window.setTimeout(() => {
+      this._centerFlashSettleTimer = null;
+      if (this._centerFlashAnim === anim) fadeOut();
+    }, fadeAt - at);
+  }
+
   private flashCenterIcon(kind: "play" | "pause"): void {
     if (!this._controls || this._isUnsupported) return;
     const btn = this.shadowRoot?.querySelector(
@@ -26829,6 +26907,19 @@ export class MoviElement extends HTMLElement {
           }
         }
       }
+    }
+
+    // Every branch above has had its say on the class, so this is the first
+    // point that knows the button's settled resting state. A flash armed for
+    // the other one has to be reconciled with it: a solid-ending flash on a
+    // button now hidden needs a fade. (The opposite case is handled at the add
+    // site above, because only that branch can be sure the class is going on.)
+    // A no-op unless there is a mismatched flash in flight.
+    if (
+      centerPlayPauseBtn &&
+      !centerPlayPauseBtn.classList.contains("movi-center-visible")
+    ) {
+      this.settleCenterFlashHidden();
     }
 
     // The bar names what a click will DO, and that just changed.
