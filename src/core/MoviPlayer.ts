@@ -2563,6 +2563,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       ((draining && bufferAhead < 6) || (bufferAhead < 4 && settledSinceSwitch));
     if (
       (stalling || bufferLow) &&
+      // Nothing left to fetch means the whole rung is already in hand, and a
+      // downshift is a bandwidth remedy: there is no bandwidth problem to
+      // remedy, and the lower rung would have to be fetched from scratch. A
+      // stall here is the DECODER, not the link — that has its own downshift
+      // (the software-ceiling branch above), which still fires and still drops
+      // a rung the machine genuinely cannot decode. What this stops is a fully
+      // buffered 4K walking down to 1080p and showing the viewer a worse
+      // picture for no reason at all.
+      !nothingLeftToFetch &&
       !postSeekSettling &&
       !postBackgroundSettling &&
       sinceSwitch > 5000 &&
