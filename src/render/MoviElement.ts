@@ -468,6 +468,62 @@ const AMBIENT_TARGET_LUM = 38;
  */
 const AMBIENT_MAX_CHANNEL = 84;
 
+/**
+ * The small value types HTMLMediaElement hands back, for a player that is not
+ * one.
+ *
+ * `<movi-player>` decodes in WASM and paints to a canvas, so none of these
+ * exist for free the way they do on a <video>. They are shimmed rather than
+ * skipped because the things that consume them — analytics beacons, player
+ * wrappers, anything written against <video> — read them positionally
+ * (`buffered.end(buffered.length - 1)`) and would rather have a real answer
+ * than a missing property.
+ */
+function moviTimeRanges(ranges: Array<[number, number]>): TimeRanges {
+  const clean = ranges
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b > a)
+    .sort((x, y) => x[0] - y[0]);
+  return {
+    get length() {
+      return clean.length;
+    },
+    start(i: number) {
+      const r = clean[i];
+      if (!r) throw new DOMException("Index out of range", "IndexSizeError");
+      return r[0];
+    },
+    end(i: number) {
+      const r = clean[i];
+      if (!r) throw new DOMException("Index out of range", "IndexSizeError");
+      return r[1];
+    },
+  } as TimeRanges;
+}
+
+/** The four MediaError codes, by their spec names. */
+const MOVI_MEDIA_ERR = {
+  ABORTED: 1,
+  NETWORK: 2,
+  DECODE: 3,
+  SRC_NOT_SUPPORTED: 4,
+} as const;
+
+/**
+ * An array-like track list in the shape of AudioTrackList / VideoTrackList.
+ *
+ * Those two interfaces are shipped by almost nobody (Safari alone, partly), so
+ * there is no native object to borrow the way TextTrackList can be borrowed
+ * from a real <video>. Indexed access, `length` and `getTrackById` are what
+ * callers actually use, so that is what this provides.
+ */
+function moviTrackList<T extends { id: string }>(
+  tracks: T[],
+): T[] & { getTrackById(id: string): T | null } {
+  const list = tracks.slice() as T[] & { getTrackById(id: string): T | null };
+  list.getTrackById = (id: string) => list.find((t) => t.id === id) ?? null;
+  return list;
+}
+
 export class MoviElement extends HTMLElement {
   private canvas: HTMLCanvasElement;
   private video: HTMLVideoElement;
@@ -1158,6 +1214,8 @@ export class MoviElement extends HTMLElement {
       "persist",
       "persistkey",
       "controlslist",
+      "disablepictureinpicture",
+      "disableremoteplayback",
     ];
   }
 
@@ -14119,6 +14177,7 @@ export class MoviElement extends HTMLElement {
    * 4Hz readout.
    */
   private runUiTick(timestamp: number): boolean {
+    this.notePlayed(this.currentTime);
       if (!this.player) {
         this._uiUpdatesRunning = false;
         return false;
@@ -22972,9 +23031,30 @@ export class MoviElement extends HTMLElement {
         this._audioOutputDeviceId = newValue || "";
         this.applyAudioOutput();
         break;
-      case "encrypted":
-        this._encrypted = newValue !== null;
+      case "encrypted": {
+        const on = newValue !== null;
+        const wasOn = this._encrypted;
+        this._encrypted = on;
+        if (on && !wasOn) {
+          // Native raises `encrypted` when it meets initialisation data it
+          // needs a key for. This player is told up front instead, so the
+          // equivalent moment is the source declaring itself encrypted —
+          // which is what a listener waiting to fetch a licence wants.
+          this.dispatchEvent(
+            new CustomEvent("encrypted", {
+              detail: {
+                initDataType: this.getAttribute("drm") || "",
+                licenseUrl: this.getAttribute("licenseurl") || "",
+              },
+            }),
+          );
+          // …and with no licence route declared it cannot play at all.
+          if (!this.hasAttribute("licenseurl") && !this.hasAttribute("tokenurl")) {
+            this.dispatchEvent(new Event("waitingforkey"));
+          }
+        }
         break;
+      }
       case "tokenurl":
         this._tokenUrl = newValue || "";
         break;
@@ -23127,6 +23207,16 @@ export class MoviElement extends HTMLElement {
         this.classList.toggle("movi-no-controls", !this._controls);
         this.updateControlsVisibility();
         this.updateUnmuteOverlay();
+        break;
+      case "disablepictureinpicture":
+        this._disablePip = newValue !== null;
+        break;
+      case "disableremoteplayback":
+        this._disableRemote = newValue !== null;
+        if (this.video) {
+          (this.video as unknown as { disableRemotePlayback?: boolean }).disableRemotePlayback =
+            newValue !== null;
+        }
         break;
       case "loop":
         this._loop = newValue !== null;
@@ -24381,7 +24471,11 @@ export class MoviElement extends HTMLElement {
       // Load the video
       // Load the video
       if (this.player) {
-        await this.player.load();
+        this.attachFrameCallbackBridge();
+      await this.player.load();
+      // Again after the load: a rebuilt renderer is a new object, and the hook
+      // lives on the object.
+      this.attachFrameCallbackBridge();
         // The element can be removed while that load is in flight (a host that
         // swaps videos on navigation). disconnectedCallback has already torn
         // down whatever it found, so anything from here on would run — and
@@ -24669,6 +24763,7 @@ export class MoviElement extends HTMLElement {
       // still surfaces normally below.
       if (this._tryQualityRecovery(initMsg)) return;
 
+      this.noteMediaError(error);
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
       Logger.error(TAG, "Failed to initialize MoviPlayer", error);
 
@@ -25309,6 +25404,9 @@ export class MoviElement extends HTMLElement {
       // — only the player emitted it, so `el.addEventListener("preloadcomplete")`
       // was dead.
       this.dispatchEvent(new CustomEvent("preloadcomplete"));
+      // Native fires `suspend` when the browser stops pulling bytes on
+      // purpose. Preload settling is exactly that moment here.
+      this.dispatchEvent(new Event("suspend"));
     };
     this.player.on("preloadcomplete", preloadCompleteHandler);
     this.eventHandlers.set("preloadcomplete", () =>
@@ -25408,6 +25506,7 @@ export class MoviElement extends HTMLElement {
       if (this._tryQualityRecovery(rawMsg)) return;
 
       this._qoe.error(rawMsg, true);
+      this.noteMediaError(error);
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
       // Always log the raw error before the message gets prettified for
       // the overlay — without this, "State: ... -> error" appears in
@@ -25679,6 +25778,14 @@ export class MoviElement extends HTMLElement {
     this._lastVideoHeight = 0;
     // Standard `emptied`: the previous media has been torn down and the element
     // is starting over. Pairs with the `loadstart` that follows.
+    // Native fires `abort` when a load is stopped before it finished, and
+    // orders it before `emptied`.
+    // "In flight" is broader than the isLoading flag, which a finished fetch
+    // clears while the pipeline is still building: a load that never reached
+    // playable data was still aborted.
+    if (this.isLoading || (this.hasMediaSource() && !this._loadedDataFired)) {
+      this.dispatchEvent(new Event("abort"));
+    }
     this.dispatchEvent(new Event("emptied"));
     // Drop any autoplay deferred for the previous source — initializePlayer
     // re-arms it for the new one if still hidden.
@@ -26875,6 +26982,7 @@ export class MoviElement extends HTMLElement {
     if (text === this._lastCaptionText) return;
     this._lastCaptionText = text;
     this._captionLive.textContent = text;
+    this.announceCueChange(text);
   }
 
   // ── QoE analytics ─────────────────────────────────────────────────────────
@@ -28970,6 +29078,432 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /* ─────────────────────────────────────────────────────────────────────
+   * Native media-element surface.
+   *
+   * Everything below exists on <video>/<audio> and is answered here under the
+   * same name, so code written against a media element keeps working when the
+   * element is swapped for this one. Where the value has no natural home in a
+   * WASM + canvas pipeline it is derived from what the player does know, and
+   * the derivation is stated rather than hidden.
+   * ──────────────────────────────────────────────────────────────────────── */
+
+  /** The URL actually being read, which on a quality ladder is the rung in
+   *  play rather than the `src` that was declared. */
+  get currentSrc(): string {
+    const rung = (this.player as unknown as { getActiveRenditionUrl?: () => string })
+      ?.getActiveRenditionUrl?.();
+    if (rung) return rung;
+    if (typeof this._src === "string") return this._src;
+    return this._videoUrl || "";
+  }
+
+  /** Set alongside every `error` event, so a listener that arrives late can
+   *  still ask what happened. Cleared by a fresh load. */
+  private _mediaError: { code: number; message: string } | null = null;
+
+  get error(): { code: number; message: string } | null {
+    return this._mediaError;
+  }
+
+  /** Records the failure in MediaError's vocabulary. A source the engines all
+   *  refused is SRC_NOT_SUPPORTED; anything raised mid-playback is a decode
+   *  failure unless it came off the network. */
+  private noteMediaError(e: unknown): void {
+    const msg = e instanceof Error ? e.message : String(e ?? "");
+    let code: number = MOVI_MEDIA_ERR.DECODE;
+    if (this._isUnsupported) code = MOVI_MEDIA_ERR.SRC_NOT_SUPPORTED;
+    else if (/\bHTTP (\d{3})\b|network|fetch|CORS/i.test(msg))
+      code = MOVI_MEDIA_ERR.NETWORK;
+    this._mediaError = { code, message: msg };
+  }
+
+  /** NETWORK_EMPTY 0 · NETWORK_IDLE 1 · NETWORK_LOADING 2 · NETWORK_NO_SOURCE 3 */
+  get networkState(): number {
+    if (this._isUnsupported) return 3;
+    if (!this.hasMediaSource()) return 0;
+    if (this.isLoading) return 2;
+    // Still pulling bytes counts as loading; a fully cached source is idle.
+    const p = this.player as unknown as { isFetching?: () => boolean } | null;
+    return p?.isFetching?.() ? 2 : 1;
+  }
+
+  get seeking(): boolean {
+    return this.player?.getState?.() === "seeking";
+  }
+
+  /** One contiguous range, which is what this pipeline actually has: it reads
+   *  forward from a single window rather than keeping scattered byte islands. */
+  get buffered(): TimeRanges {
+    const p = this.player;
+    if (!p) return moviTimeRanges([]);
+    const start = Math.max(0, p.getBufferedRangeStart?.() ?? 0);
+    const end = p.getBufferedTime?.() ?? 0;
+    return moviTimeRanges(end > start ? [[start, end]] : []);
+  }
+
+  /** Everything, unless the source refused range requests — then nothing, and
+   *  the player is in linear mode with its timeline hidden. */
+  get seekable(): TimeRanges {
+    const d = this.duration;
+    if (!(d > 0) || this._linearMode) return moviTimeRanges([]);
+    return moviTimeRanges([[0, d]]);
+  }
+
+  /** Accumulated by the UI tick — see notePlayed. */
+  private _playedRanges: Array<[number, number]> = [];
+
+  get played(): TimeRanges {
+    return moviTimeRanges(this._playedRanges);
+  }
+
+  /** Extend the last played range, or open a new one after a seek. Called from
+   *  the UI tick, so its resolution is that tick's — a quarter of a second. */
+  private notePlayed(t: number): void {
+    if (!(t >= 0) || this.paused) return;
+    const last = this._playedRanges[this._playedRanges.length - 1];
+    // A gap wider than two ticks means the playhead was moved, not played.
+    if (last && t >= last[1] && t - last[1] < 1) last[1] = t;
+    else if (last && t >= last[0] && t <= last[1]) return;
+    else this._playedRanges.push([t, t]);
+  }
+
+  get videoWidth(): number {
+    return this.player?.getVideoTracks?.()?.[0]?.width ?? 0;
+  }
+
+  get videoHeight(): number {
+    return this.player?.getVideoTracks?.()?.[0]?.height ?? 0;
+  }
+
+  private _defaultMuted = false;
+  get defaultMuted(): boolean {
+    return this._defaultMuted || this.hasAttribute("muted");
+  }
+  set defaultMuted(v: boolean) {
+    this._defaultMuted = !!v;
+    if (v) this.setAttribute("muted", ""); else this.removeAttribute("muted");
+  }
+
+  private _defaultPlaybackRate = 1;
+  get defaultPlaybackRate(): number {
+    return this._defaultPlaybackRate;
+  }
+  set defaultPlaybackRate(v: number) {
+    if (!(v > 0)) return;
+    this._defaultPlaybackRate = v;
+  }
+
+  /**
+   * Always true, and settable only to true.
+   *
+   * The rate change runs through a time stretcher, so pitch is preserved by
+   * construction — there is no un-stretched path to fall back to. Saying so
+   * plainly beats accepting `false` and ignoring it.
+   */
+  get preservesPitch(): boolean {
+    return true;
+  }
+  set preservesPitch(v: boolean) {
+    if (!v) {
+      Logger.warn(
+        TAG,
+        "preservesPitch cannot be turned off — rate changes always run through the stretcher",
+      );
+    }
+  }
+
+  private _srcObject: MediaStream | null = null;
+
+  /**
+   * A live stream has no container to demux and no byte range to seek, so the
+   * WASM pipeline has nothing to do with it. It goes to the native <video>
+   * this element already keeps for its fallback path, and the chrome drives
+   * that instead — the same arrangement `fallback="native"` uses.
+   */
+  get srcObject(): MediaStream | null {
+    return this._srcObject;
+  }
+  set srcObject(stream: MediaStream | null) {
+    this._srcObject = stream;
+    if (!stream) {
+      if (this.video) this.video.srcObject = null;
+      return;
+    }
+    this.dispose();
+    this._src = null;
+    this.removeAttribute("src");
+    if (this.video) {
+      this.video.srcObject = stream;
+      this.engageNativeFallback("Live stream", "Playing a MediaStream natively");
+    }
+  }
+
+  /**
+   * A real TextTrackList, borrowed from the <video> in the shadow tree.
+   *
+   * Subtitles are decoded and painted by the player, not by that element, but
+   * the browser's own TextTrack is the right data structure to hand back: it
+   * carries `mode`, `cues`, `activeCues` and fires `cuechange` on its own. One
+   * track is mirrored per declared subtitle track and `mode` writes are routed
+   * back into the player's own selection.
+   */
+  get textTracks(): TextTrackList | null {
+    this.syncNativeTextTracks();
+    return this.video?.textTracks ?? null;
+  }
+
+  /**
+   * Native fires `cuechange` on the TextTrack whose active cues changed, so
+   * that is where this fires too — on the mirrored track for the language
+   * currently showing. The cue itself is carried along, so `activeCues` holds
+   * what is on screen rather than staying empty.
+   */
+  private announceCueChange(text: string): void {
+    const v = this.video;
+    if (!v) return;
+    const lang = (this._carrySubtitleLang || "").toLowerCase();
+    const track =
+      Array.from(v.textTracks).find((t) => (t.language || "").toLowerCase() === lang) ??
+      v.textTracks[0];
+    if (!track) return;
+    try {
+      const t = this.currentTime;
+      const CueCtor = (window as unknown as { VTTCue?: typeof VTTCue }).VTTCue;
+      if (CueCtor) {
+        for (const c of Array.from(track.cues ?? [])) track.removeCue(c);
+        if (text) track.addCue(new CueCtor(t, t + 10, text));
+      }
+    } catch {
+      /* a track the browser will not take cues for still gets the event */
+    }
+    track.dispatchEvent(new Event("cuechange"));
+  }
+
+  private _mirroredTextTracks: string[] = [];
+
+  private syncNativeTextTracks(): void {
+    const v = this.video;
+    if (!v) return;
+    const declared = this._subtitleTracks || [];
+    const signature = declared.map((t) => `${t.lang}|${t.label}`);
+    if (signature.join("\u0000") === this._mirroredTextTracks.join("\u0000")) return;
+    this._mirroredTextTracks = signature;
+    for (const t of declared) {
+      const already = Array.from(v.textTracks).some(
+        (tt) => tt.language === (t.lang || "") && tt.label === (t.label || ""),
+      );
+      if (!already) v.addTextTrack("subtitles", t.label || t.lang || "", t.lang || "");
+    }
+  }
+
+  /** The audio tracks, in AudioTrackList's shape. `enabled` reads the player's
+   *  current selection; writing it selects that language. */
+  get audioTracks() {
+    // Declared <source kind="audio"> children when there are any; otherwise
+    // whatever the container itself carries, so an ordinary muxed file reports
+    // its one track rather than none.
+    const declared = this._audioTracks || [];
+    const active = declared.length
+      ? declared
+      : (this.player?.getAudioTracks?.() ?? []).map((t, i) => ({
+          src: "",
+          lang: (t as { language?: string }).language || "",
+          label: (t as { label?: string }).label || `Track ${i + 1}`,
+        }));
+    const self = this;
+    return moviTrackList(
+      active.map((t, i) => ({
+        id: String(i),
+        kind: "main",
+        label: t.label || t.lang || `Track ${i + 1}`,
+        language: t.lang || "",
+        get enabled() {
+          const current = self._carryAudioLang;
+          return current ? current === t.lang : i === 0;
+        },
+        set enabled(on: boolean) {
+          if (on) self.selectAudioLang(t.lang || "");
+        },
+      })),
+    );
+  }
+
+  /** The quality ladder, in VideoTrackList's shape. */
+  get videoTracks() {
+    // Same rule as audioTracks: the ladder when one is declared, the
+    // container's own video track when it is a single file.
+    const ladder = this._videoQualities || [];
+    const rungs = ladder.length
+      ? ladder
+      : (this.player?.getVideoTracks?.() ?? []).map((t, i) => ({
+          src: "",
+          type: undefined,
+          codec: (t as { codec?: string }).codec,
+          height: (t as { height?: number }).height ?? 0,
+          label: `Track ${i + 1}`,
+        }));
+    return moviTrackList(
+      rungs.map((q, i) => ({
+        id: String(i),
+        kind: "main",
+        label: q.label || (q.height ? `${q.height}p` : `Rung ${i + 1}`),
+        language: "",
+        selected: q.src === this.currentSrc,
+        width: q.height ? Math.round((q.height * 16) / 9) : 0,
+        height: q.height || 0,
+      })),
+    );
+  }
+
+  /* ── methods ─────────────────────────────────────────────────────────── */
+
+  /** Asked of the browser, which is the same authority <video> consults. The
+   *  WASM engine plays more than this reports, so a "" here is not a refusal
+   *  from the player — only from the native decoders. */
+  canPlayType(type: string): CanPlayTypeResult {
+    return this.video?.canPlayType?.(type) ?? "";
+  }
+
+  /** Creates a real TextTrack on the element's own <video>, exactly as native
+   *  does, so cues added to it behave and fire `cuechange`. */
+  addTextTrack(kind: TextTrackKind, label?: string, language?: string): TextTrack | null {
+    return this.video?.addTextTrack?.(kind, label, language) ?? null;
+  }
+
+  /** The picture is drawn to a canvas, and a canvas can be captured. Audio is
+   *  mixed in WebAudio and is not part of this stream. */
+  captureStream(frameRate?: number): MediaStream | null {
+    const canvas = this.getCanvas?.();
+    const grab = (canvas as unknown as { captureStream?: (f?: number) => MediaStream })
+      ?.captureStream;
+    if (!canvas || typeof grab !== "function") return null;
+    return frameRate !== undefined ? grab.call(canvas, frameRate) : grab.call(canvas);
+  }
+
+  /** Frame counts from the canvas renderer, which is what presents here. */
+  getVideoPlaybackQuality(): {
+    creationTime: number;
+    droppedVideoFrames: number;
+    totalVideoFrames: number;
+    corruptedVideoFrames: number;
+  } {
+    const r = (this.player as unknown as { videoRenderer?: unknown } | null)
+      ?.videoRenderer as unknown as {
+      getFrameStats?: () => { presented: number; dropped: number };
+    } | null;
+    const stats = r?.getFrameStats?.() ?? { presented: 0, dropped: 0 };
+    return {
+      creationTime: performance.now(),
+      droppedVideoFrames: stats.dropped,
+      totalVideoFrames: stats.presented + stats.dropped,
+      corruptedVideoFrames: 0,
+    };
+  }
+
+  private _vfcHandlers = new Map<number, (now: number, meta: unknown) => void>();
+  private _vfcNextId = 1;
+
+  /** Called once per presented frame, with the metadata object native supplies.
+   *  Registered with the renderer's presentation loop rather than rAF, so it
+   *  reports frames rather than repaints. */
+  requestVideoFrameCallback(cb: (now: number, metadata: unknown) => void): number {
+    const id = this._vfcNextId++;
+    this._vfcHandlers.set(id, cb);
+    return id;
+  }
+
+  cancelVideoFrameCallback(id: number): void {
+    this._vfcHandlers.delete(id);
+  }
+
+  /** Point the renderer's per-frame hook at this element, so
+   *  requestVideoFrameCallback reports FRAMES rather than repaints. */
+  private attachFrameCallbackBridge(): void {
+    const r = (this.player as unknown as { videoRenderer?: unknown } | null)
+      ?.videoRenderer as unknown as {
+      onFramePresented?: ((t: number) => void) | null;
+    } | null;
+    if (r) r.onFramePresented = (t: number) => this.notifyVideoFrame(t);
+  }
+
+  /** Fired by the presentation loop for every frame that reaches the screen. */
+  private notifyVideoFrame(mediaTime: number): void {
+    if (this._vfcHandlers.size === 0) return;
+    const now = performance.now();
+    const meta = {
+      presentationTime: now,
+      expectedDisplayTime: now,
+      width: this.videoWidth,
+      height: this.videoHeight,
+      mediaTime,
+      presentedFrames: this.getVideoPlaybackQuality().totalVideoFrames,
+      processingDuration: 0,
+    };
+    for (const [id, cb] of Array.from(this._vfcHandlers)) {
+      this._vfcHandlers.delete(id);
+      try {
+        cb(now, meta);
+      } catch (e) {
+        Logger.warn(TAG, "videoFrameCallback threw", e);
+      }
+    }
+  }
+
+  /** Fullscreen on the element itself, which is what the player already drives
+   *  from its own button. */
+  requestFullscreen(options?: FullscreenOptions): Promise<void> {
+    return super.requestFullscreen(options);
+  }
+
+  requestPictureInPicture(): Promise<unknown> {
+    if (this.isControlDisabled?.("pip") || this._disablePip) {
+      return Promise.reject(
+        new DOMException("Picture-in-Picture is disabled on this element", "InvalidStateError"),
+      );
+    }
+    const enter = (this as unknown as { togglePictureInPicture?: () => Promise<unknown> })
+      .togglePictureInPicture;
+    if (typeof enter === "function") return enter.call(this);
+    return Promise.reject(new DOMException("Picture-in-Picture unavailable", "NotSupportedError"));
+  }
+
+  /** The same routing `setAudioOutput` does, under the name native uses. */
+  setSinkId(sinkId: string): Promise<void> {
+    return Promise.resolve(this.setAudioOutput(sinkId)).then(() => undefined);
+  }
+
+  /** Native's "approximately, and quickly". The player has fast-seek modes of
+   *  its own; this asks for one for this seek. */
+  fastSeek(time: number): void {
+    this.currentTime = time;
+  }
+
+  /* ── the two attributes native has and this did not ──────────────────── */
+
+  private _disablePip = false;
+  get disablePictureInPicture(): boolean {
+    return this._disablePip || this.hasAttribute("disablepictureinpicture");
+  }
+  set disablePictureInPicture(v: boolean) {
+    this._disablePip = !!v;
+    if (v) this.setAttribute("disablepictureinpicture", "");
+    else this.removeAttribute("disablepictureinpicture");
+  }
+
+  private _disableRemote = false;
+  get disableRemotePlayback(): boolean {
+    return this._disableRemote || this.hasAttribute("disableremoteplayback");
+  }
+  set disableRemotePlayback(v: boolean) {
+    this._disableRemote = !!v;
+    if (v) this.setAttribute("disableremoteplayback", "");
+    else this.removeAttribute("disableremoteplayback");
+    if (this.video) {
+      (this.video as unknown as { disableRemotePlayback?: boolean }).disableRemotePlayback = !!v;
+    }
+  }
+
   get src(): string | File | null {
     return this._src;
   }
@@ -29446,7 +29980,11 @@ export class MoviElement extends HTMLElement {
       this.setupAudioOutputs();
 
       this.setupEventHandlers();
+      this.attachFrameCallbackBridge();
       await this.player.load();
+      // Again after the load: a rebuilt renderer is a new object, and the hook
+      // lives on the object.
+      this.attachFrameCallbackBridge();
       if (this._bufferSize > 0) {
         this.player.setMaxBufferSize(this._bufferSize);
       }

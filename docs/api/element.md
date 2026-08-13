@@ -386,6 +386,18 @@ Feeds everything that reads chapters: the segmented progress bar, the chapter na
 
 ---
 
+#### `disablepictureinpicture`
+
+Boolean. Refuses Picture-in-Picture, the same as `<video disablepictureinpicture>`:
+`requestPictureInPicture()` rejects with an `InvalidStateError`. To hide the button
+as well, use `controlslist="nopip"`.
+
+#### `disableremoteplayback`
+
+Boolean. Turns off remote playback targets (AirPlay, Cast) for the element, the same
+as `<video disableremoteplayback>`. Mirrored onto the internal `<video>`, which is
+what the browser offers the target on.
+
 #### `controlslist`
 
 Switches built-in controls off, as `no<name>` tokens — the same shape

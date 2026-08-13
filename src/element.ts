@@ -256,6 +256,10 @@ export interface MoviPlayerAttributes {
   persistkey?: string;
   /** Built-in controls to switch off, as `no<name>` tokens. */
   controlslist?: string;
+  /** Refuse Picture-in-Picture, as `<video disablepictureinpicture>` does. */
+  disablepictureinpicture?: boolean;
+  /** Turn off remote playback targets, as `<video disableremoteplayback>` does. */
+  disableremoteplayback?: boolean;
 }
 
 /**

@@ -307,6 +307,14 @@
             {
               "name": "controlslist",
               "description": "Switches built-in controls off, as `no<name>` tokens — the same shape"
+            },
+            {
+              "name": "disablepictureinpicture",
+              "description": "Boolean. Refuses Picture-in-Picture, the same as `<video disablepictureinpicture>`:"
+            },
+            {
+              "name": "disableremoteplayback",
+              "description": "Boolean. Turns off remote playback targets (AirPlay, Cast) for the element, the same"
             }
           ],
           "events": [

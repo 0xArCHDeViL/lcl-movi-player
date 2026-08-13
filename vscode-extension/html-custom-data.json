@@ -1049,6 +1049,32 @@
               "url": "https://moviplayer.com/docs/api/element#controlslist"
             }
           ]
+        },
+        {
+          "name": "disablepictureinpicture",
+          "description": {
+            "kind": "markdown",
+            "value": "Boolean. Refuses Picture-in-Picture, the same as `<video disablepictureinpicture>`:"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#disablepictureinpicture"
+            }
+          ]
+        },
+        {
+          "name": "disableremoteplayback",
+          "description": {
+            "kind": "markdown",
+            "value": "Boolean. Turns off remote playback targets (AirPlay, Cast) for the element, the same"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#disableremoteplayback"
+            }
+          ]
         }
       ],
       "references": [

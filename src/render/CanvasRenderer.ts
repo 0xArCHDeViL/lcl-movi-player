@@ -205,6 +205,15 @@ export class CanvasRenderer {
   /** When a frame last went up, or when the queue was last cleared. Only used
    *  to bound how long the picture may be held while pre-roll is dropped. */
   private _lastPresentAt = 0;
+  private framesDropped: number = 0;
+  /** Frames presented and dropped since this renderer was built, for
+   *  getVideoPlaybackQuality() on the element. */
+  getFrameStats(): { presented: number; dropped: number } {
+    return { presented: this.framesPresented, dropped: this.framesDropped };
+  }
+  /** Called for every frame that reaches the screen — drives the element's
+   *  requestVideoFrameCallback. */
+  onFramePresented: ((mediaTime: number) => void) | null = null;
   private framesPresented: number = 0; // Track number of frames presented (for initial sync)
 
   // Current time tracking
@@ -2597,6 +2606,8 @@ export class CanvasRenderer {
         this.lastPresentedPts = frameTime;
         this.currentTime = frameTime;
         this.framesPresented++;
+        this.onFramePresented?.(this.currentTime);
+        this.onFramePresented?.(this.currentTime);
         this._lastPresentAt = performance.now();
         return;
       }
@@ -2908,6 +2919,7 @@ export class CanvasRenderer {
       this.lastPresentedPts = bestFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
       this.framesPresented++;
+      this.onFramePresented?.(this.currentTime);
       this._lastPresentAt = performance.now();
 
       return bestFrame;
@@ -4428,6 +4440,7 @@ export class CanvasRenderer {
         frame.close();
         this.frameQueue.shift();
         dropped++;
+        this.framesDropped++;
       } else {
         break;
       }
