@@ -1409,14 +1409,21 @@ export class MoviElement extends HTMLElement {
     // circle: the shape means "video", the lap means "working on it". The
     // outline stays put, so it stays readable as a play mark while it turns.
     //
-    // pathLength="100" is what makes the dash maths sane: the perimeter is an
-    // awkward 67-and-change user units, and normalising it means the segment
-    // and its offset are just percentages of the way round.
+    // The dash is written in the path's OWN units, not normalised.
+    //
+    // pathLength="100" would let the segment and its offset be plain
+    // percentages of the way round, which is how this was first built — but
+    // WebKit does not honour pathLength when it computes dashes, so in Safari
+    // "28 72" was measured against the real perimeter of 67.27 instead of
+    // against 100. The pattern was then longer than the shape it ran on, and
+    // the chase came out as a static box rather than a segment travelling the
+    // triangle. The awkward numbers below are that same 28%/72% split written
+    // out in user units, which every engine reads the same way.
     loadingIndicator.innerHTML = `
       <div class="movi-loader-container">
         <svg class="movi-loader-mark" viewBox="0 0 48 48" aria-hidden="true">
-          <path class="movi-loader-track" d="M18 12L36 24L18 36Z" pathLength="100" />
-          <path class="movi-loader-chase" d="M18 12L36 24L18 36Z" pathLength="100" />
+          <path class="movi-loader-track" d="M18 12L36 24L18 36Z" />
+          <path class="movi-loader-chase" d="M18 12L36 24L18 36Z" />
         </svg>
       </div>
     `;
@@ -19619,13 +19626,15 @@ export class MoviElement extends HTMLElement {
         /* Just over a quarter of the way round — long enough to read as a
            stroke with a direction, short enough that it is clearly a segment
            and not the outline itself. */
-        stroke-dasharray: 28 72;
+        /* 28% and 72% of the triangle's 67.2666-unit perimeter. */
+        stroke-dasharray: 18.8347 48.4319;
         animation: movi-loader-chase 1.35s linear infinite;
       }
 
       @keyframes movi-loader-chase {
         to {
-          stroke-dashoffset: -100;
+          /* One full lap of the perimeter, in the same units as the dash. */
+          stroke-dashoffset: -67.2666;
         }
       }
 
