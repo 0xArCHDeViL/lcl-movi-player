@@ -8080,6 +8080,13 @@ export class MoviElement extends HTMLElement {
               this.showOSD(audioIcon, muxAudioOsd);
             }
             this.updateAudioTrackMenu();
+            // …which redraws from the player, and the player does not know yet:
+            // a language switch stands up a new audio demuxer and only records
+            // the choice when that lands, a second or more later. Tick the item
+            // the viewer actually clicked so the menu answers the click, not
+            // the state it is overtaking. The completion event redraws this
+            // authoritatively — and puts it back if the switch fails.
+            this.markAudioItemChosen(lang ?? null, trackIdStr ?? null);
             const menu = this.shadowRoot?.querySelector(
               ".movi-audio-track-menu",
             ) as HTMLElement;
@@ -8100,6 +8107,21 @@ export class MoviElement extends HTMLElement {
     // Track availability is exactly what decides whether the mobile tray has
     // anything worth folding away.
     this.syncMobileExtras();
+  }
+
+  /** Move the tick in the audio menu to the entry just chosen, ahead of the
+   *  player confirming it. Purely visual and always overwritten by the next
+   *  real redraw. */
+  private markAudioItemChosen(lang: string | null, trackId: string | null): void {
+    const items = this.shadowRoot?.querySelectorAll(".movi-audio-track-item");
+    if (!items) return;
+    items.forEach((node) => {
+      const el = node as HTMLElement;
+      const mine = lang
+        ? el.dataset.audioLang === lang
+        : el.dataset.trackId === trackId;
+      el.classList.toggle("movi-audio-track-active", mine);
+    });
   }
 
   /*
@@ -25302,6 +25324,21 @@ export class MoviElement extends HTMLElement {
         "audioTrackChange",
         audioTrackChangeHandler,
       ),
+    );
+    // A LANGUAGE switch never reaches the track manager. Split (separate-URL)
+    // audio lives outside it — selectAudioLang stands up a whole new audio
+    // demuxer — so the player announces that one itself, and nothing was
+    // listening. The menu still redrew on the click, but selectAudioLang is
+    // async and the active language is not recorded until the swap completes,
+    // so it redrew with the OLD entry ticked; only reopening the menu, by then
+    // long after the switch, showed the new one. Hosts got nothing at all —
+    // the `audiotrackchange` DOM event fires from this handler. Same handler,
+    // both emitters: whichever kind of audio changed, the UI hears about it
+    // when it has actually changed.
+    const player = this.player;
+    player.on("audioTrackChange" as any, audioTrackChangeHandler);
+    this.eventHandlers.set("audioTrackChangePlayer", () =>
+      player.off("audioTrackChange" as any, audioTrackChangeHandler),
     );
 
     // Handle subtitle track changes
