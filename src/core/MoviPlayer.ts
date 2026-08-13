@@ -940,6 +940,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** How long a superseded seek waits for whoever took its session to resolve
    *  the "seeking" state before doing it itself. */
   private static readonly ORPHANED_SEEK_BACKSTOP_MS = 750;
+  /** How long the picture gets to rejoin the sound in a video-only catch-up
+   *  before a binding stops the sound and waits for it. Long enough that the
+   *  ordinary case — a few hundred ms of already-buffered decode — passes
+   *  unnoticed; short enough that a catch-up going nowhere cannot run away. */
+  private static readonly RESYNC_HOLD_MS = 1200;
   private _playStartTime: number = 0; // When play() was called — grace period for stall detection
   /** performance.now() of the last buffering→playing resume (0 = never). */
   private _stallResumeAt: number = 0;
@@ -2562,7 +2567,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const postBackgroundSettling =
       this._foregroundRecoveryAt > 0 &&
       now - this._foregroundRecoveryAt < 8000;
-    const stalling = this.stateManager.is("buffering");
+    // Buffering is the ABR's ground truth for a rung the link cannot carry —
+    // but only when the link is what stopped us. A buffering WE caused (a rate
+    // change's audio re-anchor, a seek resuming on the cushion it just flushed,
+    // a bound catch-up holding the sound for the picture) says nothing about
+    // the rung, and reading it as a verdict costs a rung every few seconds for
+    // as long as the hold lasts: one session walked 1440p → 1080p → 720p →
+    // 480p → 360p → 240p on a link carrying 25.9s of buffer, each downshift
+    // clearing the frame queue the hold was waiting to see fill — the ladder
+    // collapse and the wait sustaining each other.
+    const stalling =
+      this.stateManager.is("buffering") && !this._bufferingSelfInflicted;
     // An in-place quality switch resets the buffered range to ~0 at the current
     // playhead, so bufferAhead reads low for the first several seconds while the
     // new rendition re-primes — that's a REFILL, not the network failing to
@@ -10241,25 +10256,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // restarted, and processLoop is where stall detection, the resume gate and
     // the demux timeout all live. Read off the session this came from: 5,628
     // further log lines, not one buffering event, the sound running on over a
-    // picture that stopped at 42s. Holding here fixes both — the viewer gets
-    // the spinner and silence that match what is actually happening, and if the
-    // seek does hang we hang in the honest state instead of a false "playing".
-    const boundHold =
-      this._bindAV &&
-      !this.disableAudio &&
-      (!!this.audioDemuxer || !!this.trackManager.getActiveAudioTrack()) &&
-      this.stateManager.is("playing");
-    if (boundHold) {
+    // picture that stopped at 42s.
+    //
+    // So hold, but LATE. Holding up front costs the case that works: the whole
+    // catch-up is normally a few hundred milliseconds of already-buffered
+    // decode, and stopping the sound for it turned a switch nobody noticed into
+    // a spinner — and, because the ABR reads any buffering as the rung failing,
+    // into a walk down the whole ladder. Give the picture its moment, and hold
+    // only if it doesn't arrive: past this, the sound is running away from a
+    // catch-up that is not catching up, which is the thing a binding forbids.
+    let held = false;
+    const holdIfStillWaiting = () => {
+      if (this._destroyed || this.seekSessionId !== mySessionId) return;
+      if (!this.stateManager.is("playing")) return;
+      const bound =
+        this._bindAV &&
+        !this.disableAudio &&
+        (!!this.audioDemuxer || !!this.trackManager.getActiveAudioTrack());
+      if (!bound) return;
+      held = true;
+      Logger.info(
+        TAG,
+        `${reason}: the picture is still coming — holding sound and clock for it`,
+      );
       this.wasPlayingBeforeRebuffer = true;
       this._bufferingEntryTime = performance.now();
-      // Our own doing, not a starved pipeline: resume on readiness rather than
-      // serving the cushion meant for a decoder that fell behind.
+      // Our own doing, not a starved pipeline: the resume gate lets go on
+      // readiness instead of serving the cushion meant for a decoder that fell
+      // behind, and the ABR knows not to read it as the rung failing.
       this._bufferingSelfInflicted = true;
       this.stateManager.setState("buffering");
       this.clock.pause();
       this.audioRenderer?.suspendForBuffering();
+      // Down so the catch-up's frames ACCUMULATE — that queue is what the
+      // resume gate measures before it starts the two together again.
       this.videoRenderer?.stopPresentationLoop();
-    }
+    };
 
     // Cancel any in-flight processLoop to avoid demux conflicts during seek
     if (this.animationFrameId !== null) {
@@ -10267,6 +10299,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.animationFrameId = null;
     }
     const mySessionId = ++this.seekSessionId;
+    const holdTimer = setTimeout(
+      holdIfStillWaiting,
+      MoviPlayer.RESYNC_HOLD_MS,
+    );
     // Release a superseded seek's video-sync flag (this recovery seek is
     // filter-only and owns its own resume) so the pipeline can't strand in
     // a permanent wait — see notifySeekCompletion's superseded branch.
@@ -10293,6 +10329,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (this.demuxer) {
         await this.demuxer.seek(audioTime + this.startTime);
       }
+      // The blocking part is behind us — whatever happens now, the pipeline is
+      // moving again, so the hold has nothing left to protect against.
+      clearTimeout(holdTimer);
 
       if (this.seekSessionId !== mySessionId) return; // Superseded
 
@@ -10316,16 +10355,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.seekCraSeen = 0;
       this.videoChainBrokenUntilKeyframe = false;
 
-      // Restart video pipeline. Held (see boundHold), the presentation loop
-      // stays down so the catch-up's frames ACCUMULATE — that queue is what the
-      // resume gate measures before it lets sound and picture go together, and
-      // a loop running through the wait would consume each frame as it landed
-      // and leave the gate with nothing to find.
-      if (this.videoRenderer && !boundHold) {
+      // Restart video pipeline. If the hold went up while we were waiting, the
+      // presentation loop stays down: the resume gate is measuring the queue
+      // now, and a loop running through that would consume each frame as it
+      // landed and leave the gate with nothing to find.
+      if (this.videoRenderer && !held) {
         this.videoRenderer.startPresentationLoop();
       }
       this.processLoop();
     } catch (err) {
+      clearTimeout(holdTimer);
       Logger.error(TAG, `${reason} failed`, err);
       // Fall back to processLoop restart so playback doesn't stall
       this.processLoop();
