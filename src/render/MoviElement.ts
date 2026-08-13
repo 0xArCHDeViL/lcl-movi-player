@@ -18820,25 +18820,6 @@ export class MoviElement extends HTMLElement {
            border-width: 1.5px !important;
         }
 
-        /* Never the button and the spinner together.
-           
-           The rule is stated here rather than in the code that adds the class
-           because the two are driven by different events and the order between
-           them is not guaranteed: on a source change with the chrome up, the
-           class is already on the button from the tap that raised it, and the
-           spinner arrives afterwards. Every path that adds the class asks
-           whether the spinner is up first, but none of them can answer for a
-           spinner that has not appeared yet. The host carries is-buffering for
-           exactly as long as the spinner is displayed, so a rule keyed off it
-           cannot be raced.
-           
-           Not display:none — the button transitions, and cutting it out
-           mid-fade is the flicker this file has fought before. */
-        :host(.is-buffering) .movi-center-play-pause {
-           opacity: 0 !important;
-           visibility: hidden !important;
-           pointer-events: none !important;
-        }
         .movi-center-play-pause.movi-center-visible {
            transform: translate(-50%, -50%) scale(1);
         }
@@ -19780,6 +19761,34 @@ export class MoviElement extends HTMLElement {
         transform: translate(-50%, -50%) scale(1);
         pointer-events: auto;
         transition-delay: 0s;
+      }
+
+      /* Never the button and the spinner together.
+
+         The rule is stated here rather than in the code that adds the class
+         because the two are driven by different events and the order between
+         them is not guaranteed. Pausing during a slow load is the case that
+         proves it: flashCenterIcon takes the spinner down for the length of
+         the receipt, a UI tick lands in that window, sees no spinner, and
+         adds movi-center-visible for the poster's play button — then the
+         spinner comes back and nothing takes the class off again. The pause
+         glyph sat over the spinner for the rest of the load, 38s on the
+         measured one. Every path that adds the class asks whether the spinner
+         is up first, but none of them can answer for a spinner that is about
+         to return. The host carries is-buffering for exactly as long as the
+         spinner is displayed, so a rule keyed off it cannot be raced.
+
+         It lives at the top level. It spent its life inside the
+         "@container movi-host (max-width: 720px)" block below, which is why
+         the guarantee its own comment describes held only on players narrower
+         than 720px — every normal-width player had no rule at all.
+
+         Not display:none — the button transitions, and cutting it out
+         mid-fade is the flicker this file has fought before. */
+      :host(.is-buffering) .movi-center-play-pause {
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
       }
 
 
@@ -26014,12 +26023,23 @@ export class MoviElement extends HTMLElement {
     // this once loading settles, matching HTMLMediaElement.play() semantics.
     if (this.isLoading) {
       this._pendingPlay = true;
+      // Say so. A deferred play changes nothing the state machine reports —
+      // the player is still "loading" and has not been told to play — so
+      // without this the press left every control exactly as it was: the bar
+      // icon, the context menu's icon and its label all still reading "play",
+      // for the rest of the load. Pressing play during a slow load looked
+      // like the press had missed. isStartPending() already knows the start
+      // is queued and the icons key off it; they just were never asked again.
+      // pause() has refreshed on every path all along — this is the other
+      // half of that pair.
+      this.updatePlayPauseIcon();
       return;
     }
     // Mobile 4K+ FileSource: defer until the preloadcomplete event fires,
     // which flushes _pendingPlay through the same path.
     if (this._preloadGateActive) {
       this._pendingPlay = true;
+      this.updatePlayPauseIcon();
       return;
     }
     if (this.player) {
@@ -26669,6 +26689,17 @@ export class MoviElement extends HTMLElement {
       ) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
+          // …and put the glyph back to what this state draws. Only the branch
+          // below used to do it, so a flash that ended in THIS one left its
+          // pause bars behind: pause during a load, and the icon that next
+          // came up — the poster's play button — was still wearing the pause
+          // glyph from the receipt. Guarded on the flash for the same reason
+          // as below: while one runs it owns the glyph, because it shows the
+          // action taken rather than the resulting state.
+          if (!this._centerFlashAnim) {
+            centerPlayIcon?.style.setProperty("display", "block");
+            centerPauseIcon?.style.setProperty("display", "none");
+          }
         }
       } else {
         if (centerPlayPauseBtn) {
