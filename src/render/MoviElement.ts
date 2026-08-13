@@ -13168,6 +13168,33 @@ export class MoviElement extends HTMLElement {
     // isn't there.
     const audioOnly =
       this.classList.contains("movi-audio-mode") || this._audioOnly;
+
+    // Before a source exists there is no player to ask, and isControlAvailable
+    // answers false for everything — so this panel opened on two rows while the
+    // context menu, offering the same settings, listed the lot. Two surfaces
+    // for one set of settings should not disagree about which settings exist.
+    //
+    // The context menu's answer is the right one: show them, dead, until there
+    // is something to apply them to. What the HOST switched off stays off —
+    // that is a decision, not a missing player.
+    const initial = !this.player;
+    // This panel names its rows one way and the context menu names the same
+    // settings another; the initial-controls list speaks the menu's names, so
+    // the two are joined at each row (see TOGGLE_ACTION and the deadIf calls)
+    // rather than in either vocabulary.
+    const liveNow = (actionKey: string) =>
+      !initial || this.getInitialEnabledControls().includes(actionKey);
+    const offered = (
+      a: "snapshot" | "rotate" | "aspect" | "hdr" | "ambient" | "timeline" | "stableaudio",
+    ) => (initial ? !this.isControlDisabled(a) : this.isControlAvailable(a));
+    // A row the host took off the initial list is shown and dimmed, not
+    // removed — an absent row reads as "this player cannot do that", which is
+    // the thing this panel was getting wrong in the first place.
+    const deadIf = (actionKey: string) =>
+      liveNow(actionKey) ? "" : ' disabled aria-disabled="true"';
+    // Every row here is a remembered preference, and all of them can be set
+    // before there is anything to apply them to — the same list
+    // worksBeforePlayback keeps live in the context menu.
     if (
       !audioOnly &&
       this.settingsRowAvailable(".movi-quality-container", ".movi-quality-item")
@@ -13186,7 +13213,7 @@ export class MoviElement extends HTMLElement {
       }
     }
     rows.push(
-      `<button type="button" class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
+      `<button type="button"${deadIf("speed")} class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
     );
     page(
       "audio",
@@ -13205,14 +13232,21 @@ export class MoviElement extends HTMLElement {
     // canvas — its setFitMode() is an empty method — so the page would let the
     // viewer pick a fit and then do nothing with it. The control-bar aspect
     // button is already absent there; this row was the one that wasn't.
-    if (!audioOnly && this.isControlAvailable("aspect")) {
+    if (!audioOnly && offered("aspect")) {
       rows.push(
-      `<button type="button" class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
+      `<button type="button"${deadIf("aspect")} class="movi-settings-row" data-page="aspect">${this.aspectRowIcon()}<span class="movi-settings-row-label">Aspect</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("aspect"))}</span>${chevron}</button>`,
       );
     }
 
+    const TOGGLE_ACTION: Record<string, string> = {
+      hdr: "hdr",
+      ambient: "ambient",
+      stable: "stableaudio",
+      crop: "crop",
+      loop: "loop",
+    };
     const toggle = (toggleKey: string, label: string, on: boolean) =>
-      `<button type="button" class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
+      `<button type="button"${deadIf(TOGGLE_ACTION[toggleKey] ?? toggleKey)} class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
     // The divider earns its keep by separating the two KINDS of row: above it
     // everything opens a list and shows what is currently chosen, below it
     // everything is a switch. Aspect used to sit alone at the bottom, a
@@ -13238,7 +13272,7 @@ export class MoviElement extends HTMLElement {
     // do nothing.
     if (
       !audioOnly &&
-      this.isControlAvailable("ambient") &&
+      offered("ambient") &&
       !this.player?.isStreamPlayback?.() &&
       !this._nativeFallbackActive
     ) {
@@ -13249,7 +13283,7 @@ export class MoviElement extends HTMLElement {
     // native fallback. The control bar button and the context-menu item are
     // both hidden there (updateStableAudioUI); this row was not, so the one
     // surface that could still offer it offered a switch that does nothing.
-    if (this.isControlAvailable("stableaudio")) {
+    if (offered("stableaudio")) {
       rows.push(toggle("stable", "Stable volume", this._stableVolume));
     }
     // Crop black bars. Named for what it removes rather than for what it does
@@ -13264,7 +13298,10 @@ export class MoviElement extends HTMLElement {
     // player that trimmed the edges of every film by default would be deciding
     // for the viewer which part of the frame is the film. Second hand on the
     // cropbars attribute, not a second setting.
-    if (!audioOnly && this.isControlAvailable("aspect")) {
+    // Crop needs the same canvas Aspect does, so it follows that availability —
+    // but it answers to its own name as well, or `nocrop` would be a token the
+    // element accepts and then ignores.
+    if (!audioOnly && offered("aspect") && !this.isControlDisabled("crop")) {
       rows.push(toggle("crop", "Crop black bars", this._cropBars));
     }
     rows.push(toggle("loop", "Loop", this._loop));
@@ -20548,6 +20585,15 @@ export class MoviElement extends HTMLElement {
            switched instantly, which on a list you run the pointer down reads
            as a block snapping from row to row. */
         transition: background var(--movi-transition-fast);
+      }
+
+      /* A row that is offered but cannot be operated yet — before a source
+         exists. Dimmed rather than hidden, so this panel lists the same
+         settings the context menu does. */
+      .movi-settings-row[disabled] {
+        opacity: 0.4;
+        cursor: default;
+        pointer-events: none;
       }
       .movi-settings-row:hover {
         background: rgba(255, 255, 255, 0.08);
@@ -28626,19 +28672,83 @@ export class MoviElement extends HTMLElement {
    * disagreeing about the same setting. The rest genuinely needs decoded
    * media (a snapshot of nothing, PiP with no picture) and stays dark.
    */
+  /**
+   * The controls that stay live before there is anything to play.
+   *
+   * Preferences, all of them: things a viewer can decide up front and that the
+   * player remembers — how fast, how it fits, whether it loops, whether the
+   * volume is levelled, whether the glow is on, whether black bars get cropped.
+   * Everything else needs a source to act on and stays dim until there is one.
+   *
+   * Null means "the built-in list". A host can replace it with
+   * setInitialEnabledControls; see there for what that does and does not change.
+   */
+  private static readonly DEFAULT_INITIAL_ENABLED_CONTROLS = [
+    "speed",
+    "aspect",
+    "loop",
+    "stableaudio",
+    "ambient",
+    "crop",
+    "shortcuts",
+  ];
+
+  /**
+   * Context-menu action keys, in the names the rest of the API uses.
+   *
+   * The menu's own keys are markup detail — "fit", "loop-toggle" — while
+   * `controlslist`, isControlAvailable and isControlDisabled all speak of
+   * "aspect", "loop", "stableaudio". A host should only ever meet the second
+   * set, so the translation happens here rather than leaking a third
+   * vocabulary into the public surface.
+   */
+  private static readonly ACTION_CONTROL_NAME: Record<string, string> = {
+    speed: "speed",
+    fit: "aspect",
+    "loop-toggle": "loop",
+    "stable-audio-toggle": "stableaudio",
+    "ambient-toggle": "ambient",
+    "crop-toggle": "crop",
+    "keyboard-shortcuts": "shortcuts",
+    "play-pause": "play",
+    fullscreen: "fullscreen",
+    "nerd-stats": "stats",
+  };
+  private _initialEnabledControls: string[] | null = null;
+
+  /** The action keys that are ENABLED before playback — see
+   *  setInitialEnabledControls for what that governs. */
+  getInitialEnabledControls(): string[] {
+    return [...(this._initialEnabledControls ?? MoviElement.DEFAULT_INITIAL_ENABLED_CONTROLS)];
+  }
+
+  /**
+   * Replace that list, or pass null to go back to the built-in one.
+   *
+   * This governs whether a control is OFFERED before a source exists — whether
+   * it reads as live in the settings panel and the context menu. It does not
+   * make an action possible: each one still checks for itself at the moment it
+   * is used, so listing "fullscreen" here gets you a lit row that still has
+   * nothing to go fullscreen with.
+   */
+  setInitialEnabledControls(keys: string[] | null): void {
+    this._initialEnabledControls = keys ? keys.map((k) => k.toLowerCase()) : null;
+    this.updateControlsState();
+    this.buildSettingsRoot();
+  }
+
   private worksBeforePlayback(el: HTMLElement): boolean {
     // Inside a submenu, the parent action decides: the entries there are the
     // values of that one setting (and its Back row), not actions of their own.
     const submenu = el.closest(".movi-context-menu-submenu") as HTMLElement | null;
     const key = submenu?.dataset.submenu || el.dataset.action || "";
+    // Crop is a preference too, and a remembered one: asking for it before a
+    // source arrives means "crop when there is something to crop". It was the
+    // odd one out only because it is the one that measures the picture, and
+    // that is a reason for it to do nothing yet, not to be unaskable.
+    const named = MoviElement.ACTION_CONTROL_NAME[key] ?? key;
+    if (this.getInitialEnabledControls().includes(named)) return true;
     switch (key) {
-      case "speed":
-      case "fit":
-      case "loop-toggle":
-      case "stable-audio-toggle":
-      case "ambient-toggle":
-      case "keyboard-shortcuts":
-        return true;
       // Worth reaching for while a source is still opening — "don't start",
       // "go fullscreen and wait", "why is this taking so long" — but not with
       // no source at all, where there is nothing to start or measure.

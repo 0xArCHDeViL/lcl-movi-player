@@ -430,7 +430,8 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
 **Tokens:** `noplay`, `noseekbuttons`, `novolume`, `notime`, `noprogress`,
 `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`, `nohdr`, `noloop`,
 `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`, `nostats`,
-`noshortcuts` — plus the `id` of any control added with
+`noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`, `notimeline`
+— plus the `id` of any control added with
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
 A switched-off control goes everywhere it lives: the button, its context-menu
@@ -2075,6 +2076,33 @@ reflect state the host owns, `{ value: "720p" }` to move a submenu's tick.
 
 The current state of a custom toggle, and whether a control (custom or
 built-in) has been switched off by [`controlslist`](#controlslist).
+
+#### `getInitialEnabledControls(): string[]` · `setInitialEnabledControls(names)`
+
+Which controls stay usable before there is anything to play.
+
+They are the settings a viewer can decide up front and the player remembers —
+speed, aspect, loop, stable volume, ambient mode, crop — so they read as live
+in the settings panel and the context menu even on an empty player. Everything
+else needs a source to act on and stays dimmed until there is one.
+
+```typescript
+player.getInitialEnabledControls();
+// ["speed", "aspect", "loop", "stableaudio", "ambient", "crop", "shortcuts"]
+
+player.setInitialEnabledControls(["speed", "loop"]); // the rest dim until loaded
+player.setInitialEnabledControls(null);              // back to the built-in list
+```
+
+Names are the ones [`controlslist`](#controlslist) and
+[`isControlDisabled()`](#iscontrolactiveid-boolean--iscontroldisabledid-boolean)
+use, so there is one vocabulary to know.
+
+This governs whether a control is OFFERED, not whether the action is possible:
+each one still checks for itself when used, so listing `fullscreen` here gets a
+lit row with nothing to go fullscreen with. A control switched off by
+`controlslist` stays off either way — that is the host's decision, not a
+missing source.
 
 ---
 
