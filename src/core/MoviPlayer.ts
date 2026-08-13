@@ -1899,6 +1899,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * new one can't be prepared, so a failed switch never breaks playback.
    */
   async switchVideoRenditionInPlace(newRenditionUrl: string): Promise<boolean> {
+    if (this._destroyed) return false;
     if (!this.demuxer || !this.videoDecoder) return false;
     if (newRenditionUrl === this._activeDashRendition) return true;
     // Only safe when audio is a SEPARATE (split) source: the swap replaces just
@@ -1996,22 +1997,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     const newDemuxer = new Demuxer(newSource, this.config.wasmBinary, true);
+    // From here until the swap adopts them (or a bail closes them), these two
+    // are the only pieces of this player that nothing else can reach: they are
+    // locals of an async function, so destroy() — which closes `this.source`,
+    // `this.audioSource` and the thumbnail source — had no idea they existed.
+    // A switch that was still prepping when the player was destroyed therefore
+    // kept its stream running: read off one session, the source went on
+    // fetching 8MB ranges for another 60.5MB after "Player destroyed" and only
+    // stopped when it hit its own download limit. Park them where the teardown
+    // can find them.
+    this._pendingSwitchSource = newSource;
+    this._pendingSwitchDemuxer = newDemuxer;
+    const abandonPrep = (reason?: string, e?: unknown): boolean => {
+      if (reason) Logger.warn(TAG, `in-place switch: ${reason}`, e);
+      try { newDemuxer.close(); } catch {}
+      try { newSource.close(); } catch {}
+      if (this._pendingSwitchSource === newSource) {
+        this._pendingSwitchSource = null;
+        this._pendingSwitchDemuxer = null;
+      }
+      return endSwitch(false);
+    };
     let newInfo: MediaInfo;
     try {
       newInfo = await newDemuxer.open();
     } catch (e) {
-      Logger.warn(TAG, "in-place switch: new demuxer open failed", e);
-      try { newDemuxer.close(); } catch {}
-      try { newSource.close(); } catch {}
-      return endSwitch(false);
+      return abandonPrep("new demuxer open failed", e);
     }
+    // The player went away while the open was in flight. Everything past this
+    // point writes to a torn-down pipeline — one session ran the whole swap
+    // against it and got as far as compiling a shader on a destroyed renderer.
+    if (this._destroyed) return abandonPrep();
     const newVideoTrack = newInfo.tracks.find(
       (t) => t.type === "video",
     ) as VideoTrack | undefined;
     if (!newVideoTrack) {
-      try { newDemuxer.close(); } catch {}
-      try { newSource.close(); } catch {}
-      return endSwitch(false);
+      return abandonPrep();
     }
     const newStartTime = newInfo.startTime || 0;
     // Read the clock HERE, after the open — not before it.
@@ -2078,11 +2099,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       try {
         await newDemuxer.seek(swapTime + newStartTime);
       } catch (e) {
-        Logger.warn(TAG, "in-place switch: new demuxer seek failed", e);
-        try { newDemuxer.close(); } catch {}
-        try { newSource.close(); } catch {}
-        return endSwitch(false);
+        return abandonPrep("new demuxer seek failed", e);
       }
+    }
+
+    // Last exit before the swap commits. The prime and the seek above are both
+    // network-length waits, and a player destroyed inside either of them must
+    // not come out the other side and swap itself into a pipeline that is gone.
+    if (this._destroyed) {
+      try { primed?.decoder.close(); } catch {}
+      for (const f of primed?.frames ?? []) {
+        try { f.close(); } catch {}
+      }
+      return abandonPrep();
     }
 
     // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
@@ -2146,6 +2175,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._demuxerGeneration++;
     this.demuxer = newDemuxer;
     this.source = newSource;
+    // Adopted — the ordinary teardown owns them from here.
+    this._pendingSwitchSource = null;
+    this._pendingSwitchDemuxer = null;
     this.startTime = newStartTime;
     try {
       this.fileSize = await newSource.getSize();
@@ -2395,6 +2427,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   private _abrTickInFlight = false;
+  // The source and demuxer an in-place rendition switch is preparing, while it
+  // is preparing them. They belong to no one else until the swap adopts them —
+  // see switchVideoRenditionInPlace — so this is how destroy() reaches them.
+  private _pendingSwitchSource: SourceAdapter | null = null;
+  private _pendingSwitchDemuxer: Demuxer | null = null;
   // Bumped whenever the video demuxer is replaced, so a read still in flight
   // against the old one can be told apart from a genuine failure.
   private _demuxerGeneration = 0;
@@ -2402,6 +2439,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** One ABR decision. Always through abrTick(), never called directly. */
   private async abrDecide(): Promise<void> {
     if (
+      this._destroyed ||
       !this._autoQuality ||
       this._abrSwitchInProgress ||
       this._dashRenditions.length < 2 ||
@@ -11354,6 +11392,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     this.stopBackgroundTimer();
     this.stopPauseBuffering();
+
+    // A rendition switch caught mid-prep. Its source is downloading right now
+    // and is not `this.source` yet, so nothing below would ever reach it.
+    if (this._pendingSwitchDemuxer) {
+      try { this._pendingSwitchDemuxer.close(); } catch {}
+      this._pendingSwitchDemuxer = null;
+    }
+    if (this._pendingSwitchSource) {
+      try { this._pendingSwitchSource.close(); } catch {}
+      this._pendingSwitchSource = null;
+    }
 
     // Tear down the split (separate-URL) WASM audio pipeline.
     this.stopAudioLoop();
