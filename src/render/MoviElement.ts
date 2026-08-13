@@ -3033,20 +3033,23 @@ export class MoviElement extends HTMLElement {
           this.pause();
         } else {
           this.flashCenterIcon("play");
-          // Play if in ready, paused, ended, or any other non-playing state.
-          // Flip the centre icon to "pause" right away. The first play has to
-          // seek/buffer before the state actually reaches "playing", so keying
-          // the icon off the raw state left the play triangle showing for that
-          // whole startup window — the click felt unacknowledged. Optimistic
-          // swap here; updatePlayPauseIcon reconciles once playback settles.
-          const centerPlayIcon = centerPlayPauseBtn.querySelector(
-            ".movi-center-icon-play",
-          ) as HTMLElement | null;
-          const centerPauseIcon = centerPlayPauseBtn.querySelector(
-            ".movi-center-icon-pause",
-          ) as HTMLElement | null;
-          centerPlayIcon?.style.setProperty("display", "none");
-          centerPauseIcon?.style.setProperty("display", "block");
+          // Nothing touches the glyph here. There used to be an optimistic
+          // swap to the pause bars on this line — written when the centre icon
+          // keyed off the RAW state, which left a play triangle showing for
+          // the whole seek/buffer window before "playing" arrived. It ran
+          // immediately after flashCenterIcon("play"), so it overwrote the
+          // glyph that call had just set, and every play pressed on THIS
+          // button played its 800ms receipt wearing the pause bars — the
+          // opposite of the action taken, and the opposite of what the receipt
+          // is for. Two presses in a row therefore drew the same glyph, which
+          // is what "the play animation doesn't come" was.
+          //
+          // It is also no longer needed: updatePlayPauseIcon drives the centre
+          // glyph off isPlayingIntended, not the raw state, so the pause bars
+          // arrive on their own once the flash has had its say — and that path
+          // yields to a running flash instead of fighting it. The other four
+          // toggle sites never had the swap; this one is now like them.
+          //
           // A blocked autoplay-with-sound fell back to muted playback; this
           // gesture is the unmute affordance too, so audio actually starts.
           if (this._autoMutedForAutoplay && !this._userHasUnmuted) {
