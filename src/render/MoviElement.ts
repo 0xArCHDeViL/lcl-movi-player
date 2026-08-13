@@ -13872,8 +13872,17 @@ export class MoviElement extends HTMLElement {
    *  glance arrived — you'd toggle, look at the middle of the picture, and find
    *  nothing there. The hold is what makes it readable as "paused". */
   private static readonly CENTER_FLASH_MS = 800;
+  /** Keyframe offset where the flash stops holding and starts fading out.
+   *  Must track the 0.68 offset in the keyframes below — everything before it
+   *  sits at full opacity. */
+  private static readonly CENTER_FLASH_FADE_AT = 0.68;
   private _centerFlashAnim: Animation | null = null;
   private _centerFlashTimer: number | null = null;
+  /** Whether the flash in flight ends by fading out (armed while the button's
+   *  resting state was hidden) rather than holding solid. Only a fading one
+   *  can disagree with a button that has since become a persistent control. */
+  private _centerFlashFades = false;
+  private _centerFlashSettleTimer: number | null = null;
 
   /**
    * Pop the centre play/pause icon for a moment as the receipt for a toggle,
@@ -13901,10 +13910,53 @@ export class MoviElement extends HTMLElement {
   private cancelCenterFlash(): void {
     this._centerFlashAnim?.cancel();
     this._centerFlashAnim = null;
+    this._centerFlashFades = false;
     if (this._centerFlashTimer) {
       clearTimeout(this._centerFlashTimer);
       this._centerFlashTimer = null;
     }
+    if (this._centerFlashSettleTimer) {
+      clearTimeout(this._centerFlashSettleTimer);
+      this._centerFlashSettleTimer = null;
+    }
+  }
+
+  /**
+   * The button is turning into a persistent control while a flash is mid-air.
+   *
+   * That flash was armed as a receipt, so it FADES at the end — at the moment
+   * of the press the button's resting state was hidden. Now it isn't, and the
+   * fade would take down a button the class says should be solid, then snap it
+   * back to full on the last frame (the animation has no fill). Cancelling
+   * outright is the old cure, and it costs the entire receipt: while a source
+   * is still loading _hasEverPlayed is false, so EVERY press took this path
+   * and the animation was killed at 0ms. Measured on an 850MB stream — "FLASH
+   * KILLED at 0 ms", press after press, the receipt drawing nothing at all
+   * while the button simply appeared.
+   *
+   * Only the fade is the problem. Up to it the flash holds full opacity, which
+   * is exactly what the class wants, so the pop and the hold can play out in
+   * full. Cancel at the fade boundary instead: the element drops to its
+   * resting style, which is solid by then, so there is no flicker and no lost
+   * receipt.
+   */
+  private settleCenterFlashSolid(): void {
+    const anim = this._centerFlashAnim;
+    // A flash that already ends solid agrees with the class — leave it alone.
+    if (!anim || !this._centerFlashFades) return;
+    const fadeAt =
+      MoviElement.CENTER_FLASH_MS * MoviElement.CENTER_FLASH_FADE_AT;
+    const at = typeof anim.currentTime === "number" ? anim.currentTime : 0;
+    if (at >= fadeAt) {
+      // Already fading — the flicker is imminent, so take it now.
+      this.cancelCenterFlash();
+      return;
+    }
+    if (this._centerFlashSettleTimer) return;
+    this._centerFlashSettleTimer = window.setTimeout(() => {
+      this._centerFlashSettleTimer = null;
+      if (this._centerFlashAnim === anim) this.cancelCenterFlash();
+    }, fadeAt - at);
   }
 
   private flashCenterIcon(kind: "play" | "pause"): void {
@@ -14020,12 +14072,27 @@ export class MoviElement extends HTMLElement {
       },
     );
     this._centerFlashAnim = anim;
+    // Only a non-persistent flash ends by fading, and only a fading one can
+    // fall out of step with a button that becomes solid mid-air — see
+    // settleCenterFlashSolid.
+    this._centerFlashFades = !persistent;
     // Set after the animation exists, because setSpinnerVisible(false) above
     // clears this flag — and it is what tells done() to ask for the spinner
     // back. (A spinner that wants to appear DURING the flash sets it too.)
     if (spinnerWasUp) this._spinnerDeferredByFlash = true;
     const done = () => {
-      if (this._centerFlashAnim === anim) this._centerFlashAnim = null;
+      if (this._centerFlashAnim === anim) {
+        this._centerFlashAnim = null;
+        this._centerFlashFades = false;
+      }
+      // Retire this flash's settle timer. It already checks that the animation
+      // it fires for is still the current one, so it cannot cancel a later
+      // receipt — but leaving the handle set would make settleCenterFlashSolid
+      // think one is already scheduled and skip arming a real one.
+      if (this._centerFlashSettleTimer) {
+        clearTimeout(this._centerFlashSettleTimer);
+        this._centerFlashSettleTimer = null;
+      }
       btn.style.pointerEvents = "";
       // The receipt is spent. If a spinner was held back for it, ask again now
       // — via the full check, not a bare show, so a load that finished during
@@ -26739,18 +26806,22 @@ export class MoviElement extends HTMLElement {
             // now handled by NOT gating on isSuppressedSeek (so spinner-less
             // buffering blips don't churn the icon) plus the isLoading guard,
             // so a sync add no longer races a remove.
-            // A flash that is still in flight has to go. flashCenterIcon()
-            // skips the fade when the button is ALREADY a persistent control,
-            // but the two can arrive in the other order: on an engine whose
-            // paused state lands asynchronously (the native fallback takes it
-            // from the <video>'s own `pause` event) the press fires the flash
-            // first and this class a beat later. The flash then fades a button
-            // the class says should be solid, and on its last frame — no fill —
-            // the element snaps back to opacity 1. Measured on the fallback:
-            // visible at 322ms, fading from 914ms, back to full at 1141ms.
-            // That snap IS the flicker.
+            // A flash still in flight has to be reconciled with the class.
+            // flashCenterIcon() skips the fade when the button is ALREADY a
+            // persistent control, but the two can arrive in the other order:
+            // on an engine whose paused state lands asynchronously (the native
+            // fallback takes it from the <video>'s own `pause` event) the
+            // press fires the flash first and this class a beat later. The
+            // flash then fades a button the class says should be solid, and on
+            // its last frame — no fill — the element snaps back to opacity 1.
+            // Measured on the fallback: visible at 322ms, fading from 914ms,
+            // back to full at 1141ms. That snap IS the flicker.
+            //
+            // This used to cancel the flash outright, which killed the whole
+            // receipt rather than just its fade — see settleCenterFlashSolid,
+            // which drops only the tail.
             if (!centerPlayPauseBtn.classList.contains("movi-center-visible")) {
-              this.cancelCenterFlash();
+              this.settleCenterFlashSolid();
             }
             centerPlayPauseBtn.classList.add("movi-center-visible");
           } else {
