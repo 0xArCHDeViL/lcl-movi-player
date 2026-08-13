@@ -501,6 +501,11 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | Event                  | Detail payload                       | Description                                        |
 | ---------------------- | ------------------------------------ | -------------------------------------------------- |
 | `loadstart`            | `{ src: string \| null }`            | A new source is being loaded                       |
+| `abort`                | —                                    | A load was stopped before it had data              |
+| `suspend`              | —                                    | Preload settled; no more bytes are being pulled    |
+| `encrypted`            | `{ initDataType, tokenUrl, videoUrl }` | The source needs a key; the handshake is starting |
+| `waitingforkey`        | —                                    | Playback is held until the licence lands           |
+| `cuechange`            | —                                    | Fired on the `TextTrack`, not on the element       |
 | `loadedmetadata`       | —                                    | Duration and track list are known                  |
 | `loadeddata`           | —                                    | First frame is decoded and ready to render         |
 | `canplay`              | —                                    | Enough data buffered to begin playback             |
@@ -554,9 +559,11 @@ The element aims to be drop-in for code written against a native media element. 
 | Native event    | Status | Why                                                                                       |
 | --------------- | ------ | ----------------------------------------------------------------------------------------- |
 | `canplaythrough` | Stricter | `<video>` fires it on a heuristic estimate. We fire it only when the media is genuinely buffered to the end, so it may arrive later — or, on a slow link, not at all. Gate optional UI on it, never playback. |
-| `abort`         | Not emitted | Our loads are cancelled internally on a source swap; `emptied` + `loadstart` already mark the boundary. |
-| `suspend`       | Not emitted | The source coasts and resumes on its own schedule; there is no user-meaningful "deliberately stopped fetching" moment to report. |
-| `encrypted` / `waitingforkey` | Not emitted | EME key exchange is handled inside the player, not surfaced to the DOM. |
+| `abort`         | Fires | A load counts as in flight until it has data, not merely while the loading flag is up, so a source taken away mid-open reports it. Ordered before `emptied`, as the spec has it. |
+| `suspend`       | Fires | Raised when preload settles — the moment this player stops pulling bytes on purpose. |
+| `encrypted`     | Fires, differently | `<video>` raises it on meeting initialisation data it needs a key for. This player is told up front, so it fires where the key handshake begins: the load about to ask the token endpoint. |
+| `waitingforkey` | Fires | Follows `encrypted` — playback is held until the token lands. |
+| `cuechange`     | Fires | On the mirrored `TextTrack` whose caption changed, which is where native fires it. |
 
 `seeking` / `seeked` / `timeupdate` / `durationchange` / `progress` / `resize` carry a `detail` payload (see the table) where `<video>` carries none — read the property off the element instead if you want identical code across both.
 

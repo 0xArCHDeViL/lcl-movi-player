@@ -330,6 +330,41 @@
               }
             },
             {
+              "name": "abort",
+              "description": "A load was stopped before it had data",
+              "type": {
+                "text": "Event"
+              }
+            },
+            {
+              "name": "suspend",
+              "description": "Preload settled; no more bytes are being pulled",
+              "type": {
+                "text": "Event"
+              }
+            },
+            {
+              "name": "encrypted",
+              "description": "The source needs a key; the handshake is starting",
+              "type": {
+                "text": "CustomEvent<{ initDataType, tokenUrl, videoUrl }>"
+              }
+            },
+            {
+              "name": "waitingforkey",
+              "description": "Playback is held until the licence lands",
+              "type": {
+                "text": "Event"
+              }
+            },
+            {
+              "name": "cuechange",
+              "description": "Fired on the TextTrack, not on the element",
+              "type": {
+                "text": "Event"
+              }
+            },
+            {
               "name": "loadedmetadata",
               "description": "Duration and track list are known",
               "type": {
