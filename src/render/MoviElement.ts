@@ -13891,37 +13891,23 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!btn) return;
 
-    // Not over the spinner. This is a receipt for a press — "yes, that
-    // registered" — and the spinner already answers that, from the same spot on
-    // the picture. Pressing play on a source that has to be fetched put the two
-    // on screen together: a play triangle sitting inside a loading ring, which
-    // reads as a player that has stopped rather than one that is working. It
-    // only shows up on a cold source; a warm one starts before the flash has
-    // faded and there is no spinner to collide with.
-    const spinner = this.shadowRoot?.querySelector(
-      ".movi-loading-indicator",
-    ) as HTMLElement | null;
-    if (spinner && spinner.style.display === "flex") {
-      this.cancelCenterFlash();
-      return;
-    }
-
-    // When the button is already on screen as a control — touch with the chrome
-    // up, the poster, the replay state — the flash is the wrong animation
-    // entirely: it fades the button out and the class immediately puts it back,
-    // which reads as a stutter. There the glyph is state, not a receipt, so
-    // leave it to updatePlayPauseIcon and just acknowledge the press.
-    if (btn.classList.contains("movi-center-visible")) {
-      this.cancelCenterFlash();
-      btn.animate(
-        [
-          { transform: "translate(-50%, -50%) scale(0.86)" },
-          { transform: "translate(-50%, -50%) scale(1)" },
-        ],
-        { duration: 220, easing: "cubic-bezier(0.2, 0.9, 0.3, 1)", fill: "none" },
-      );
-      return;
-    }
+    // Every press gets a receipt, and it is the SAME receipt whichever way it
+    // went. Two guards used to swallow it, and between them they made the
+    // feedback depend on state the viewer cannot see:
+    //
+    //  - Over the spinner it was cancelled outright, to avoid a play triangle
+    //    sitting inside a loading ring. But a press during a rebuffer is
+    //    exactly when a viewer most needs telling that it registered, and the
+    //    glyph the flash draws is the ACTION taken, which is never wrong.
+    //  - When the button was already on screen it fell back to a small squeeze,
+    //    on the grounds that fading it out would fight the class holding it
+    //    solid. True — but the squeeze is so slight it reads as nothing at all,
+    //    which is what "play ka animation nahi ho raha" was: paused, the big
+    //    play button sitting there, pressed, and it simply vanished.
+    //
+    // So: always flash, and let the button's resting state decide only whether
+    // the flash FADES at the end. See `persistent` below.
+    const persistent = btn.classList.contains("movi-center-visible");
 
     const playIcon = btn.querySelector(
       ".movi-center-icon-play",
@@ -13937,8 +13923,21 @@ export class MoviElement extends HTMLElement {
     this._centerFlashAnim?.cancel();
     if (this._centerFlashTimer) clearTimeout(this._centerFlashTimer);
 
+    // A spinner ALREADY on screen has to step aside for the same reason a
+    // spinner about to appear does (see setSpinnerVisible): its is-buffering
+    // class hides this button with !important, so the flash would run entirely
+    // invisibly. Take it down for the length of the receipt; done() re-asks
+    // whether it is still wanted and puts it straight back if so.
+    const spinnerWasUp = this.centerHiddenBySpinner();
+    if (spinnerWasUp) this.setSpinnerVisible(false);
+
     // Feedback must never swallow a click meant for the video underneath.
-    btn.style.pointerEvents = "none";
+    //
+    // …but a persistent button is not feedback, it is the control — on touch it
+    // is the only way to pause — so blanking its pointer events for the flash's
+    // 800ms would eat the viewer's next press. It stays live; nothing is
+    // underneath it to protect there, because it is what they are aiming at.
+    if (!persistent) btn.style.pointerEvents = "none";
 
     // Full opacity on the first frame: pop, hold, then fade out. visibility
     // rides along because the button's resting state is hidden.
@@ -13975,22 +13974,43 @@ export class MoviElement extends HTMLElement {
         {
           offset: 1,
           visibility: "visible",
-          opacity: 0,
-          transform: "translate(-50%, -50%) scale(1.08)",
+          // A button whose resting state is HIDDEN fades out — the flash is the
+          // only reason it was on screen, so it leaves the way it came. One
+          // that is a persistent control stays at full opacity instead: fading
+          // it would fight the class holding it solid, and the last frame (no
+          // fill) would snap it back to 1 — the flicker this used to trade the
+          // whole animation away to avoid. Only the tail differs; the pop the
+          // viewer is actually reading is identical either way.
+          opacity: persistent ? 1 : 0,
+          transform: persistent
+            ? "translate(-50%, -50%) scale(1)"
+            : "translate(-50%, -50%) scale(1.08)",
         },
       ],
       {
         duration: MoviElement.CENTER_FLASH_MS,
         // No fill: when it ends the element simply returns to its resting
-        // style (hidden), so there is nothing to clean up and no chance of a
-        // stuck frame if the finish handler never runs.
+        // style (hidden, or solid when persistent), so there is nothing to
+        // clean up and no chance of a stuck frame if the finish handler never
+        // runs.
         fill: "none",
       },
     );
     this._centerFlashAnim = anim;
+    // Set after the animation exists, because setSpinnerVisible(false) above
+    // clears this flag — and it is what tells done() to ask for the spinner
+    // back. (A spinner that wants to appear DURING the flash sets it too.)
+    if (spinnerWasUp) this._spinnerDeferredByFlash = true;
     const done = () => {
       if (this._centerFlashAnim === anim) this._centerFlashAnim = null;
       btn.style.pointerEvents = "";
+      // The receipt is spent. If a spinner was held back for it, ask again now
+      // — via the full check, not a bare show, so a load that finished during
+      // the flash doesn't put one up for nothing.
+      if (this._spinnerDeferredByFlash && !this._centerFlashAnim) {
+        this._spinnerDeferredByFlash = false;
+        this.updateLoadingIndicator();
+      }
     };
     anim.addEventListener("finish", done);
     anim.addEventListener("cancel", done);
@@ -27607,12 +27627,34 @@ export class MoviElement extends HTMLElement {
    * triangle sitting inside it. Three call sites did exactly that.
    */
   private setSpinnerVisible(on: boolean): void {
+    // One at a time, in order: the receipt, then the spinner.
+    //
+    // "Never the button and the spinner together" is settled by the stylesheet
+    // (:host(.is-buffering) .movi-center-play-pause), and its !important beats
+    // a Web Animations keyframe — so raising the spinner during a flash does
+    // not merely crowd the flash, it erases it mid-frame. Pressing pause on a
+    // rebuffering player therefore had no visible receipt no matter what the
+    // JS did, which is the CSS half of the missing animation.
+    //
+    // The two do not actually disagree, they are just simultaneous. The press
+    // is answered first — it is the thing the viewer just did — and the spinner
+    // follows the moment the flash is spent, which is under a second and is
+    // where a "still working on it" belongs anyway. Deferral is bounded by the
+    // flash's own backstop timer, so a backgrounded tab cannot strand it.
+    if (on && this._centerFlashAnim) {
+      this._spinnerDeferredByFlash = true;
+      return;
+    }
+    this._spinnerDeferredByFlash = false;
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement | null;
     if (loadingIndicator) loadingIndicator.style.display = on ? "flex" : "none";
     this.classList.toggle("is-buffering", on);
   }
+
+  /** A spinner that wanted to come up while a centre flash was still running. */
+  private _spinnerDeferredByFlash = false;
 
   /** Frames per second below which the picture counts as stopped rather than
    *  slow. A 25fps source manages 25; a 60fps one a machine can only half
