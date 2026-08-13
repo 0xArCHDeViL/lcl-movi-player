@@ -524,6 +524,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `ended`                | —                                    | Playback reached the end                           |
 | `timeupdate`           | `number` (current time)              | Current time advanced (fires repeatedly)           |
 | `error`                | `Error`                              | Internal player error surfaced to the DOM          |
+| `errordisplay`         | `{ title, message, canRetry, canTrySoftware }` | An error screen went up, with the wording on it. Unlike `error`, whose payload is the raw `Error`, this is what the viewer is shown — and it also covers the format/codec failures that raise no runtime error. See [Customizing the Error Screen](./element.md#customizing-the-error-screen) |
 | `statechange`          | `PlayerState`                        | Underlying `MoviPlayer` state transitioned         |
 | `volumechange`         | `{ volume: number, muted: boolean }` | Volume or mute toggled (UI, hotkey, or property)   |
 | `ratechange`           | `{ playbackRate: number }`           | Playback speed changed                             |

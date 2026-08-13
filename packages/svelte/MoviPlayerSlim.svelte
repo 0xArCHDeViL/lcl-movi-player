@@ -37,6 +37,7 @@
   on:pause
   on:ended
   on:error
+  on:errordisplay
   on:movi-qoe
 >
   <slot />

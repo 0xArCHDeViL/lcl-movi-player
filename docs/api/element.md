@@ -2460,6 +2460,48 @@ document.getElementById("err-retry").onclick = () => player.load();
 To suppress the error screen with no replacement, use the `noerrorscreen`
 attribute.
 
+### From a framework wrapper
+
+`::part()` is plain page CSS and needs nothing from the wrappers. Children
+pass straight through, so `slot="error"` works as written in all three. The
+event is bridged: `onErrorDisplay` in React, `@errordisplay` in Vue,
+`on:errordisplay` in Svelte.
+
+```jsx
+// React — el.load() / el.enableSoftwareDecoding() come off the ref
+<MoviPlayer
+  src="video.mkv"
+  controls
+  onErrorDisplay={({ title, message, canRetry }) => setErr({ title, message, canRetry })}
+>
+  {err && (
+    <div slot="error">
+      <h2>{err.title}</h2>
+      <p>{err.message}</p>
+      {err.canRetry && <button onClick={() => ref.current.load()}>Try again</button>}
+    </div>
+  )}
+</MoviPlayer>
+```
+
+```vue
+<MoviPlayer src="video.mkv" controls @errordisplay="onErr">
+  <div slot="error">
+    <h2>{{ err.title }}</h2>
+    <p>{{ err.message }}</p>
+  </div>
+</MoviPlayer>
+```
+
+```svelte
+<MoviPlayer src="video.mkv" controls on:errordisplay={(e) => (err = e.detail)}>
+  <div slot="error">
+    <h2>{err.title}</h2>
+    <p>{err.message}</p>
+  </div>
+</MoviPlayer>
+```
+
 ---
 
 ## Keyboard Shortcuts

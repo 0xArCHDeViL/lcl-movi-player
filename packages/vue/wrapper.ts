@@ -42,7 +42,18 @@ export const MoviPlayer = defineComponent({
     muted: { type: Boolean, default: undefined },
     playsinline: { type: Boolean, default: undefined },
   },
-  emits: ["ready", "qoe", "timeupdate", "play", "pause", "ended", "error"],
+  emits: [
+    "ready",
+    "qoe",
+    "timeupdate",
+    "play",
+    "pause",
+    "ended",
+    "error",
+    // The wording on an error screen, as opposed to `error`'s raw Error. Also
+    // fires for the format/codec failures that raise no runtime error.
+    "errordisplay",
+  ],
   setup(props, { attrs, emit, expose, slots }) {
     const elRef = ref<MoviElement | null>(null);
     expose({ element: elRef });
@@ -102,6 +113,7 @@ export const MoviPlayer = defineComponent({
       bridge("pause", "pause");
       bridge("ended", "ended");
       bridge("error", "error");
+      bridge("errordisplay", "errordisplay");
       emit("ready", el);
     });
     onBeforeUnmount(() => {

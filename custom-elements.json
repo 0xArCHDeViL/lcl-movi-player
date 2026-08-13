@@ -491,6 +491,13 @@
               }
             },
             {
+              "name": "errordisplay",
+              "description": "An error screen went up, with the wording on it. Unlike error, whose payload is the raw Error, this is what the viewer is shown — and it also covers the format/codec failures that raise no runtime error. See Customizing the Error Screen",
+              "type": {
+                "text": "CustomEvent<{ title, message, canRetry, canTrySoftware }>"
+              }
+            },
+            {
               "name": "statechange",
               "description": "Underlying MoviPlayer state transitioned",
               "type": {

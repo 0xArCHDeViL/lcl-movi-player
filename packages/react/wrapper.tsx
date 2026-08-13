@@ -34,6 +34,20 @@ export interface MoviPlayerProps extends MoviPlayerAttributes {
   onPause?: () => void;
   onEnded?: () => void;
   onError?: (error: unknown) => void;
+  /**
+   * An error screen went up, with the wording on it. Unlike `onError`, which
+   * hands over the raw Error ("HTTP 403 (Fatal)"), this is what the viewer is
+   * being shown — and it also covers the format/codec failures that never
+   * raise a runtime error. Pair it with a `slot="error"` child to render your
+   * own screen; `canRetry` / `canTrySoftware` say which recoveries are worth
+   * offering (`el.load()` and `el.enableSoftwareDecoding()` off the ref).
+   */
+  onErrorDisplay?: (info: {
+    title: string | null;
+    message: string | null;
+    canRetry: boolean;
+    canTrySoftware: boolean;
+  }) => void;
 }
 
 const EVENT_PROPS = new Set([
@@ -44,6 +58,7 @@ const EVENT_PROPS = new Set([
   "onPause",
   "onEnded",
   "onError",
+  "onErrorDisplay",
   "className",
   "style",
   "children",
@@ -122,6 +137,7 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
       if (props.onPause) add("pause", () => props.onPause!());
       if (props.onEnded) add("ended", () => props.onEnded!());
       add("error", props.onError);
+      add("errordisplay", props.onErrorDisplay);
       props.onReady?.(el);
       return () => listeners.forEach(([n, l]) => el.removeEventListener(n, l));
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -132,6 +148,7 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
       props.onPause,
       props.onEnded,
       props.onError,
+      props.onErrorDisplay,
       props.onReady,
     ]);
 
