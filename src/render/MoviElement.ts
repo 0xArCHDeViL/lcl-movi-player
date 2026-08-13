@@ -18033,6 +18033,14 @@ export class MoviElement extends HTMLElement {
         object-fit: contain;
       }
 
+      /* The same box the image would have made, for a tile that has no image.
+         See the noframe branch in generateTimelineStrip. */
+      .movi-timeline-item.movi-timeline-noframe {
+        width: 160px;
+        height: 90px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+
       .movi-timeline-portrait .movi-timeline-item {
         min-width: auto;
       }
@@ -32154,7 +32162,9 @@ export class MoviElement extends HTMLElement {
         for (let i = this._timelineNextIndex; i < chapters.length; i++) {
           const ch = chapters[i];
           // Generate thumbnail at chapter start time
-          const blob = await this.player.getPreviewFrame(ch.start);
+          // Queued: a fixed list of times must not be turned away because the
+          // seek bar happened to be mid-preview. See getPreviewFrame's `queue`.
+          const blob = await this.player.getPreviewFrame(ch.start, null, true);
           if (this._timelineCancelled) return;
 
           const item = document.createElement("div");
@@ -32171,6 +32181,18 @@ export class MoviElement extends HTMLElement {
             img.src = URL.createObjectURL(blob);
             img.alt = ch.title;
             item.appendChild(img);
+          } else {
+            // A tile draws its whole size from the image inside it, and the
+            // label is positioned against that box — so a chapter whose frame
+            // did not arrive collapsed to nothing and took its own title with
+            // it. Sixteen of those is a panel that says "16 chapters" over an
+            // empty strip, which is what a viewer reported: the count was
+            // right, the loop had finished, and there was nothing to see.
+            //
+            // The frame is the part that can fail; the title and the time were
+            // known before any of this started. Give the tile a box of its own
+            // so they show, and the chapter stays clickable.
+            item.classList.add("movi-timeline-noframe");
           }
 
           const labelContainer = document.createElement("div");
@@ -32207,7 +32229,12 @@ export class MoviElement extends HTMLElement {
         }
 
         status.textContent = `${chapters.length} chapters`;
-        this._timelineComplete = true;
+        // Only if something was actually drawn. Marked complete regardless, a
+        // strip that came out frameless stayed that way — reopening the panel
+        // skipped generation entirely and showed the same empty list back. The
+        // interval branch below has always guarded this; the chapter branch had
+        // not.
+        if (strip.children.length > 0) this._timelineComplete = true;
       } else {
         // Regular interval-based timeline
         if (titleEl) titleEl.textContent = "Timeline";
@@ -32223,7 +32250,7 @@ export class MoviElement extends HTMLElement {
 
         for (let i = this._timelineNextIndex; i < count; i++) {
           const time = interval * (i + 1);
-          const blob = await this.player.getPreviewFrame(time);
+          const blob = await this.player.getPreviewFrame(time, null, true);
           if (this._timelineCancelled) return;
           // Advance even on null so a permanently-failing frame doesn't wedge resume
           this._timelineNextIndex = i + 1;

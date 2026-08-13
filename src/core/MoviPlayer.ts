@@ -802,10 +802,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   // Preview pipeline (C-based FFmpeg software decoding)
   private thumbnailBindings: ThumbnailBindings | null = null;
+  /** The half-built pipeline, while it is still being built. It holds an
+   *  FFmpeg context from the moment it exists, so teardown has to be able to
+   *  find it even though callers must not — see initPreviewPipeline. */
+  private thumbnailBindingsPending: ThumbnailBindings | null = null;
   private thumbnailSource: SourceAdapter | null = null;
   private thumbnailRenderer: ThumbnailRenderer | null = null;
   private thumbnailHDREnabled: boolean = true; // HDR enabled by default
   private isPreviewGenerating: boolean = false;
+  /** The generation currently in flight, for callers that must WAIT rather
+   *  than be turned away — see getPreviewFrame's `queue` argument. */
+  private previewInFlight: Promise<Blob | null> | null = null;
   private audioRenderer: AudioRenderer;
   // Bumped every time the preview pipeline is torn down, so an init still
   // suspended in one of its awaits can tell that the pipeline it is building
@@ -6331,6 +6338,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   async getPreviewFrame(
     time: number,
     view?: VRView | null,
+    /**
+     * Wait for a generation already in flight instead of returning null.
+     *
+     * The pipeline is a single decoder, so only one frame can be made at a
+     * time, and a second caller is turned away. That is RIGHT for the seek bar:
+     * a hover wants the frame for where the pointer is NOW, and a queue of
+     * stale positions is worse than a dropped one.
+     *
+     * It is wrong for anything asking for a fixed list of times. The chapter
+     * strip asks for one frame per chapter in a loop, and one preview already
+     * running — a keyframe fetch is 2MB, which is seconds on a phone — turned
+     * every one of those calls away instantly. Sixteen chapters resolved to
+     * null in a few milliseconds and the panel came out empty, with the count
+     * printed over it.
+     */
+    queue = false,
   ): Promise<Blob | null> {
     if (this._audioOnly) return null; // Data-saver: never decode video for previews
     if (!this.previewsAllowed()) return null; // Disabled, or source too large for a 2nd WASM context
@@ -6340,12 +6363,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // cheaper than the FFmpeg path, which can't byte-range-seek a stream.
     if (this.streamWrapper) return (this.streamWrapper as any).getThumbnailBlob?.(time) ?? null;
     if (this.previewInitGaveUp) return null; // Init failed repeatedly — stop retrying (and re-loading WASM)
-    if (this.isPreviewGenerating) return null; // Busy
+    if (this.isPreviewGenerating) {
+      if (!queue) return null; // Busy — the hover path would rather have nothing
+      // Wait it out, then take our turn. Re-entered rather than looped: by the
+      // time this resolves another caller may have started, and the same rule
+      // applies to them.
+      try {
+        await this.previewInFlight;
+      } catch {
+        /* the other caller's failure is not ours */
+      }
+      return this.getPreviewFrame(time, view, true);
+    }
     // Audio-only sources have no video track to thumbnail. Bail early
     // so a hover on the seek bar doesn't trigger a "Thumbnail bindings
     // or renderer not available" error every time.
     if (!this.trackManager.getActiveVideoTrack()) return null;
     this.isPreviewGenerating = true;
+    // The signal waiters block on. Its value is never read — a waiter takes its
+    // own turn afterwards rather than sharing this frame, which is a different
+    // time anyway.
+    let releaseInFlight: () => void = () => {};
+    this.previewInFlight = new Promise<Blob | null>((resolve) => {
+      releaseInFlight = () => resolve(null);
+    });
 
     try {
       // Initialize thumbnail pipeline if needed
@@ -6760,6 +6801,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return null;
     } finally {
       this.isPreviewGenerating = false;
+      this.previewInFlight = null;
+      releaseInFlight();
       // Clear ThumbnailHttpSource buffer to free memory (512KB)
       // This clears the buffer after each thumbnail generation
       if (this.thumbnailSource && "clearBuffer" in this.thumbnailSource) {
@@ -6989,7 +7032,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Create thumbnail bindings
-    this.thumbnailBindings = new ThumbnailBindings(module);
+    // Held locally until the pipeline can actually make a frame.
+    //
+    // Published here, it read as "initialised" from the moment it existed —
+    // and it exists two awaits before it is usable (create, then open, both
+    // over the network). A preview asked for inside that window skipped the
+    // wait-for-init branch, because bindings were set, and fell through to the
+    // availability check, where the renderer was still missing: "Thumbnail
+    // bindings or renderer not available", returned null, 182 times in one
+    // session. The chapter strip asks for one frame per chapter in a tight
+    // loop, so a panel opened in that window came out completely empty.
+    const bindings = new ThumbnailBindings(module);
+    this.thumbnailBindingsPending = bindings;
 
     const dataAdapter = {
       read: async (offset: number, size: number): Promise<Uint8Array> => {
@@ -7002,13 +7056,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return this.thumbnailSource.getSize();
       },
     };
-    this.thumbnailBindings.setDataSource(dataAdapter);
+    bindings.setDataSource(dataAdapter);
 
-    const created = await this.thumbnailBindings.create(fileSize);
+    const created = await bindings.create(fileSize);
     Logger.debug(TAG, `Thumbnail context create result: ${created}`);
     if (!created) throw new Error("Failed to create thumbnail context");
 
-    const opened = await this.thumbnailBindings.open();
+    const opened = await bindings.open();
     Logger.debug(TAG, `Thumbnail context open result: ${opened}`);
     if (!opened) throw new Error("Failed to open thumbnail media");
 
@@ -7016,9 +7070,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // of it holds an FFmpeg context. Hand it back before returning.
     if (superseded()) {
       try {
-        this.thumbnailBindings.destroy();
+        bindings.destroy();
       } catch {}
-      this.thumbnailBindings = null;
+      this.thumbnailBindingsPending = null;
       this.releaseSharedThumbModule();
       return;
     }
@@ -7038,7 +7092,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // OWN stream info in that case; the main track stays the fallback for the
     // ordinary same-file path (and if the preview's info is unreadable).
     const previewInfo = previewRung
-      ? this.thumbnailBindings.getStreamInfo()
+      ? bindings.getStreamInfo()
       : null;
     const shape = previewInfo?.width
       ? {
@@ -7050,7 +7104,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           codec: previewInfo.codecName,
           profile: previewInfo.profile,
           level: previewInfo.level,
-          extradata: this.thumbnailBindings.getExtradata(),
+          extradata: bindings.getExtradata(),
         }
       : videoTrack
         ? {
@@ -7103,6 +7157,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Logger.warn(TAG, "No video track found for thumbnail renderer");
     }
 
+    // Published last, and only now: from here a caller that finds bindings set
+    // can rely on there being a renderer behind them. Until this line it is
+    // reachable only through thumbnailBindingsPending, which is teardown's
+    // business and nobody else's.
+    this.thumbnailBindings = bindings;
+    this.thumbnailBindingsPending = null;
+
     Logger.debug(TAG, "Thumbnail pipeline initialized successfully");
   }
 
@@ -7124,11 +7185,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private destroyPreviewPipeline() {
     this._previewGeneration++;
     this.releaseSharedThumbModule();
+    // A build that was still in flight holds a context too, and an init that
+    // threw between creating it and publishing it leaves it here.
+    if (this.thumbnailBindingsPending) {
+      try {
+        this.thumbnailBindingsPending.destroy();
+      } catch {}
+      this.thumbnailBindingsPending = null;
+    }
     if (this.thumbnailBindings) {
       try {
         this.thumbnailBindings.destroy();
       } catch {}
-      this.thumbnailBindings = null;
     }
 
     if (this.thumbnailRenderer) {
