@@ -4757,8 +4757,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // the sound for a picture nobody asked to be decoded.
       const pictureRunning =
         !this._audioOnly && (!this.isBackgrounded || this.isPiPActive);
+      // Nor where the sound is being dropped rather than played: an
+      // autoplay-blocked context is suspended, so there is no sound to come back
+      // in step with and waiting for it never ends. See the stall detector.
       const bound =
-        this._bindAV && hasAudioTrack && !this.disableAudio && pictureRunning;
+        this._bindAV &&
+        hasAudioTrack &&
+        !this.disableAudio &&
+        pictureRunning &&
+        !this.audioRenderer.isDroppingAudio();
       // …and bound, "a frame exists" is not "the picture is running again". One
       // frame satisfies a `> 0` test the instant it lands; the presentation
       // loop shows it, the queue is empty again, and the post-play grace then
@@ -4890,6 +4897,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._bindAV &&
       !this.disableAudio &&
       !this._audioOnly &&
+      // Sound the browser refuses to start cannot walk away from anything.
+      !this.audioRenderer.isDroppingAudio() &&
       (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer);
     // Grace period after play() starts: allow decode pipeline to fill before stall detection.
     // Without this, clicking play on a poster triggers a false stall → buffering → loading spinner.
@@ -4958,9 +4967,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // count audioDemuxer too, else hasAudio is false, audioLow is always true,
       // and the detector false-stalls on any momentary video-queue blip while the
       // (independent) audio buffer is perfectly healthy.
+      //
+      // …and audio the browser will not let us start is not audio at all here.
+      // Blocked by autoplay policy the context stays suspended, so its clock
+      // never advances and nothing scheduled against it is ever consumed: the
+      // buffer reads empty on every pass, forever. Counting that as a track made
+      // `audioStarved` permanently true, and under a binding the picture waited
+      // on sound that could never arrive — stall, spinner, resume, stall, for as
+      // long as the viewer left it muted. isDroppingAudio() is false for our OWN
+      // suspends (a prime, a buffering hold), which are exactly the ones the
+      // picture SHOULD wait through.
       const hasAudio =
         (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
-        !this.disableAudio;
+        !this.disableAudio &&
+        !this.audioRenderer.isDroppingAudio();
       const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;
       // Audio can starve on its own while video stays perfectly healthy: an
       // expensive software codec (TrueHD/MLP/DTS) decodes slower than realtime,
