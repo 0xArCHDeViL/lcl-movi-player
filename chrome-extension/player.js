@@ -1,4 +1,9 @@
-import * as Movi from "./dist/element.js";
+// Slim bundle: the FFmpeg engine ships beside it as dist/movi.wasm rather than
+// embedded, which keeps the largest JS file under the 5MB AMO's linter will
+// parse (the full build is 11.8MB and fails Firefox validation outright). Same
+// element, same API. Firefox copies this file verbatim — see firefox-extension/
+// build.sh — so both add-ons load the same bundle.
+import * as Movi from "./dist/element.slim.js";
 
 const params = new URLSearchParams(window.location.search);
 const url = params.get("url");

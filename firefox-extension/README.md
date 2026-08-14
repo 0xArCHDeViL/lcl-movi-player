@@ -50,14 +50,24 @@ becomes optional again.
 npx web-ext lint --source-dir firefox-extension --ignore-files build.sh README.md
 ```
 
-Two things it reports are expected and not bugs:
+It reports **0 errors** and ~33 warnings. None of them block a submission; AMO
+routes the add-on to human review either way. What they are:
 
-- `FILE_TOO_LARGE` on `dist/element.js` — the player bundle is ~11 MB, well past
-  the 5 MB the linter will parse. AMO routes an add-on this size to human
-  review; there is nothing to fix short of code-splitting the bundle.
-- `UNSAFE_VAR_ASSIGNMENT` ×2 in `player.js` — both are template literals whose
-  only interpolated values go through `escapeHtml()`. The linter flags the
-  syntax, not an actual unsanitized value.
+- `UNSAFE_VAR_ASSIGNMENT` — in `player.js`, template literals whose only
+  interpolated values go through `escapeHtml()`; the rest are inside the
+  minified bundle. The linter flags the syntax, not an actual unsanitized value.
+- `UNSUPPORTED_API` / `DANGEROUS_EVAL` — inside the bundle, from the FFmpeg glue.
+
+Most of these are new only because the linter can finally *read* the bundle: at
+11 MB it exceeded the parse limit and was skipped whole, so its contents were
+never reported on.
+
+`FILE_TOO_LARGE` used to appear here too: the all-in-one bundle is ~11 MB and
+AMO's linter will not parse a JS file over 5 MB, which failed validation
+outright. The add-on now ships `dist/element.slim.js` (~4.6 MB) with the FFmpeg
+engine beside it as `dist/movi.wasm`, which the linter never opens because it
+isn't JS. Same element, same API — the bundle reaches the engine through
+`new URL("movi.wasm", import.meta.url)`, so the two must stay in one directory.
 
 ## Permissions
 
