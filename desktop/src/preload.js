@@ -50,7 +50,8 @@ contextBridge.exposeInMainWorld("movi", {
   onPipActive: (cb) => ipcRenderer.on("pip:active", () => cb()),
   onPipClosed: (cb) => ipcRenderer.on("pip:closed", (_e, state) => cb(state)),
   // Picture-in-Picture (PiP window side).
-  pipReportState: (src, time) => ipcRenderer.send("pip:state", { src, time }),
+  pipReportState: (src, time, settings) =>
+    ipcRenderer.send("pip:state", { src, time, settings }),
   onPipLoad: (cb) => ipcRenderer.on("pip:load", (_e, d) => cb(d)),
   pipClose: () => ipcRenderer.send("pip:close"),
 });

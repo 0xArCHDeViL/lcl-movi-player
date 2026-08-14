@@ -6,6 +6,8 @@
  *   pick / recent / OS open-with → path → /_local?p=…   (range-streamed)
  *   URL bar      → /_proxy?url=…                         (range pass-through)
  */
+import { applySettings, captureSettings } from "/handoff.js";
+
 const player = document.getElementById("player");
 const welcome = document.getElementById("welcome");
 const dropzone = document.getElementById("dropzone");
@@ -489,7 +491,14 @@ function openPip() {
     return;
   }
   pipWasPlaying = !player.paused;
-  window.movi.pipOpen({ src, time: player.currentTime || 0, playing: pipWasPlaying });
+  window.movi.pipOpen({
+    src,
+    time: player.currentTime || 0,
+    playing: pipWasPlaying,
+    // The PiP window builds its own player from nothing, so how this one was
+    // set up has to travel with the file — see handoff.js.
+    settings: captureSettings(player),
+  });
 }
 
 // The built-in "p" shortcut calls the element's Document PiP (dead in Electron).
@@ -532,12 +541,18 @@ window.movi.onPipClosed((state) => {
       }
       prime();
       player.src = src;
+      // After the assignment: the picks wait on the NEW file's trackschange,
+      // and reading the lists before it would be reading the file we just left.
+      applySettings(player, state && state.settings);
       let n = 0;
       const iv = setInterval(() => {
         if (++n > 100) return clearInterval(iv);
         if (player.duration > 0) { clearInterval(iv); resume(); }
       }, 100);
     } else {
+      // Whatever was changed inside the PiP window comes back with it. The file
+      // never left this player, so the track lists are already there to match.
+      applySettings(player, state && state.settings);
       resume();
     }
   };
