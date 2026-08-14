@@ -10516,17 +10516,53 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         };
       `], { type: "application/javascript" });
-      this.backgroundWorker = new Worker(URL.createObjectURL(blob));
-      this.backgroundWorker.onmessage = () => this.backgroundTick();
-      this.backgroundWorker.postMessage("start");
+      const worker = new Worker(URL.createObjectURL(blob));
+      this.backgroundWorker = worker;
+      worker.onmessage = () => this.backgroundTick();
+      // A worker that fails to LOAD does not throw — the constructor returns an
+      // object and the failure arrives later as an error event, so the catch
+      // below never ran and neither did its fallback. What was left was a
+      // worker that would never tick and an `if (this.backgroundWorker) return`
+      // guard saying the pump was running. Safari does exactly this: a
+      // cross-origin-isolated page (which this one is — SharedArrayBuffer needs
+      // COOP/COEP) refuses a blob: worker, logging "Cannot load blob:… due to
+      // access control checks". So the hidden tab had no pump at all: rAF is
+      // throttled to nothing there, and the sound stopped as soon as the
+      // buffered second or two ran out.
+      worker.onerror = () => {
+        Logger.warn(
+          TAG,
+          "Background worker failed to load — falling back to setInterval",
+        );
+        try { worker.terminate(); } catch {}
+        if (this.backgroundWorker === worker) this.backgroundWorker = null;
+        this.startBackgroundTimerFallback();
+      };
+      worker.postMessage("start");
     } catch {
-      // Worker not available — fallback to setInterval
+      // Worker not available at all (constructor threw).
       Logger.debug(TAG, "Worker unavailable, using setInterval fallback");
-      this.backgroundIntervalId = window.setInterval(
-        () => this.backgroundTick(),
-        16,
-      );
+      this.startBackgroundTimerFallback();
     }
+  }
+
+  /**
+   * The pump without a worker. Throttled in a hidden tab (Safari clamps it to
+   * about a second), which is far worse than a worker tick — but a tick a
+   * second still decodes ahead and keeps the sound alive, where nothing at all
+   * ends it.
+   */
+  private startBackgroundTimerFallback(): void {
+    if (this.backgroundIntervalId || this._destroyed) return;
+    // Only while the pump is still wanted — the load error can land after the
+    // tab came back, and the visibility handler has stopped the timer by then.
+    // (PiP is deliberately not excluded: the hidden-tab-with-PiP case starts
+    // this pump too.)
+    if (!this.isBackgrounded) return;
+    this.backgroundIntervalId = window.setInterval(
+      () => this.backgroundTick(),
+      16,
+    );
   }
 
   /**
