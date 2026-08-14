@@ -317,6 +317,11 @@ export class CanvasRenderer {
   // Rendered line count of the previous subtitle paint. A growth in this while
   // the same sentence is still building is what triggers the scroll-up.
   private _lastSubtitleLineCount: number = 0;
+  // The encoded PGS/DVB bitmap currently in the overlay, and which cue it came
+  // from. A resize or a controls toggle re-lays out the same cue, and encoding
+  // the PNG again for it is pure cost.
+  private _lastImageCueKey: string = "";
+  private _lastImageDataUrl: string = "";
   // Canvas + cached font string used to measure a karaoke cue's full
   // final-sentence width so the line can hold a stable min-width
   // anchor. The font cache is keyed by viewport width because the
@@ -3508,26 +3513,6 @@ export class CanvasRenderer {
     }
 
     try {
-      // Create a temporary canvas to convert ImageBitmap to data URL
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = cue.image.width;
-      tempCanvas.height = cue.image.height;
-      const tempCtx = tempCanvas.getContext("2d");
-
-      if (!tempCtx) {
-        Logger.warn(
-          TAG,
-          "Failed to create temporary canvas context for image subtitle",
-        );
-        return;
-      }
-
-      // Draw ImageBitmap to temporary canvas
-      tempCtx.drawImage(cue.image, 0, 0);
-
-      // Convert to data URL
-      const dataUrl = tempCanvas.toDataURL("image/png");
-
       // Use CSS-pixel dimensions of the visible canvas, not the dpr-scaled
       // backbuffer. this.width/height live in buffer space (target × dpr) and
       // sizing the overlay with those values blows it up to 2× on retina,
@@ -3666,6 +3651,52 @@ export class CanvasRenderer {
       // so it maps back onto the video once rotated.
       const rotImg = (((this.rotation ?? 0) % 360) + 360) % 360;
       const swappedImg = rotImg === 90 || rotImg === 270;
+
+      // The presentation loop calls this ~60x/s, and until now every one of
+      // those ticks re-encoded the bitmap, re-assigned the img's src and
+      // re-asserted a padding-bottom the overlay was still easing toward. The
+      // 0.3s transition therefore never landed: it was retargeted before it
+      // finished, so an image cue crept up from the bottom of the frame for as
+      // long as it was on screen instead of simply appearing where it belongs.
+      //
+      // The text path has carried this guard since the same bug bit it there
+      // (see the renderKey bail below it) — the image half never got one.
+      // Everything the rendered result depends on is in the key, so a resize, a
+      // rotation, the controls sliding in or a size-multiplier change all still
+      // re-render; only an identical repeat is skipped.
+      const imgKey = [
+        "img",
+        cue.start.toFixed(3),
+        cue.end.toFixed(3),
+        Math.round(canvasWidth),
+        Math.round(canvasHeight),
+        Math.round(this.subtitleControlsPadding),
+        userSizeMult,
+        rotImg,
+      ].join("|");
+      if (imgKey === this._lastRenderedSubtitleKey) return;
+
+      // The bitmap only changes with the cue, so a resize or a controls toggle
+      // reuses the PNG rather than paying for toDataURL again.
+      const cueKey = `${cue.start.toFixed(3)}|${cue.end.toFixed(3)}`;
+      if (cueKey !== this._lastImageCueKey || !this._lastImageDataUrl) {
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width = cue.image.width;
+        tempCanvas.height = cue.image.height;
+        const tempCtx = tempCanvas.getContext("2d");
+        if (!tempCtx) {
+          Logger.warn(
+            TAG,
+            "Failed to create temporary canvas context for image subtitle",
+          );
+          return;
+        }
+        tempCtx.drawImage(cue.image, 0, 0);
+        this._lastImageDataUrl = tempCanvas.toDataURL("image/png");
+        this._lastImageCueKey = cueKey;
+      }
+      const dataUrl = this._lastImageDataUrl;
+
       const ovW = swappedImg ? canvasHeight : canvasWidth;
       const ovH = swappedImg ? canvasWidth : canvasHeight;
       this.subtitleOverlay.style.position = "absolute";
@@ -3742,6 +3773,11 @@ export class CanvasRenderer {
       imgElement.style.visibility = "visible";
       imgElement.style.opacity = "1";
 
+      // Only once it is actually on screen: a bail above (no 2D context) has to
+      // be free to try again on the next tick rather than being remembered as
+      // done.
+      this._lastRenderedSubtitleKey = imgKey;
+
       Logger.debug(
         TAG,
         `Image subtitle rendered: src set, dimensions=${(cue.image.width * scaleX).toFixed(0)}x${(cue.image.height * scaleY).toFixed(0)}, position=(${x.toFixed(0)}, ${y.toFixed(0)})`,
@@ -3763,6 +3799,9 @@ export class CanvasRenderer {
     this._lastRenderedSubtitleKey = "";
     this._lastRenderedSubtitlePlain = "";
     this._lastSubtitleLineCount = 0;
+    // A different track (or file) — the cached bitmap belongs to neither.
+    this._lastImageCueKey = "";
+    this._lastImageDataUrl = "";
     // Clear all subtitle elements from overlay if it exists
     if (this.subtitleOverlay) {
       this.subtitleOverlay.innerHTML = "";
