@@ -22,8 +22,26 @@ CREATE TABLE IF NOT EXISTS comments (
   ip_hash    TEXT    NOT NULL,
   -- Epoch milliseconds.
   created_at INTEGER NOT NULL,
-  hidden     INTEGER NOT NULL DEFAULT 0
+  hidden     INTEGER NOT NULL DEFAULT 0,
+  -- NULL for a visitor's own comment; the id of the comment this answers
+  -- otherwise. Only the maintainer can reply (POST carries the admin token),
+  -- so the wall stays one level deep — a thread, not a forum.
+  parent_id  INTEGER REFERENCES comments (id),
+  -- 'visitor' | 'maintainer'. Kept explicit rather than inferred from
+  -- parent_id: "a reply must be from the maintainer" is true today only
+  -- because nothing else can write one, and that is not a rule worth hiding
+  -- inside a column that means something else.
+  author_role TEXT NOT NULL DEFAULT 'visitor'
 );
+
+-- Existing deployments predate the two columns above; CREATE TABLE IF NOT
+-- EXISTS will not add them. Run once per environment, ignoring the error if
+-- it has already been applied:
+--
+--   wrangler d1 execute movi-comments --remote \
+--     --command "ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments (id)"
+--   wrangler d1 execute movi-comments --remote \
+--     --command "ALTER TABLE comments ADD COLUMN author_role TEXT NOT NULL DEFAULT 'visitor'"
 
 -- Listing query: WHERE hidden = 0 [AND id < ?] ORDER BY id DESC. Paging on
 -- the rowid rather than created_at keeps the cursor unique and lets this
@@ -34,6 +52,10 @@ CREATE INDEX IF NOT EXISTS idx_comments_visible
 -- Rate-limit query: WHERE ip_hash = ? AND created_at > ?.
 CREATE INDEX IF NOT EXISTS idx_comments_ip
   ON comments (ip_hash, created_at DESC);
+
+-- Replies for the page being shown: WHERE parent_id IN (…) AND hidden = 0.
+CREATE INDEX IF NOT EXISTS idx_comments_parent
+  ON comments (parent_id, id);
 
 -- ─── Profanity / abuse term list ──────────────────────────────────────
 --

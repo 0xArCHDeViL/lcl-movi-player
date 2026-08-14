@@ -430,6 +430,14 @@ export default {
       if (request.method === "DELETE") return handleCommentDelete(request, env, url);
       return jsonResponse({ error: "Method not allowed" }, 405);
     }
+    // Its own path rather than a branch inside the POST above: that handler is
+    // the public one, with the bot gate and the rate limit, and a reply needs
+    // neither. Keeping them apart means neither check can be skipped by
+    // accident from the other's payload.
+    if (path === "/api/comments/reply") {
+      if (request.method === "POST") return handleCommentReply(request, env);
+      return jsonResponse({ error: "Method not allowed" }, 405);
+    }
 
     // --- Sitemap & Robots ---
     if (path === "/sitemap.xml") {
@@ -2724,14 +2732,16 @@ async function handleCommentsList(env, url) {
   const hasCursor = Number.isFinite(before) && before > 0;
 
   try {
+    // Top level only — a reply belongs to its parent's card, not to the page,
+    // and letting one occupy a page slot would push a real comment off it.
     const rows = hasCursor
       ? await env.COMMENTS_DB.prepare(
           "SELECT id, name, body, rating, created_at FROM comments " +
-            "WHERE hidden = 0 AND id < ? ORDER BY id DESC LIMIT ?",
+            "WHERE hidden = 0 AND parent_id IS NULL AND id < ? ORDER BY id DESC LIMIT ?",
         ).bind(before, COMMENT_PAGE_SIZE + 1).all()
       : await env.COMMENTS_DB.prepare(
           "SELECT id, name, body, rating, created_at FROM comments " +
-            "WHERE hidden = 0 ORDER BY id DESC LIMIT ?",
+            "WHERE hidden = 0 AND parent_id IS NULL ORDER BY id DESC LIMIT ?",
         ).bind(COMMENT_PAGE_SIZE + 1).all();
 
     const all = rows.results || [];
@@ -2739,9 +2749,31 @@ async function handleCommentsList(env, url) {
     const hasMore = all.length > COMMENT_PAGE_SIZE;
     const page = hasMore ? all.slice(0, COMMENT_PAGE_SIZE) : all;
 
+    // One query for the whole page's replies rather than one per card.
+    const repliesBy = new Map();
+    if (page.length) {
+      const marks = page.map(() => "?").join(",");
+      const rep = await env.COMMENTS_DB.prepare(
+        "SELECT id, name, body, created_at, parent_id, author_role FROM comments " +
+          `WHERE hidden = 0 AND parent_id IN (${marks}) ORDER BY id ASC`,
+      ).bind(...page.map((r) => r.id)).all();
+      for (const r of rep.results || []) {
+        if (!repliesBy.has(r.parent_id)) repliesBy.set(r.parent_id, []);
+        repliesBy.get(r.parent_id).push({
+          id: r.id,
+          name: r.name,
+          body: r.body,
+          createdAt: r.created_at,
+          role: r.author_role || "visitor",
+        });
+      }
+    }
+
+    // Replies are answers, not feedback: counting them would inflate the
+    // comment count and they carry no rating to average anyway.
     const totals = await env.COMMENTS_DB.prepare(
       "SELECT COUNT(*) AS total, AVG(rating) AS avgRating, " +
-        "COUNT(rating) AS rated FROM comments WHERE hidden = 0",
+        "COUNT(rating) AS rated FROM comments WHERE hidden = 0 AND parent_id IS NULL",
     ).first();
 
     return new Response(
@@ -2752,6 +2784,7 @@ async function handleCommentsList(env, url) {
           body: r.body,
           rating: r.rating,
           createdAt: r.created_at,
+          replies: repliesBy.get(r.id) || [],
         })),
         hasMore,
         total: totals?.total ?? page.length,
@@ -2866,6 +2899,89 @@ async function handleCommentPost(request, env) {
   } catch (err) {
     console.error("Comment insert failed", err);
     return jsonResponse({ error: "Could not save your comment" }, 500);
+  }
+}
+
+/**
+ * POST /api/comments/reply — answer a visitor's comment. Requires
+ * `Authorization: Bearer <COMMENTS_ADMIN_TOKEN>`, the same key that can hide
+ * a comment: replying in the maintainer's name is exactly as consequential as
+ * taking someone's comment down, so it is gated exactly as hard.
+ *
+ * No Turnstile and no rate limit here — both exist to keep strangers from
+ * flooding the wall, and whoever holds this token is not a stranger. What is
+ * kept is the length cap, because a runaway paste would break the page for
+ * everyone regardless of who sent it.
+ */
+async function handleCommentReply(request, env) {
+  if (!env.COMMENTS_DB) {
+    return jsonResponse({ error: "Comments are not configured on this deployment" }, 503);
+  }
+  if (!env.COMMENTS_ADMIN_TOKEN) {
+    return jsonResponse({ error: "Admin token not configured" }, 503);
+  }
+
+  const auth = request.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!timingSafeEqualStr(token, env.COMMENTS_ADMIN_TOKEN)) {
+    return jsonResponse({ error: "Unauthorized" }, 401);
+  }
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
+
+  const parentId = Number(payload?.parentId);
+  if (!Number.isInteger(parentId) || parentId <= 0) {
+    return jsonResponse({ error: "Missing or invalid parentId" }, 400);
+  }
+
+  const body = sanitizeCommentField(payload?.body, COMMENT_MAX_BODY);
+  if (body.length < COMMENT_MIN_BODY) {
+    return jsonResponse({ error: "Please write a reply first." }, 400);
+  }
+
+  // The parent has to exist, be visible, and be a top-level comment. Without
+  // the last check a reply could be hung off another reply, and the front end
+  // only ever renders one level deep — the thread would simply vanish.
+  const parent = await env.COMMENTS_DB.prepare(
+    "SELECT id FROM comments WHERE id = ? AND hidden = 0 AND parent_id IS NULL",
+  ).bind(parentId).first();
+  if (!parent) {
+    return jsonResponse({ error: "No such comment to reply to" }, 404);
+  }
+
+  const name = sanitizeCommentField(payload?.name, COMMENT_MAX_NAME) || "Movi Player";
+  const createdAt = Date.now();
+
+  try {
+    const res = await env.COMMENTS_DB.prepare(
+      "INSERT INTO comments (name, body, rating, ip_hash, created_at, parent_id, author_role) " +
+        "VALUES (?, ?, NULL, ?, ?, ?, 'maintainer')",
+    )
+      // ip_hash is NOT NULL and exists for rate limiting, which does not apply
+      // here; a fixed marker keeps the column honest without inventing a hash
+      // of an address we did not use.
+      .bind(name, body, "maintainer", createdAt, parentId)
+      .run();
+
+    return jsonResponse({
+      ok: true,
+      reply: {
+        id: res.meta?.last_row_id ?? null,
+        name,
+        body,
+        createdAt,
+        role: "maintainer",
+        parentId,
+      },
+    });
+  } catch (err) {
+    console.error("Comment reply failed", err);
+    return jsonResponse({ error: "Could not save the reply" }, 500);
   }
 }
 
