@@ -14,7 +14,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/MrUjjwalG/movi-player?style=flat-square&color=yellow&logo=github)](https://github.com/MrUjjwalG/movi-player/stargazers)
 
-**[Web App](https://moviplayer.com)** &nbsp;·&nbsp; **[Documentation](https://mrujjwalg.github.io/movi-player/)** &nbsp;·&nbsp; **[Live Demo](https://movi-player-examples.vercel.app/element.html)** &nbsp;·&nbsp; **[Examples](https://github.com/MrUjjwalG/movi-player-examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
+**[Web App](https://moviplayer.com)** &nbsp;·&nbsp; **[Documentation](https://moviplayer.com/docs/)** &nbsp;·&nbsp; **[Live Demo](https://movi-player-examples.vercel.app/element.html)** &nbsp;·&nbsp; **[Examples](https://moviplayer.com/examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
 
 ![Movi Player](docs/images/element.gif)
 
@@ -339,7 +339,7 @@ By default the player remembers volume, mute, speed, and its toggles on its own.
              persistkey="my-app"></movi-player>
 ```
 
-Settings: `loop`, `muted`, `volume`, `speed`, `ambient`, `stablevolume`, `hdr`, `aspect`, `cropbars`, `audiolang`, `subtitlelang`. Languages are remembered as a *language*, not a track number, and matched against each new file's tracks. `persistkey` namespaces the store so two players on a page don't share preferences. See [`persist`](https://mrujjwalg.github.io/movi-player/api/element#persist) in the docs.
+Settings: `loop`, `muted`, `volume`, `speed`, `ambient`, `stablevolume`, `hdr`, `aspect`, `cropbars`, `audiolang`, `subtitlelang`. Languages are remembered as a *language*, not a track number, and matched against each new file's tracks. `persistkey` namespaces the store so two players on a page don't share preferences. See [`persist`](https://moviplayer.com/docs/api/element#persist) in the docs.
 
 ### Resume and Posters
 
@@ -382,7 +382,7 @@ player.showOverlay({
 // later: player.updateOverlay("up-next", { content }) / player.hideOverlay("up-next")
 ```
 
-Full spec: [Custom Controls](https://mrujjwalg.github.io/movi-player/api/element#custom-controls) in the docs.
+Full spec: [Custom Controls](https://moviplayer.com/docs/api/element#custom-controls) in the docs.
 
 ### Engine Selection and Native Fallback
 
@@ -422,7 +422,7 @@ You host `movi.wasm` yourself — it ships in the package at `movi-player/dist/m
 ></movi-player>
 ```
 
-The framework wrappers have slim twins too — `movi-player/react/slim`, `movi-player/vue/slim`, `movi-player/svelte/slim` — same components, same props. At runtime, `MoviElement.build` / `el.build` reports `"slim"` or `"full"`, and `MoviElement.version` / `el.version` the package version. See [Modules](https://mrujjwalg.github.io/movi-player/guide/modules) for details.
+The framework wrappers have slim twins too — `movi-player/react/slim`, `movi-player/vue/slim`, `movi-player/svelte/slim` — same components, same props. At runtime, `MoviElement.build` / `el.build` reports `"slim"` or `"full"`, and `MoviElement.version` / `el.version` the package version. See [Modules](https://moviplayer.com/docs/guide/modules) for details.
 
 ### Custom Request Headers
 
@@ -484,7 +484,7 @@ await player.load();
 await player.play();
 ```
 
-See the [Programmatic API guide](https://mrujjwalg.github.io/movi-player/guide/programmatic-api).
+See the [Programmatic API guide](https://moviplayer.com/docs/guide/programmatic-api).
 
 ### Demuxer Only (50KB)
 
@@ -532,17 +532,17 @@ registerSourceAdapter("s3", (config) => new MyS3Source(config.url));
 <movi-player src="s3://bucket/video.mkv" controls></movi-player>
 ```
 
-See [Sources](https://mrujjwalg.github.io/movi-player/api/sources) in the docs.
+See [Sources](https://moviplayer.com/docs/api/sources) in the docs.
 
 ### Embedding Hooks
 
 - **Host fullscreen handoff** — a cancelable `movi-fullscreen-request` event plus `setHostFullscreen()` let embedders (VS Code webview, custom apps) take over fullscreen and keep the player's UI in sync; `exitFullscreen()` covers all fullscreen routes.
-- **Host error screen** — every piece of the built-in error overlay carries a `part=` for `::part()` restyling; `slot="error"` replaces it outright; the `errordisplay` event (and `errorTitle` / `errorMessage` properties) carries the exact wording on screen, including format/codec failures that never raise a runtime `error`. See [Customizing the Error Screen](https://mrujjwalg.github.io/movi-player/api/element#customizing-the-error-screen).
+- **Host error screen** — every piece of the built-in error overlay carries a `part=` for `::part()` restyling; `slot="error"` replaces it outright; the `errordisplay` event (and `errorTitle` / `errorMessage` properties) carries the exact wording on screen, including format/codec failures that never raise a runtime `error`. See [Customizing the Error Screen](https://moviplayer.com/docs/api/element#customizing-the-error-screen).
 - **`noerrorscreen`** — suppress the built-in error overlays entirely and render your own.
 
 ## Reference
 
-Full reference with every property, method, and event: **[API docs](https://mrujjwalg.github.io/movi-player/api/element)**.
+Full reference with every property, method, and event: **[API docs](https://moviplayer.com/docs/api/element)**.
 
 ### Element Attributes
 
@@ -753,7 +753,7 @@ The standard `HTMLMediaElement` events all fire (`loadedmetadata`, `canplay`, `p
 
 </details>
 
-Full list with payload types: [Events](https://mrujjwalg.github.io/movi-player/api/events).
+Full list with payload types: [Events](https://moviplayer.com/docs/api/events).
 
 ### Keyboard Shortcuts
 
@@ -782,7 +782,7 @@ Press `?` during playback to toggle the shortcuts panel (also available from the
 
 ### Theming
 
-The UI is themeable through `--movi-*` CSS custom properties (accent colours, radii, control sizes, shadows, transitions) — set them on the element or any ancestor. The full variable list ships in [`custom-elements.json`](custom-elements.json) and the [element docs](https://mrujjwalg.github.io/movi-player/api/element#theming), with IntelliSense in VS Code via the [extension](vscode-extension/).
+The UI is themeable through `--movi-*` CSS custom properties (accent colours, radii, control sizes, shadows, transitions) — set them on the element or any ancestor. The full variable list ships in [`custom-elements.json`](custom-elements.json) and the [element docs](https://moviplayer.com/docs/api/element#theming), with IntelliSense in VS Code via the [extension](vscode-extension/).
 
 ## Server Requirements
 
