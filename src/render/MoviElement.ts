@@ -27310,9 +27310,15 @@ export class MoviElement extends HTMLElement {
         }
         continue;
       }
-      const start = Number(el.dataset.start);
+      // Measured from the frame the tile shows, not from the head of the
+      // stretch it marks: the first generated tile reaches back to 0 and those
+      // are not the same instant there. A chapter carries no dataset.seek and
+      // falls back to its start, which for a chapter IS where its frame came
+      // from.
+      const seek = Number(el.dataset.seek);
+      const base = Number.isNaN(seek) ? Number(el.dataset.start) : seek;
       const end = Number(el.dataset.end);
-      const span = end > start ? (t - start) / (end - start) : 0;
+      const span = end > base ? (t - base) / (end - base) : 0;
       el.style.setProperty(
         "--movi-timeline-progress",
         Math.max(0, Math.min(1, span)).toFixed(3),
@@ -33398,11 +33404,20 @@ export class MoviElement extends HTMLElement {
 
           const item = document.createElement("div");
           item.className = "movi-timeline-item";
-          // Half an interval either side: a tile stands for the stretch it is
-          // the middle of, so the marker moves one tile at a time rather than
-          // going dark between them.
-          item.dataset.start = String(Math.max(0, time - interval / 2));
-          item.dataset.end = String(time + interval / 2);
+          // The stretch a tile stands for BEGINS at the frame it shows, the way
+          // a chapter's does. Half an interval either side was the old split,
+          // and it left the playhead dead centre of the tile you had just
+          // picked: clicking a thumbnail drew a progress line already half way
+          // across it, before a frame of that stretch had played.
+          //
+          // The first tile reaches back to 0 so the opening seconds are not
+          // unmarked. What the line is measured FROM is dataset.seek, so that
+          // reach costs it nothing.
+          item.dataset.start = String(i === 0 ? 0 : time);
+          item.dataset.end = String(
+            i === count - 1 ? duration : interval * (i + 2),
+          );
+          item.dataset.seek = String(time);
 
           const img = document.createElement("img");
           img.src = URL.createObjectURL(blob);
