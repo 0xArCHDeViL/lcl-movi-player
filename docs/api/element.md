@@ -412,7 +412,7 @@ player.chapters = [
 ];
 ```
 
-Only the timeline tile reads it — markers and the seek preview are unchanged. Artwork is shown as supplied: the source's rotation metadata is not applied to it, since that corrects frames decoded out of the video, not a picture the host already framed. A URL that fails to load falls back to the title-only tile an undecodable frame gets. Chapters read from the container never carry one.
+Only the timeline tile reads it — markers and the seek preview are unchanged. Artwork turns with the rest of the strip when the viewer rotates the video, so a rotated timeline stays of a piece. A URL that fails to load falls back to the title-only tile an undecodable frame gets. Chapters read from the container never carry one.
 
 ---
 

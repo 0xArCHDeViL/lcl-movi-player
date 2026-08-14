@@ -33556,11 +33556,14 @@ export class MoviElement extends HTMLElement {
           });
 
           strip.appendChild(item);
-          // Rotation compensates for the SOURCE's orientation metadata, which
-          // applies to frames we decoded out of it. Host artwork arrives the
-          // way up the host meant it — turning that would be the bug.
+          // Host artwork turns with everything else. The rotation applied here
+          // is the VIEWER's own (_currentManualRotation), not the source's
+          // metadata — and the strip has already taken its portrait/landscape
+          // shape from it, so a tile left upright would sit against the grain of
+          // the row it is in. A host that framed its artwork correctly framed
+          // its video correctly too; there is nothing here to compensate for.
           const chImg = item.querySelector("img") as HTMLElement;
-          if (chImg && !ch.image) applyRotationToImg(chImg);
+          if (chImg) applyRotationToImg(chImg);
           this._timelineNextIndex = i + 1;
           status.textContent = `${i + 1} / ${chapters.length}`;
         }
