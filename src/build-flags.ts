@@ -23,7 +23,7 @@ export const IS_SLIM: boolean =
  * `movi.wasm`) or `"full"` (WASM embedded in the JS).
  *
  * Deliberately NOT folded into {@link VERSION} — both builds ship the same
- * release, and a `0.3.6+slim` string would break every consumer that compares
+ * release, and a `0.4.0+slim` string would break every consumer that compares
  * versions for equality. This is the separate axis, and the one worth having in
  * a bug report: the two bundles differ in how the engine loads and in what
  * happens when it can't.
