@@ -384,7 +384,7 @@ The placement token only hides the bar. The title still resolves from metadata, 
 
 #### `chapters`
 
-Chapters that aren't in the media file. The player already reads chapter atoms out of MKV/MP4 containers; this is for the sources that keep them somewhere else — YouTube in the watch page, a CMS in its own database.
+Chapters that aren't in the media file. The player already reads chapter atoms out of MKV/MP4 containers; this is for the sources that keep them somewhere else — YouTube in the watch page, a CMS in its own database. Each entry is `{title, start, end?, image?}`, where `image` is artwork the timeline tile shows in place of a frame decoded at `start`.
 
 ```html
 <movi-player chapters='[{"title":"Intro","start":0},{"title":"Setup","start":42}]'></movi-player>
