@@ -224,6 +224,14 @@ if phase 7; then
   # From inside vscode-extension: that is where vsce and the publisher identity
   # live. --packagePath takes the already-built .vsix so this publishes exactly
   # what phase 4 produced rather than repackaging from the working tree.
+  #
+  # vsce authenticates with an Azure DevOps PAT, which expires within a year —
+  # so roughly every other release meets "You're using an expired Personal
+  # Access Token". A new one comes from dev.azure.com → User settings →
+  # Personal access tokens, scoped to Marketplace ▸ Manage and to ALL
+  # accessible organizations (single-org tokens are rejected). Then either
+  # `npx vsce login mrujjwalg` once, or pass it for the one command:
+  #   VSCE_PAT=<token> npx vsce publish --packagePath <vsix>
   [ "$DRY" = 0 ] && [ ! -f "$VSIX" ] && die "no $VSIX — run phase 4 first"
   confirm "publish the VS Code extension with vsce?"
   run bash -c "cd vscode-extension && npx vsce publish --packagePath '$(basename "$VSIX")'"
