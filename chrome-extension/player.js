@@ -3,25 +3,6 @@ import * as Movi from "./dist/element.js";
 const params = new URLSearchParams(window.location.search);
 const url = params.get("url");
 
-// ?movilog → expose the namespace and raise the log level so debug/FFmpeg lines
-// actually fire. The console sink itself is wired up by movilog.js, which the
-// page loads before this module (the bundle needs it in place at import time).
-//
-// An unpacked build does the same without being asked: logfile.js is recording
-// this URL either way, and a file holding nothing but warnings is not worth the
-// trouble of having written it. Dev is read off the manifest — Chrome only adds
-// update_url to installs it made from the Web Store.
-let devBuild = false;
-try { devBuild = !chrome.runtime.getManifest().update_url; } catch {}
-if (params.has("movilog") || devBuild) {
-  window.Movi = Movi;
-  try {
-    Movi.MoviPlayer.setLogLevel(Movi.LogLevel.TRACE);
-  } catch (e) {
-    console.warn("[movilog] setLogLevel failed", e);
-  }
-}
-
 const overlay = document.getElementById("fileOverlay");
 const dropZone = document.getElementById("dropZone");
 const filePicker = document.getElementById("filePicker");
