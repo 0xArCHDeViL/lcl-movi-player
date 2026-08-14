@@ -3029,20 +3029,36 @@
         color: var(--badge-text);
       }
 
-      /* The maintainer reply box only exists for whoever opened ?admin and
-         entered the token; it never renders for a visitor. */
+      /* Collapsed to this link until clicked — a textarea under every card
+         would bury the comments it sits between. */
+      .comment-reply-open {
+        margin-top: 0.65rem;
+        padding: 0;
+        border: 0;
+        background: none;
+        font: inherit;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        cursor: pointer;
+      }
+      .comment-reply-open:hover { color: var(--text-primary); }
+
       .comment-reply-form {
         margin: 0.85rem 0 0;
         padding-left: 0.9rem;
         border-left: 2px solid var(--border-subtle);
         display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .comment-reply-row {
+        display: flex;
         gap: 0.5rem;
         align-items: flex-start;
       }
-      .comment-reply-form textarea {
-        flex: 1;
-        min-height: 2.4rem;
-        resize: vertical;
+      .comment-reply-form textarea,
+      .comment-reply-name {
         font: inherit;
         font-size: 0.85rem;
         color: var(--text-primary);
@@ -3051,10 +3067,21 @@
         border-radius: 8px;
         padding: 0.5rem 0.65rem;
       }
+      .comment-reply-form textarea {
+        flex: 1;
+        min-height: 2.8rem;
+        resize: vertical;
+      }
+      .comment-reply-name { max-width: 16rem; }
       .comment-reply-form button {
         flex: none;
         font-size: 0.8rem;
         padding: 0.5rem 0.9rem;
+      }
+      .comment-reply-status {
+        margin: 0;
+        font-size: 0.78rem;
+        color: #f08a8a;
       }
 
       .comment-empty {
@@ -6138,23 +6165,6 @@
        * double-encode a legitimate "&"), so this is the only thing standing
        * between a "<img onerror>" comment and stored XSS. No innerHTML here.
        */
-      // The reply box is for whoever holds the comments admin token — the same
-      // key that can hide a comment. It is asked for once, on ?admin, and kept
-      // in sessionStorage so it dies with the tab rather than sitting in the
-      // browser afterwards. A visitor never sees any of this.
-      const ADMIN_KEY = "movi-comments-admin";
-      let adminToken = "";
-      try {
-        adminToken = sessionStorage.getItem(ADMIN_KEY) || "";
-        if (new URLSearchParams(location.search).has("admin") && !adminToken) {
-          const entered = (window.prompt("Comments admin token") || "").trim();
-          if (entered) {
-            adminToken = entered;
-            sessionStorage.setItem(ADMIN_KEY, adminToken);
-          }
-        }
-      } catch { /* private mode: no storage, no reply box — the wall still reads */ }
-
       const renderReply = (r) => {
         const wrap = document.createElement("div");
         wrap.className = "comment-reply";
@@ -6232,18 +6242,34 @@
         for (const r of c.replies || []) replies.appendChild(renderReply(r));
         card.appendChild(replies);
 
-        if (adminToken) card.appendChild(renderReplyForm(c, replies));
+        card.appendChild(renderReplyForm(c, replies));
         return card;
       };
 
       const renderReplyForm = (c, replies) => {
+        // Collapsed to a single link until someone means to use it: a textarea
+        // under every card would bury the comments themselves.
+        const wrap = document.createElement("div");
+
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "comment-reply-open";
+        open.textContent = "Reply";
+
         const form = document.createElement("form");
         form.className = "comment-reply-form";
+        form.hidden = true;
+
+        const nameIn = document.createElement("input");
+        nameIn.type = "text";
+        nameIn.maxLength = 60;
+        nameIn.placeholder = "Your name (optional)";
+        nameIn.className = "comment-reply-name";
 
         const input = document.createElement("textarea");
-        input.rows = 1;
+        input.rows = 2;
         input.maxLength = MAX_BODY;
-        input.placeholder = "Reply as maintainer…";
+        input.placeholder = "Write a reply…";
         input.setAttribute("aria-label", "Reply to " + (c.name || "this comment"));
 
         const send = document.createElement("button");
@@ -6251,7 +6277,25 @@
         send.className = "btn-cta";
         send.textContent = "Reply";
 
-        form.append(input, send);
+        const note = document.createElement("p");
+        note.className = "comment-reply-status";
+        note.hidden = true;
+
+        const row = document.createElement("div");
+        row.className = "comment-reply-row";
+        row.append(input, send);
+        form.append(nameIn, row, note);
+
+        open.addEventListener("click", () => {
+          form.hidden = false;
+          open.hidden = true;
+          input.focus();
+        });
+
+        const fail = (msg) => {
+          note.textContent = msg;
+          note.hidden = false;
+        };
 
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
@@ -6259,43 +6303,50 @@
           if (text.length < 2) { input.focus(); return; }
 
           send.disabled = true;
-          send.textContent = "Sending…";
+          send.textContent = "Posting…";
+          note.hidden = true;
           try {
-            const res = await fetch("/api/comments/reply", {
+            // Same invisible challenge the top-level form solves; the worker
+            // falls back to the rate limit when Turnstile isn't configured.
+            let turnstileToken = null;
+            if (window.__moviTurnstile) {
+              try { turnstileToken = await window.__moviTurnstile(); } catch {}
+            }
+
+            const res = await fetch("/api/comments", {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: "Bearer " + adminToken,
-              },
-              body: JSON.stringify({ parentId: c.id, body: text }),
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: nameIn.value.trim(),
+                body: text,
+                parentId: c.id,
+                turnstileToken,
+              }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-              // A stale or wrong token is the likely cause, and silently
-              // failing would look like the reply had been posted.
-              send.textContent = res.status === 401 ? "Bad token" : "Failed";
-              if (res.status === 401) {
-                try { sessionStorage.removeItem(ADMIN_KEY); } catch {}
-              }
-              console.warn("[comments] reply failed", res.status, data.error || "");
+              // The worker's own wording is the useful one here — it says
+              // whether this was a link, a blocked word, or the rate limit.
+              fail(data.error || "Could not post your reply. Try again.");
               return;
             }
-            // Show it immediately rather than reloading the page: the list is
-            // paginated, and a reload would drop whatever the reader had
-            // already scrolled past.
+            // Shown straight away rather than reloading: the list is paginated,
+            // and a reload would drop whatever the reader had scrolled past.
             replies.hidden = false;
-            replies.appendChild(renderReply(data.reply));
+            replies.appendChild(renderReply(data.comment));
             input.value = "";
-            send.textContent = "Replied";
-          } catch (err) {
-            send.textContent = "Failed";
-            console.warn("[comments] reply error", err);
+            form.hidden = true;
+            open.hidden = false;
+          } catch {
+            fail("Could not post your reply. Try again.");
           } finally {
-            setTimeout(() => { send.disabled = false; send.textContent = "Reply"; }, 1500);
+            send.disabled = false;
+            send.textContent = "Reply";
           }
         });
 
-        return form;
+        wrap.append(open, form);
+        return wrap;
       };
 
       const renderScore = (avg, rated) => {
