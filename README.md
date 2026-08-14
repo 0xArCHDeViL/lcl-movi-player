@@ -237,7 +237,7 @@ import { MoviPlayer } from "movi-player/react";
 
 - **Vue**: `import { MoviPlayer } from "movi-player/vue"`
 - **Svelte**: `import MoviPlayer from "movi-player/svelte"`
-- Typed `<source>` / `<track>` children via `MoviSource` / `MoviTrack` components.
+- Typed `<source>` / `<track>` children via `MoviSource` / `MoviTrack` — named exports of `movi-player/react` and `movi-player/vue`; Svelte imports them per file, from `movi-player/svelte/MoviSource` and `movi-player/svelte/MoviTrack`.
 - Each wrapper has a [slim](#slim-build) twin: `movi-player/react/slim`, `movi-player/vue/slim`, `movi-player/svelte/slim`.
 
 ### Modules
