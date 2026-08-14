@@ -15744,8 +15744,13 @@ export class MoviElement extends HTMLElement {
         width: 26px;
         height: 26px;
         /* Same shadow the title text carries — over a bright frame the top
-           gradient alone doesn't hold a thin white stroke. */
-        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
+           gradient alone doesn't hold a thin white stroke. The hairline ahead
+           of it is for the brightest case of all, a frame that has not arrived:
+           a soft shadow under a white stroke on white leaves the stroke
+           invisible and the blur reading as a smudge. */
+        filter:
+          drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
+          drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
       }
 
       /* "back-mobile": off by default, back on for touch input — the real
@@ -18936,7 +18941,11 @@ export class MoviElement extends HTMLElement {
            height: 50px !important;
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
-           filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
+           /* Outline pair, as in the base rule — !important here too. */
+           filter:
+             drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
+             drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
+             drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
         .movi-center-icon-play {
            margin-left: 0 !important;
@@ -19647,14 +19656,24 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause svg {
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
-           filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
+           /* Carries the base rule's outline pair — this block is !important
+              throughout, so leaving the old single shadow here would have
+              taken the fix straight back off on touch. */
+           filter:
+             drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
+             drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
+             drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
 
         .movi-center-play-pause:hover svg,
         .movi-center-play-pause:focus svg {
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
-           filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent)) !important;
+           /* Outline restated — see the base hover rule. */
+           filter:
+             drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
+             drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
+             drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent)) !important;
         }
 
         .movi-btn:hover svg,
@@ -19776,7 +19795,20 @@ export class MoviElement extends HTMLElement {
         height: 68px;
         display: inline-block;
         color: var(--movi-controls-color);
-        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5));
+        /* Two tight shadows ahead of the soft one.
+           The soft shadow on its own is depth, and depth is exactly what a
+           light backdrop takes away: the white mark goes into the white behind
+           it and all that survives is the blur — a grey rectangle-ish smudge
+           with nothing legible in it, which is what it looks like over a page
+           that has not painted a picture yet. Drop-shadows chain, each applying
+           to the result of the last, so a tight pair traces the outline and
+           gives the shape an edge it keeps on white. On the dark surface a
+           player usually is, they are too small to see and the soft one still
+           does the work it always did. */
+        filter:
+          drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))
+          drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4))
+          drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
       }
 
       .movi-loader-mark {
@@ -19860,7 +19892,12 @@ export class MoviElement extends HTMLElement {
         visibility: hidden;
         pointer-events: none;
         transition: opacity var(--movi-transition-bounce), transform var(--movi-transition-bounce), top var(--movi-transition-normal), visibility 0s linear 0.3s;
-        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+        /* The hairline ring is the same idea as the glyph's tight shadow: the
+           tinted fill and the white inner ring both disappear against a light
+           backdrop, leaving the soft coloured glow as the only thing drawn —
+           which reads as a smudge, not a button. Too dark to see over a
+           picture, enough to hold the circle's edge over a blank page. */
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.18), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
       }
 
       .movi-center-play-pause.movi-center-visible {
@@ -19949,11 +19986,23 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-controls-color);
         fill: var(--movi-controls-color);
         transition: all var(--movi-transition-fast);
-        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+        /* Tight first, soft second — see the loader's container for the whole
+           of the reasoning. A white glyph over a picture that has not arrived
+           yet is a white glyph on whatever the page is, and against a light
+           page the soft shadow is all that is left of it. */
+        filter:
+          drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
+          drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
+          drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
       }
 
       .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent));
+        /* Hover replaces the filter outright, so the outline has to be
+           restated here or pointing at the button is what makes it vanish. */
+        filter:
+          drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
+          drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
+          drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent));
       }
 
       /* Play icon — bumped up ~15% so the triangle isn't dwarfed by
