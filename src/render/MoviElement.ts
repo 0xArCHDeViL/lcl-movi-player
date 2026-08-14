@@ -18207,16 +18207,31 @@ export class MoviElement extends HTMLElement {
         pointer-events: auto;
       }
 
-      .movi-timeline-arrow:hover svg {
-        background: rgba(0, 0, 0, 0.8);
+      /* Gated: a tap leaves :hover latched on a touchscreen, so the disc a
+         finger last used would stay dark for the rest of the panel's life. */
+      @media (hover: hover) {
+        .movi-timeline-arrow:hover svg {
+          background: rgba(0, 0, 0, 0.8);
+        }
       }
 
-      /* A finger already scrolls this strip, and on the widths that go with a
-         touchscreen a 52px overlay costs most of a tile. The arrows are for the
-         pointer that has nothing else to scroll with. */
+      /* A finger can scroll the strip on its own, but it still has no way to
+         see how much of it is left, and a flick that lands between two tiles
+         has nothing to square it up with. So the arrows are here too, just
+         narrower — 52px of overlay is most of a tile on a phone, and 44 is
+         still a full tap target. */
       @media (hover: none) {
         .movi-timeline-arrow {
-          display: none;
+          width: 44px;
+          /* The button sits ON the strip, and without this a drag that starts
+             on it is swallowed instead of scrolling what is underneath — the
+             one gesture a finger came here to use. pan-x hands the horizontal
+             drag back to the scroller and still leaves a tap a tap. */
+          touch-action: pan-x;
+        }
+
+        .movi-timeline-arrow:active svg {
+          background: rgba(0, 0, 0, 0.8);
         }
       }
 
