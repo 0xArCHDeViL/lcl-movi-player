@@ -5146,7 +5146,7 @@ export class MoviElement extends HTMLElement {
           if (selectedIdx >= 0) {
             const selected = items[selectedIdx] as HTMLElement;
             selected.classList.add("movi-timeline-selected");
-            selected.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+            this.centreTimelineTile(selected, "smooth");
           }
           return;
         }
@@ -27379,6 +27379,31 @@ export class MoviElement extends HTMLElement {
     right?.classList.toggle("movi-timeline-arrow-on", strip.scrollLeft < max - 2);
   }
 
+  /**
+   * Centre a tile in the strip by moving the strip's OWN scrollLeft.
+   *
+   * scrollIntoView() does not stop at the nearest scroll container: it walks up
+   * and scrolls every scrollable ancestor it finds. Only the strip was ever
+   * meant to move here, and the strip is the only thing that knows where its
+   * own tiles are — anything else it reaches is collateral. Writing scrollLeft
+   * cannot move anything but the strip, whatever sits above it.
+   */
+  private centreTimelineTile(
+    tile: HTMLElement,
+    behavior: ScrollBehavior = "auto",
+  ): void {
+    const strip = tile.closest(".movi-timeline-strip") as HTMLElement | null;
+    if (!strip) return;
+    // Measured, not offsetLeft: the tile's offsetParent is not guaranteed to be
+    // the strip, and a rect delta is correct either way.
+    const delta =
+      tile.getBoundingClientRect().left - strip.getBoundingClientRect().left;
+    const max = Math.max(0, strip.scrollWidth - strip.clientWidth);
+    const left =
+      strip.scrollLeft + delta - (strip.clientWidth - tile.offsetWidth) / 2;
+    strip.scrollTo({ left: Math.min(max, Math.max(0, left)), behavior });
+  }
+
   private updateTimelineCurrent(): void {
     const sr = this.shadowRoot;
     const panel = sr?.querySelector(".movi-timeline-panel") as HTMLElement | null;
@@ -27449,11 +27474,7 @@ export class MoviElement extends HTMLElement {
       // …but not while someone is reading the strip themselves. Browsing ahead
       // and being yanked back a second later is worse than not following.
       if (performance.now() - this._timelineUserScrolledAt > 4000) {
-        items[current].scrollIntoView({
-          inline: "center",
-          block: "nearest",
-          behavior: "smooth",
-        });
+        this.centreTimelineTile(items[current], "smooth");
       }
     }
   }
@@ -33344,7 +33365,7 @@ export class MoviElement extends HTMLElement {
         // just made instantly.
         this._timelineCurrentIndex = current ? items.indexOf(current) : -1;
         this._timelineUserScrolledAt = 0;
-        current?.scrollIntoView({ inline: "center", block: "nearest" });
+        if (current) this.centreTimelineTile(current);
         // Opening on an already-generated strip fires neither a scroll nor a
         // mutation, so the arrows would stay off until something else moved.
         this.updateTimelineArrows();
