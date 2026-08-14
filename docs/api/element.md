@@ -403,6 +403,17 @@ player.chapters = null; // back to whatever the container declares
 
 Feeds everything that reads chapters: the segmented progress bar, the chapter name in the seek preview, and the chapter timeline panel.
 
+A chapter may also carry `image`, a URL the timeline tile shows in place of a frame decoded at `start`:
+
+```js
+player.chapters = [
+  { title: 'Intro', start: 0, image: '/art/intro.jpg' },
+  { title: 'Setup', start: 42 },   // no image -> a frame from the video
+];
+```
+
+Only the timeline tile reads it — markers and the seek preview are unchanged. Artwork is shown as supplied: the source's rotation metadata is not applied to it, since that corrects frames decoded out of the video, not a picture the host already framed. A URL that fails to load falls back to the title-only tile an undecodable frame gets. Chapters read from the container never carry one.
+
 ---
 
 #### `disablepictureinpicture`

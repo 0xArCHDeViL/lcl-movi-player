@@ -329,6 +329,17 @@ Chapters embedded in MKV/MP4 containers are picked up automatically — markers 
 
 Or as a property: `player.chapters = [{ title, start, end? }]` (times in seconds). Supplied chapters win over the container's.
 
+Add `image` to a chapter and the timeline strip shows that artwork instead of decoding a frame at `start` — the picture you chose, and one less seek per chapter:
+
+```js
+player.chapters = [
+  { title: "Intro", start: 0, image: "/art/intro.jpg" },
+  { title: "The Build", start: 95 },   // no image → a frame from the video
+];
+```
+
+A URL that fails to load falls back to the same title-only tile a missing frame gets.
+
 ### Remembering Viewer Settings
 
 By default the player remembers volume, mute, speed, and its toggles on its own. The `persist` attribute takes over that decision explicitly — an opt-in list of exactly what is remembered:
@@ -666,7 +677,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 
 | Attribute | Example | Description |
 |---|---|---|
-| `chapters` | `chapters='[{"title":"Intro","start":0}]'` | Chapters from outside the media file — JSON array of `{title, start, end?}` (seconds); the property takes the array directly |
+| `chapters` | `chapters='[{"title":"Intro","start":0}]'` | Chapters from outside the media file — JSON array of `{title, start, end?, image?}` (seconds); `image` is artwork for the timeline tile, in place of a decoded frame. The property takes the array directly |
 | `persist` | `persist="volume speed audiolang"` | Which settings to remember across loads — space-separated, opt-in per setting; see [Remembering Viewer Settings](#remembering-viewer-settings) |
 | `persistkey` | `persistkey="my-app"` | Namespace for everything `persist` stores |
 

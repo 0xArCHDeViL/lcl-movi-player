@@ -8093,7 +8093,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Chapters supplied by the host, which win over anything in the container.
    *  Null = none supplied, so the container's own chapters are used. */
   private _externalChapters:
-    | Array<{ title: string; start: number; end?: number }>
+    | Array<{ title: string; start: number; end?: number; image?: string }>
     | null = null;
 
   /**
@@ -8105,13 +8105,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * duration is still 0 and the last chapter would be left ending where it
    * starts, i.e. zero-length.
    */
-  getChapters(): Array<{ title: string; start: number; end: number }> {
+  getChapters(): Array<{
+    title: string;
+    start: number;
+    end: number;
+    image?: string;
+  }> {
     const own = this._externalChapters;
     if (!own) return this.mediaInfo?.chapters ?? [];
     const duration = this.getDuration();
     return own.map((c, i) => ({
       title: c.title,
       start: c.start,
+      image: c.image,
       end:
         Number.isFinite(c.end as number) && (c.end as number) > c.start
           ? (c.end as number)
@@ -8135,7 +8141,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   setChapters(
     list:
-      | Array<{ title: string; start: number; end?: number }>
+      | Array<{ title: string; start: number; end?: number; image?: string }>
       | null
       | undefined,
   ): void {
@@ -8149,6 +8155,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         title: String(c.title ?? ""),
         start: Number(c.start),
         end: c.end,
+        // Carried verbatim. An empty string is dropped rather than passed on,
+        // so a tile falls back to a decoded frame instead of rendering a
+        // broken image for a field the host left blank.
+        image: c.image ? String(c.image) : undefined,
       }))
       .sort((a, b) => a.start - b.start);
     this._externalChapters = sorted.length ? sorted : null;

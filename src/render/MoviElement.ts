@@ -33477,7 +33477,14 @@ export class MoviElement extends HTMLElement {
           // Generate thumbnail at chapter start time
           // Queued: a fixed list of times must not be turned away because the
           // seek bar happened to be mid-preview. See getPreviewFrame's `queue`.
-          const blob = await this.player.getPreviewFrame(ch.start, null, true);
+          //
+          // …unless the host supplied artwork for this chapter, which is the
+          // picture it wanted shown and is already to hand: take it and skip
+          // the decode entirely. One less seek per chapter, and the tile is up
+          // before a frame could have come back.
+          const blob = ch.image
+            ? null
+            : await this.player.getPreviewFrame(ch.start, null, true);
           if (this._timelineCancelled) return;
 
           const item = document.createElement("div");
@@ -33489,10 +33496,24 @@ export class MoviElement extends HTMLElement {
             i < chapters.length - 1 ? chapters[i + 1].start : this.player.getDuration(),
           );
 
-          if (blob) {
+          if (ch.image || blob) {
             const img = document.createElement("img");
-            img.src = URL.createObjectURL(blob);
+            img.src = ch.image ?? URL.createObjectURL(blob as Blob);
             img.alt = ch.title;
+            // A URL that 404s would leave the same collapsed, title-less tile
+            // a missing frame does — and unlike a frame, this one is a link the
+            // host got wrong, so it can fail long after the strip was built.
+            // Drop back to the frameless box the moment it does.
+            if (ch.image) {
+              img.addEventListener(
+                "error",
+                () => {
+                  img.remove();
+                  item.classList.add("movi-timeline-noframe");
+                },
+                { once: true },
+              );
+            }
             item.appendChild(img);
           } else {
             // A tile draws its whole size from the image inside it, and the
@@ -33535,8 +33556,11 @@ export class MoviElement extends HTMLElement {
           });
 
           strip.appendChild(item);
+          // Rotation compensates for the SOURCE's orientation metadata, which
+          // applies to frames we decoded out of it. Host artwork arrives the
+          // way up the host meant it — turning that would be the bug.
           const chImg = item.querySelector("img") as HTMLElement;
-          if (chImg) applyRotationToImg(chImg);
+          if (chImg && !ch.image) applyRotationToImg(chImg);
           this._timelineNextIndex = i + 1;
           status.textContent = `${i + 1} / ${chapters.length}`;
         }
@@ -34566,7 +34590,7 @@ export class MoviElement extends HTMLElement {
   }
   set chapters(
     value:
-      | Array<{ title: string; start: number; end?: number }>
+      | Array<{ title: string; start: number; end?: number; image?: string }>
       | string
       | null,
   ) {

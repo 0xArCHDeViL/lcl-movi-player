@@ -197,6 +197,14 @@ export interface Chapter {
   title: string;
   start: number; // seconds
   end: number;   // seconds
+  /**
+   * Optional artwork for the chapter, supplied by the host alongside the list.
+   * Where it is set the timeline tile shows it instead of decoding a frame at
+   * `start` — which is both the picture the host wanted and one less seek.
+   * Container chapters never carry one; it is only ever set through the
+   * `chapters` attribute/property.
+   */
+  image?: string;
 }
 
 export interface MediaInfo {

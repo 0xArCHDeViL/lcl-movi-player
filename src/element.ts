@@ -185,8 +185,9 @@ export interface MoviPlayerAttributes {
    *  `back-mobile`, `back-fullscreen` or `back-mobile-fullscreen`. */
   titlemode?: string;
   /** Chapters from outside the media file, as a JSON array of
-   *  `{ title, start, end? }` (seconds). Use the `chapters` property to pass
-   *  the array directly. */
+   *  `{ title, start, end?, image? }` (seconds). `image` is a URL the timeline
+   *  tile shows instead of decoding a frame at `start`. Use the `chapters`
+   *  property to pass the array directly. */
   chapters?: string;
   /** Enable ±10s fast-seek. Bare = every affordance; a token list narrows it to
    *  `buttons` (the bottom-bar pair), `keys` (arrow keys) and/or `gestures`
