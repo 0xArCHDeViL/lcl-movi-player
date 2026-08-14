@@ -36,6 +36,13 @@ done
 VERSION="$(node -p "require('./package.json').version")"
 TAG="v${VERSION}"
 
+# release.mjs --package writes each artefact next to the thing it packages, not
+# into the repo root. Spelled out rather than globbed: an unmatched glob is left
+# as a literal by the shell and gets handed to the tool as a filename.
+VSIX="vscode-extension/movi-player-vscode-${VERSION}.vsix"
+CHROME_ZIP="chrome-extension/movi-player-${VERSION}.zip"
+FF_ZIP="firefox-extension/movi-player-firefox-${VERSION}.zip"
+
 say()  { printf '\n%s\n' "${B}${C}▸ $*${N}"; }
 info() { printf '  %s\n' "$*"; }
 warn() { printf '  %s\n' "${Y}! $*${N}"; }
@@ -134,7 +141,12 @@ fi
 if phase 4; then
   say "4 · Package .vsix + chrome/firefox zips"
   run npm run release -- "$VERSION" --package
-  [ "$DRY" = 0 ] && ls -la ./*.vsix ./*.zip 2>/dev/null || true
+  if [ "$DRY" = 0 ]; then
+    for f in "$VSIX" "$CHROME_ZIP" "$FF_ZIP"; do
+      [ -f "$f" ] || die "expected $f — packaging did not produce it"
+      printf '  %s %s (%s)\n' "${G}✓${N}" "$f" "$(du -h "$f" | cut -f1)"
+    done
+  fi
 fi
 
 # ── 5 · Git: push develop, merge to main, tag ─────────────────────────────────
@@ -188,15 +200,21 @@ if phase 7; then
   confirm "npm publish (needs npm login + 2FA)?"
   run npm publish
 
+  # From inside vscode-extension: that is where vsce and the publisher identity
+  # live. --packagePath takes the already-built .vsix so this publishes exactly
+  # what phase 4 produced rather than repackaging from the working tree.
+  [ "$DRY" = 0 ] && [ ! -f "$VSIX" ] && die "no $VSIX — run phase 4 first"
   confirm "publish the VS Code extension with vsce?"
-  run npx --prefix vscode-extension vsce publish --packagePath ./*.vsix
+  run bash -c "cd vscode-extension && npx vsce publish --packagePath '$(basename "$VSIX")'"
 fi
 
 # ── 8 · What is left for a human ──────────────────────────────────────────────
 say "8 · By hand — no CLI does these"
 cat <<EOF
-  · Chrome Web Store  — upload the chrome zip   https://chrome.google.com/webstore/devconsole
-  · Firefox Add-ons   — submit the firefox zip  https://addons.mozilla.org/developers/
+  · Chrome Web Store  — upload $CHROME_ZIP
+                        https://chrome.google.com/webstore/devconsole
+  · Firefox Add-ons   — submit $FF_ZIP
+                        https://addons.mozilla.org/developers/
   · GitHub release    — attach the artefacts to $TAG, paste the changelog section
   · Open issues/PRs   — reply to anything this release resolves. Draft each one,
                         show it, and post only after that reply is approved.
