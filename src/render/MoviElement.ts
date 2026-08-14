@@ -2422,9 +2422,14 @@ export class MoviElement extends HTMLElement {
           strip.scrollBy({ left: back ? -step : step, behavior: "smooth" });
         });
       }
-      strip.addEventListener("scroll", () => this.updateTimelineArrows(), {
-        passive: true,
-      });
+      strip.addEventListener(
+        "scroll",
+        () => {
+          this.updateTimelineArrows();
+          this.flashTimelineScrollbar(strip);
+        },
+        { passive: true },
+      );
       // Two things change what is reachable and neither is a scroll: tiles
       // arriving one at a time while the strip generates, and the player being
       // resized under an open panel.
@@ -18250,8 +18255,12 @@ export class MoviElement extends HTMLElement {
         margin: 0 14px;
       }
 
+      /* Idle, the thumb is not drawn at all. The LANE keeps its 12px either
+         way, so nothing below it moves when the bar comes and goes — the only
+         thing that changes is whether a row of thumbnails carries a permanent
+         grey line under it that nobody asked to scroll. */
       .movi-timeline-strip::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.22);
+        background: transparent;
         /* The border is the padding: clipped to the padding box, so the visible
            thumb is 4px inside a 12px lane. */
         border: 4px solid transparent;
@@ -18260,12 +18269,67 @@ export class MoviElement extends HTMLElement {
         /* A strip of forty thumbnails otherwise gives a thumb a few pixels
            wide, which is back to being unholdable. */
         min-width: 44px;
+        transition: background-color 0.2s;
       }
 
-      .movi-timeline-strip::-webkit-scrollbar-thumb:hover,
-      .movi-timeline-strip::-webkit-scrollbar-thumb:active {
-        background: rgba(255, 255, 255, 0.45);
-        background-clip: padding-box;
+      /* A pointer gets it on hover. The bar is a control, and a control that
+         appears while the cursor is over the thing it scrolls is what every
+         other scroll pane on the platform does. */
+      @media (hover: hover) {
+        .movi-timeline-strip:hover::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.22);
+          background-clip: padding-box;
+        }
+
+        .movi-timeline-strip:hover::-webkit-scrollbar-thumb:hover,
+        .movi-timeline-strip::-webkit-scrollbar-thumb:active {
+          background: rgba(255, 255, 255, 0.45);
+          background-clip: padding-box;
+        }
+      }
+
+      /* A finger has no hover to give, so there the bar rides the scroll
+         itself: the class goes on while the strip moves and comes off shortly
+         after it stops. That is a position indicator, which is the only thing
+         a bar you cannot grab was ever going to be.
+
+         Kept to (hover: none) on purpose. A pointer scrolls this strip by being
+         over it, so the hover rule has it covered — and letting the class light
+         it up there would mean the follow-the-playhead scroll flashed a bar at
+         a cursor sitting somewhere else entirely. */
+      @media (hover: none) {
+        .movi-timeline-strip.movi-timeline-scrolling::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.35);
+          background-clip: padding-box;
+        }
+      }
+
+      /* The same idle-then-reveal spelled for an engine with no thumb
+         pseudo-element to hide.
+
+         Fenced behind @supports on purpose: Chromium has understood
+         scrollbar-width since 121, and the moment either standard property is
+         set it drops every ::-webkit-scrollbar rule on the element — the 12px
+         lane and the track inset above went with it, and the bar came out
+         sitting higher than the tiles it belongs to. So this is for the engine
+         that has no webkit pseudo-elements at all, and nobody else. */
+      @supports not selector(::-webkit-scrollbar) {
+        .movi-timeline-strip {
+          scrollbar-width: thin;
+          scrollbar-color: transparent transparent;
+        }
+
+        @media (hover: hover) {
+          .movi-timeline-strip:hover {
+            scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+          }
+        }
+
+        @media (hover: none) {
+          .movi-timeline-strip.movi-timeline-scrolling {
+            scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+          }
+        }
       }
 
       .movi-timeline-item {
@@ -27243,6 +27307,28 @@ export class MoviElement extends HTMLElement {
   /** The tile someone clicked, held until playback genuinely leaves it. */
   private _timelinePickedStart = -1;
   private _timelineUserScrolledAt = 0;
+  private _timelineScrollbarTimer: number | null = null;
+
+  /**
+   * Show the scroll bar for as long as the strip is moving, then take it away.
+   *
+   * A touchscreen has no hover to reveal it with, and a bar drawn permanently
+   * under the tiles is furniture — it is not grabbable with a finger, so all it
+   * ever did there was say "there is more this way", which is worth saying only
+   * while the strip is actually going that way.
+   */
+  private flashTimelineScrollbar(strip: HTMLElement): void {
+    strip.classList.add("movi-timeline-scrolling");
+    if (this._timelineScrollbarTimer !== null) {
+      clearTimeout(this._timelineScrollbarTimer);
+    }
+    // Long enough to ride out the gap between a flick and the momentum that
+    // follows it, short enough that a stopped strip is clean again.
+    this._timelineScrollbarTimer = window.setTimeout(() => {
+      this._timelineScrollbarTimer = null;
+      strip.classList.remove("movi-timeline-scrolling");
+    }, 900);
+  }
 
   /**
    * Turn each page arrow on only when there is strip left on that side.
