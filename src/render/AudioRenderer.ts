@@ -141,6 +141,13 @@ export class AudioRenderer {
 
   // Stable audio: AudioContext state monitoring & auto-recovery
   private contextStateHandler: (() => void) | null = null;
+  /**
+   * Latches sharedContextActivated the moment the context reaches "running".
+   * Separate from contextStateHandler on purpose: that one is stable audio's
+   * recovery monitor and is only wired when stable audio is on, while "audio
+   * got unlocked this session" is a fact every path needs — see init().
+   */
+  private contextActivationHandler: (() => void) | null = null;
   private recoveryAttempts: number = 0;
   private static readonly MAX_RECOVERY_ATTEMPTS = 3;
 
@@ -351,6 +358,23 @@ export class AudioRenderer {
       if (this._stableAudio) {
         this.setupContextStateMonitoring();
       }
+
+      // Always watch for the context reaching "running", whatever wakes it.
+      // This latch used to live ONLY inside the stable-audio recovery monitor
+      // above, so with stable audio off (the default) a context that woke on
+      // its own was never noticed: wasAudioContextActivated() stayed false for
+      // the whole session, and every track after the first re-ran the
+      // cold-start autoplay path as if audio had never been unlocked. Gecko
+      // makes that visible — it mints the context "suspended" and flips it to
+      // "running" a beat after resume(), with no gesture involved, and that
+      // transition arrives only as an event.
+      if (!this.contextActivationHandler) {
+        this.contextActivationHandler = () => {
+          if (this.audioContext?.state === "running") sharedContextActivated = true;
+        };
+      }
+      // Same (type, listener) pair — re-adding on a shared context is a no-op.
+      this.audioContext.addEventListener("statechange", this.contextActivationHandler);
 
       Logger.info(
         TAG,
@@ -2280,6 +2304,15 @@ export class AudioRenderer {
     if (this.audioContext && this.contextStateHandler) {
       this.audioContext.removeEventListener("statechange", this.contextStateHandler);
       this.contextStateHandler = null;
+    }
+    // The activation latch comes off too — the context is shared and outlives
+    // this renderer, so a listener left behind would accumulate one per source.
+    if (this.audioContext && this.contextActivationHandler) {
+      this.audioContext.removeEventListener(
+        "statechange",
+        this.contextActivationHandler,
+      );
+      this.contextActivationHandler = null;
     }
 
     // The AudioContext is shared session-wide (see sharedAudioContext) and is

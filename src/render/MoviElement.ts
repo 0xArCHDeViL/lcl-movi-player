@@ -24262,13 +24262,28 @@ export class MoviElement extends HTMLElement {
     if (!this.player.hasAudibleSource()) return;
 
     if (this.player.isAudioBlockedSuspended()) {
-      // Suspended. If the shared context was already unlocked earlier this
-      // session, this is just init()'s gesture-free resume() still in flight
-      // (typical on an auto-advanced track) — it WILL recover on its own, so
-      // wait it out rather than flashing the pill. Poll up to ~40 frames
-      // (~650ms) before giving up; only a genuine gesture-required cold start
-      // (context never activated) falls back immediately.
-      if (this.player.wasAudioContextActivated() && attempt < 40) {
+      // A suspended context is not proof of a block, so never conclude one
+      // from a single reading — wait, and see whether it clears itself.
+      //
+      // Gecko mints an AudioContext in "suspended" and only flips it to
+      // "running" a beat after resume() — measured ~100ms, no gesture involved,
+      // and resume()'s promise resolves BEFORE the flip, so the state read
+      // right after play() still says suspended. Chromium's genuinely blocked
+      // context, by contrast, stays suspended until a gesture arrives. Waiting
+      // is what tells the two apart: a warm-up clears inside the window, a real
+      // block never does. Falling back immediately muted audio that Firefox had
+      // already allowed, and left "Tap to unmute" on screen for the whole video.
+      //
+      // Two budgets, because the two cases carry different certainty:
+      //  - already unlocked this session (typical on an auto-advanced track):
+      //    the gesture-free resume WILL land, so it's worth a long wait.
+      //  - cold start: only long enough to cover a warm-up. A genuine block
+      //    still gets its pill, just a few hundred ms later — and the video is
+      //    silent either way, so nothing is lost in the meantime.
+      const graceFrames = this.player.wasAudioContextActivated()
+        ? 40 // ~650ms
+        : 24; // ~400ms
+      if (attempt < graceFrames) {
         requestAnimationFrame(() => this.maybeFallbackToMutedAutoplay(attempt + 1));
         return;
       }
