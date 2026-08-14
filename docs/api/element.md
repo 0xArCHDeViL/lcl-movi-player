@@ -3012,6 +3012,17 @@ _Note: Shadow parts may not be fully exposed yet. Check component implementation
 
 ### 1. Preload WASM Binary
 
+The default build already carries the engine inside `element.js`, so
+`wasmBinary` is optional there — set it only to hand several players one copy
+instead of letting each decode its own.
+
+The separate file comes from the package: **`movi-player/dist/movi.wasm`**.
+Copy it somewhere your server serves and point the fetch at that path. It is
+what `movi-player/element/slim` streams instead of embedding (see
+[`wasmurl`](#wasmurl)),
+and that build resolves it next to its own bundle without any of this — so
+preloading is a way to share or warm the engine, never a requirement.
+
 ```typescript
 // Fetch WASM once, reuse for all players
 const wasmBinary = await fetch("/movi.wasm").then((r) => r.arrayBuffer());
