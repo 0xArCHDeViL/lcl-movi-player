@@ -3715,10 +3715,18 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.justifyContent = "flex-end";
       this.subtitleOverlay.style.alignItems = "center";
       this.subtitleOverlay.style.overflow = "hidden"; // Prevent overflow outside canvas
-      this.subtitleOverlay.style.padding = "0";
-      const bottomPaddingImg =
-        this.subtitleBottomPadding(ovH);
+      // Worked out BEFORE the shorthand below resets the sides, and that order
+      // is the whole point rather than tidiness. subtitleBottomPadding reads
+      // getComputedStyle, which forces a style flush; sitting between the reset
+      // and the real value, that flush committed padding-bottom: 0 as a
+      // rendered state, and the overlay's `transition: padding-bottom 0.3s`
+      // then had a start value to animate FROM. Every cue that arrived after a
+      // gap rose ~50px off the bottom of the frame over a third of a second.
+      // The text path has always computed its padding first, which is exactly
+      // why text cues never did this.
+      const bottomPaddingImg = this.subtitleBottomPadding(ovH);
       const effectivePaddingImg = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPaddingImg;
+      this.subtitleOverlay.style.padding = "0";
       this.subtitleOverlay.style.paddingBottom = `${effectivePaddingImg}px`;
       this.subtitleOverlay.style.textAlign = "center";
       this.subtitleOverlay.style.boxSizing = "border-box";
