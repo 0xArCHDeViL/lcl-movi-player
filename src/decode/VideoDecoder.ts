@@ -16,6 +16,30 @@ export class MoviVideoDecoder {
   private swDecoder: SoftwareVideoDecoder | null = null;
   private bindings: WasmBindings | null = null;
   private useSoftware: boolean = false;
+  private _configuredCodecString: string = "";
+  /** Set when configure() had to drop `prefer-hardware` to get a supported
+   *  config — WebCodecs is decoding, but on the CPU. See isSoftwareBacked. */
+  /**
+   * WHY this decoder is in software, when it is.
+   *
+   * "The picture is being decoded on the CPU" is one fact with two very
+   * different meanings. A codec WebCodecs can do, that this machine's hardware
+   * refused, is a trade the viewer might want a say in — it costs battery and
+   * can stutter, and there may be a lower rung that does decode. A codec
+   * WebCodecs has never heard of (Motion JPEG in an AVI, say) is not a trade at
+   * all: software is the only way it will ever play, and offering "Try Software
+   * Decoding" for it is offering the thing already happening.
+   */
+  private _softwareReason: "unmapped" | "no-webcodecs" | "hardware-refused" | null =
+    null;
+
+  /** See _softwareReason. Null when the hardware path is in use. */
+  get softwareReason(): "unmapped" | "no-webcodecs" | "hardware-refused" | null {
+    return this._softwareReason;
+  }
+
+  private hardwareUnavailable: boolean = false;
+
 
   private pendingFrames: VideoFrame[] = [];
   private pendingChunks: Array<{
@@ -28,6 +52,11 @@ export class MoviVideoDecoder {
   private onFrame: ((frame: VideoFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private waitingForKeyframe: boolean = false;
+  // When the current keyframe wait began (0 while not waiting). The wait itself
+  // has no bound: it ends when a keyframe arrives, and if packets stop arriving
+  // it never does. Callers that suppress behaviour across the wait (the stall
+  // detector) need to know how long it has been running so they can cap it.
+  private keyframeWaitSince: number = 0;
   // Optional listener: notified whenever the decoder enters or exits its
   // "skip non-keyframes" recovery window. MoviPlayer uses this to flip into
   // buffering state during playback so audio + clock pause instead of running
@@ -41,6 +70,10 @@ export class MoviVideoDecoder {
   private currentTrack: VideoTrack | null = null;
   private lastErrorTime: number = 0;
   private openGopErrorCount: number = 0;
+  // Latched when an in-place reset()+configure() restart wasn't enough for this
+  // stream — its keyframe was rejected afterwards — so later flushes go straight
+  // to a full close()+new decoder. Per source; cleared by configure().
+  private _hardRecreateNeeded: boolean = false;
   private hardwareRetryCount: number = 0;
   private lastHardwareRetryTime: number = 0;
   private isResurrecting: boolean = false;
@@ -106,6 +139,7 @@ export class MoviVideoDecoder {
     if (waiting) this.chunksSinceKeyframeWait = 0;
     if (this.waitingForKeyframe === waiting) return;
     this.waitingForKeyframe = waiting;
+    this.keyframeWaitSince = waiting ? performance.now() : 0;
     if (this.onKeyframeWaitChange) {
       try {
         this.onKeyframeWaitChange(waiting);
@@ -134,6 +168,9 @@ export class MoviVideoDecoder {
     this.openGopErrorCount = 0;
     this.hardwareRetryCount = 0;
     this.lastHardwareRetryTime = 0;
+    // A new source/rendition gets a fresh verdict on whether the cheap in-place
+    // re-arm is enough for it.
+    this._hardRecreateNeeded = false;
     if (this.swDecoder) {
       this.swDecoder.close();
       this.swDecoder = null;
@@ -156,6 +193,7 @@ export class MoviVideoDecoder {
         "WebCodecs VideoDecoder not supported — falling back to software decoder",
       );
       this.useSoftware = true;
+      this._softwareReason = "no-webcodecs";
       return this.initSoftwareDecoder();
     }
 
@@ -177,12 +215,29 @@ export class MoviVideoDecoder {
       );
     }
 
+    // Re-decided per configure: a different rendition (or codec) may well have
+    // a hardware path where this one didn't.
+    this.hardwareUnavailable = false;
+    this._softwareReason = null;
+
     // const codecString = this.mapCodecToWebCodecs(track.codec, track.width, track.height, track.profile, track.level);
     if (!codecString) {
-      Logger.error(TAG, `Unsupported codec: ${track.codec}`);
-      return false;
+      // WebCodecs has no registered codec string for several FFmpeg-supported
+      // legacy codecs (notably Motion JPEG in AVI). Falling back here keeps those
+      // files playable instead of silently leaving the renderer black.
+      Logger.info(
+        TAG,
+        `No WebCodecs codec string for ${track.codec}; using software decoder.`,
+      );
+      this._softwareReason = "unmapped";
+      return this.initSoftwareDecoder();
     }
 
+
+    // Remembered so callers can ask "would THIS resolution decode in hardware?"
+    // without re-deriving the string — the ABR uses it to screen a rung before
+    // climbing into it (see MoviPlayer.rungDecodableInHardware).
+    this._configuredCodecString = codecString;
 
     // Build config object
     const config: VideoDecoderConfig = {
@@ -260,6 +315,13 @@ export class MoviVideoDecoder {
           Logger.info(TAG, `Hardware decode unavailable for ${config.codec}; using no-preference.`);
           delete config.hardwareAcceleration;
           support = supportNoHw;
+          // WebCodecs accepted it, but only by dropping to whatever the browser
+          // has — which here is the CPU. The decode is software; only the API
+          // in front of it is not. Recorded so the ABR's ceiling can see it:
+          // without this, an AV1 1440p rung with no hardware path sat at
+          // "Backpressure during sync: videoDecoder=61, videoBuffered=0" with
+          // the spinner up and no downshift, because isSoftware was false.
+          this.hardwareUnavailable = true;
         }
       }
 
@@ -455,6 +517,10 @@ export class MoviVideoDecoder {
 
     Logger.info(TAG, "Initializing software decoder fallback");
     this.useSoftware = true;
+    // Anything that reached here without saying why is the hardware path
+    // failing — a rejected config, a decode error, a resurrection that did not
+    // take. Those ARE a trade the viewer can be asked about.
+    this._softwareReason ??= "hardware-refused";
 
     // Close HW
     if (this.decoder) {
@@ -536,6 +602,40 @@ export class MoviVideoDecoder {
   /**
    * Recreate the decoder after a fatal error
    */
+  /**
+   * Re-arm the decoder for a random-access restart WITHOUT tearing the instance
+   * down. reset() drops the queue, the pending callbacks and the configuration,
+   * so the configure() that follows is a genuine fresh configuration — the same
+   * state a brand-new decoder is in, which is what makes an open-GOP CRA
+   * acceptable as `key` again. What it does NOT do is destroy and re-acquire the
+   * platform decoder, which is the expensive, visibly glitchy half of a full
+   * recreate (and, per the Firefox bug below, the crash-prone one).
+   *
+   * Returns false if the decoder can't be re-armed in place, in which case the
+   * caller falls back to the full recreate.
+   *
+   * Refs: https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder/reset
+   *       https://bugzilla.mozilla.org/show_bug.cgi?id=1976929
+   */
+  private softRecreateDecoder(): boolean {
+    if (this.useSoftware || !this.decoder || !this.lastConfig) return false;
+    if (this.decoder.state === "closed") return false;
+    try {
+      this.decoder.reset();
+      this.decoder.configure(this.lastConfig);
+      this.isConfigured = true;
+      // Same post-restart contract as the full recreate: no reference frames are
+      // held, so the stream must resume on a keyframe, and an open-GOP CRA must
+      // go in as `key` rather than being downgraded to `delta`.
+      this.justFlushed = true;
+      this.setWaitingForKeyframe(true);
+      return true;
+    } catch (error) {
+      Logger.warn(TAG, "In-place decoder re-arm failed, falling back", error);
+      return false;
+    }
+  }
+
   private recreateDecoder(): boolean {
     if (this.useSoftware) return false;
     if (!this.lastConfig) return false;
@@ -696,7 +796,23 @@ export class MoviVideoDecoder {
     if (this.useSoftware && this.swDecoder) {
       // RESURRECTION LOGIC: Periodically try to switch back to hardware only on a TRUE IDR keyframe
       // DISABLED if software is explicitly forced or content needs software (4:2:2/4:4:4)
-      if (keyframe && !this.forceSoftware && !this.requiresSoftware && this.shouldRetryHardware(data)) {
+      // …and never where there is no hardware path to return to. A browser
+      // without WebCodecs cannot resurrect anything, but the attempt still
+      // flipped `useSoftware` to false — so isSoftware() reported hardware,
+      // the ABR believed it, and climbed straight through the software
+      // ceiling: "ABR upshift 720p → 1080p" on a Firefox with no VideoDecoder,
+      // then a stall and "software decode can't hold 1080p — correcting to
+      // 480p". The ladder cap can only hold if the decoder tells the truth.
+      const webCodecsAvailable =
+        typeof (globalThis as { VideoDecoder?: unknown }).VideoDecoder !==
+        "undefined";
+      if (
+        keyframe &&
+        webCodecsAvailable &&
+        !this.forceSoftware &&
+        !this.requiresSoftware &&
+        this.shouldRetryHardware(data)
+      ) {
         Logger.info(
           TAG,
           `Found a sync frame! Attempting hardware resurrection (Attempt ${this.hardwareRetryCount + 1})...`,
@@ -957,6 +1073,12 @@ export class MoviVideoDecoder {
         TAG,
         `Decoding warning: Frame was marked as keyframe but decoder rejected it (Open GOP?). Timestamp: ${this.lastChunkInfo?.timestamp}. Count (OpenGOP): ${this.openGopErrorCount}`,
       );
+      // This stream needs the heavier restart: an in-place reset()+configure()
+      // left the platform decoder unwilling to take its random-access point.
+      // Latch it so every later flush skips straight to the full recreate
+      // instead of paying for a re-arm that we now know won't be accepted.
+      // Cleared when a new configuration arrives (new source or rendition).
+      this._hardRecreateNeeded = true;
 
       // Post-flush keyframe rejection: some HW decoders refuse the first keyframe
       // after a seek-flush for certain streams (10-bit BT.2020/PQ HDR HEVC has
@@ -1313,6 +1435,15 @@ export class MoviVideoDecoder {
     const codec = this.lastConfig?.codec ?? "";
     const isHevc = codec.startsWith("hvc1.") || codec.startsWith("hev1.");
     if (isHevc && !this.forceSoftware && !this.useSoftware) {
+      // Prefer re-arming in place. A full recreate destroys and re-acquires the
+      // platform decoder on EVERY seek and rate change, which is the visible
+      // hitch; reset()+configure() reaches the same fresh-configuration state
+      // that makes a CRA acceptable as `key`, without that cost. Streams that
+      // prove the in-place path isn't enough (a keyframe rejection after it)
+      // latch _hardRecreateNeeded and get the full recreate from then on.
+      if (!this._hardRecreateNeeded && this.softRecreateDecoder()) {
+        return;
+      }
       if (this.recreateDecoder()) {
         return; // fresh decoder is configured and waiting for a keyframe
       }
@@ -1320,11 +1451,23 @@ export class MoviVideoDecoder {
     }
 
     try {
-      // Timeout flush — WebCodecs flush() can hang on slow devices
+      // Timeout flush — WebCodecs flush() can hang on slow devices.
+      //
+      // Scaled by what it actually has to do. flush() drains the queue and
+      // emits every frame in it, so a decoder holding 60 queued chunks needs
+      // longer than one holding two — and a flat second called the normal
+      // drain a hang on every auto quality switch in Brave, resetting and
+      // reconfiguring a decoder that was working through its backlog exactly
+      // as asked. The ceiling still catches a genuine hang.
+      const pending = this.decoder.decodeQueueSize || 0;
+      const flushBudgetMs = Math.min(5000, Math.max(1000, pending * 60));
       await Promise.race([
         this.decoder.flush(),
         new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error("flush timeout")), 1000)
+          setTimeout(
+            () => reject(new Error(`flush timeout after ${flushBudgetMs}ms with ${pending} queued`)),
+            flushBudgetMs,
+          )
         ),
       ]);
     } catch (error) {
@@ -1363,6 +1506,17 @@ export class MoviVideoDecoder {
     }
     this.pendingFrames = [];
     this.pendingChunks = [];
+  }
+
+  /**
+   * The WebCodecs codec string the current track was configured with, e.g.
+   * "av01.0.13M.10". Empty until configure() has run. Callers use it to ask
+   * isConfigSupported() about a DIFFERENT resolution of the same stream —
+   * every rung of a ladder is the same codec, so this is what makes a
+   * before-the-fact capability check possible.
+   */
+  get configuredCodec(): string {
+    return this._configuredCodecString;
   }
 
   /**
@@ -1488,6 +1642,17 @@ export class MoviVideoDecoder {
     return this.useSoftware;
   }
 
+  /**
+   * True when the pixels are coming off the CPU — the WASM decoder OR a
+   * WebCodecs decoder configured with no hardware path available. The ABR's
+   * resolution ceiling asks this rather than isSoftware: "WebCodecs succeeded"
+   * is not the same as "hardware decoded", and treating them as the same left
+   * a 1440p AV1 rung stuck with a full decode queue and no downshift.
+   */
+  get isSoftwareBacked(): boolean {
+    return this.useSoftware || this.hardwareUnavailable;
+  }
+
   get isWaitingForKeyframe(): boolean {
     return this.waitingForKeyframe;
   }
@@ -1503,6 +1668,20 @@ export class MoviVideoDecoder {
     if (this.waitingForKeyframe) return true;
     if (this.lastRecreateTime === 0) return false;
     return performance.now() - this.lastRecreateTime < graceMs;
+  }
+
+  /**
+   * How long the decoder has been waiting for its keyframe, 0 when it isn't.
+   *
+   * A wait normally ends within a GOP. It ends never when the packets stop —
+   * and since isRecentlyRecovering() is true for the whole of it, anything
+   * gated on that is switched off for as long as the wait lasts. This is what
+   * lets a caller put a ceiling on that.
+   */
+  keyframeWaitMs(): number {
+    return this.keyframeWaitSince === 0
+      ? 0
+      : performance.now() - this.keyframeWaitSince;
   }
 
   /**

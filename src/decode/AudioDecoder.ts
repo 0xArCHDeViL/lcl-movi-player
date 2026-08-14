@@ -22,6 +22,14 @@ export class MoviAudioDecoder {
   private onData: ((data: AudioData) => void) | null = null;
   private onPCM: ((frame: PCMFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
+  private onBroken: (() => void) | null = null;
+  private currentExtradata: Uint8Array | undefined = undefined;
+  // How many PCM frames the CURRENT software decoder has produced, and how many
+  // times we've reverted it. A fallback that decodes nothing is worse than the
+  // hardware decoder it replaced — see the revert in initSoftwareDecoder.
+  private swFramesProduced = 0;
+  private swRevertAttempts = 0;
+  private static readonly MAX_SW_REVERTS = 2;
   private currentTrack: AudioTrack | null = null;
   private hasTriedSoftwareFallback: boolean = false; // Track if we've already tried software fallback
   private hasDescription: boolean = false; // Whether decoder was configured with description (AudioSpecificConfig)
@@ -60,8 +68,12 @@ export class MoviAudioDecoder {
    */
   async configure(track: AudioTrack, extradata?: Uint8Array): Promise<boolean> {
     this.currentTrack = track;
+    // Kept so a failed software fallback can rebuild the hardware decoder it
+    // replaced (see the revert in initSoftwareDecoder's broken handler).
+    this.currentExtradata = extradata;
     this.useSoftware = false;
     this.hasTriedSoftwareFallback = false; // Reset fallback flag on new configuration
+    this.swFramesProduced = 0;
 
     if (this.swDecoder) {
       this.swDecoder.close();
@@ -192,23 +204,76 @@ export class MoviAudioDecoder {
     }
   }
 
-  private needsSoftwareDecoding(codec: string): boolean {
-    const transcodingCodecs = [
-      "eac3",
-      "ac3",
-      "dts",
-      "dca",
-      "truehd",
-      "mlp",
-      "opus",
-      // FLAC's WebCodecs path reliably throws "EncodingError: Decoding error"
-      // (the FLAC STREAMINFO description it wants is finicky / browser-specific).
-      // The error→software fallback recovers in some browsers but not others, so
-      // decode FLAC in software from the start — like opus. (FFmpeg WASM handles
-      // it fine; verified producing samples.)
-      "flac",
-    ];
-    return transcodingCodecs.includes(codec.toLowerCase());
+  /**
+   * Every codec, in software. FFmpeg WASM decodes all of them; WebCodecs is no
+   * longer asked for any.
+   *
+   * It used to be a list — eac3, ac3, dts, dca, truehd, mlp, opus, flac — each
+   * added after its own WebCodecs failure: packet gaps it choked on, a FLAC
+   * description it would not accept, channel layouts it dropped. What that list
+   * really recorded is that the browser's audio decoders disagree with each
+   * other and with the demuxer feeding them, and that every disagreement was
+   * found by a user hearing it rather than by a test.
+   *
+   * The split had a second cost that only showed up once audio gained a
+   * bitrate ladder: with AAC native and opus in WASM, choosing a rung meant
+   * choosing a decoder, so a cheaper stream could cost more CPU than the
+   * expensive one and the ladder could not simply follow the link. One path
+   * makes bitrate the only variable again.
+   *
+   * The price is real and worth saying: AAC now decodes in WASM rather than in
+   * the browser's own code, which is more CPU per packet on exactly the phones
+   * where audio is already tight. Multi-channel and the error path came here
+   * anyway, so this is the same code that was already carrying the hard cases.
+   */
+  private needsSoftwareDecoding(_codec: string): boolean {
+    return true;
+  }
+
+  /**
+   * The software fallback gave up: 50 packets in a row rejected.
+   *
+   * If it never decoded a single frame, the fallback itself is the problem —
+   * the hardware decoder had been running fine until one EncodingError, and
+   * swapping it for a decoder that rejects EVERYTHING trades a hiccup for
+   * permanent silence (seen in the wild: `sendPacket failed: -1094995529`
+   * repeating for the rest of the video, with a manual seek only resetting the
+   * counter so it could fail another 50 times). So put the hardware decoder
+   * back and let the owner re-align the source.
+   *
+   * If it HAD been producing audio, the stream is just out of step — leave it
+   * in place and let the owner's re-align handle it.
+   */
+  private handleSoftwareBroken(): void {
+    const producedNothing = this.swFramesProduced === 0;
+    if (
+      producedNothing &&
+      this.currentTrack &&
+      this.swRevertAttempts < MoviAudioDecoder.MAX_SW_REVERTS
+    ) {
+      this.swRevertAttempts++;
+      Logger.warn(
+        TAG,
+        `Software fallback decoded nothing — reverting to the hardware decoder (attempt ${this.swRevertAttempts})`,
+      );
+      const track = this.currentTrack;
+      const extradata = this.currentExtradata;
+      if (this.swDecoder) {
+        this.swDecoder.close();
+        this.swDecoder = null;
+      }
+      this.useSoftware = false;
+      // configure() resets hasTriedSoftwareFallback, so a genuine hardware
+      // failure can still fall back again — just not into the same dead end
+      // more than MAX_SW_REVERTS times.
+      void this.configure(track, extradata).then((ok) => {
+        if (!ok) {
+          Logger.error(TAG, "Hardware re-configure after revert failed");
+        }
+      });
+    }
+    // Either way the owner should re-align the audio source at the playhead.
+    this.onBroken?.();
   }
 
   private async initSoftwareDecoder(): Promise<boolean> {
@@ -237,6 +302,7 @@ export class MoviAudioDecoder {
     // the renderer is still wired for multi-channel output.
     this.swDecoder.setDownmix(this._downmix);
     this.swDecoder.setOnData((frame) => {
+      this.swFramesProduced++;
       if (this.onPCM) this.onPCM(frame);
       else this.pendingPCM.push(frame);
     });
@@ -244,6 +310,7 @@ export class MoviAudioDecoder {
       Logger.error(TAG, "Software decoder error", e);
       if (this.onError) this.onError(e);
     });
+    this.swDecoder.setOnBroken(() => this.handleSoftwareBroken());
 
     const success = await this.swDecoder.configure(this.currentTrack);
     if (success) {
@@ -461,6 +528,16 @@ export class MoviAudioDecoder {
    */
   setOnError(callback: (error: Error) => void): void {
     this.onError = callback;
+  }
+
+  /**
+   * Fires when the software decoder's failure circuit-breaker trips — every
+   * packet is being rejected and audio has gone silent. The owner is expected
+   * to re-align the audio source (seek it back to the playhead) and flush,
+   * which clears the breaker; a manual seek did exactly that by accident.
+   */
+  setOnBroken(callback: () => void): void {
+    this.onBroken = callback;
   }
 
   /**
