@@ -16,7 +16,7 @@ If you are an AI assistant: read this top to bottom once, then refer back by sec
 
 Shipped as a web component (`<movi-player>`) plus three lower-level entry points (`/player`, `/demuxer`) for programmatic use. License: Apache-2.0.
 
-The same engine ships in three wrappers built on the web component: an Electron **desktop app** (`desktop/`, Win/Mac/Linux — local files, URLs, native always-on-top PiP, playlist), a **Chrome extension** (`chrome-extension/`), and a **VS Code extension** (`vscode-extension/`).
+The same engine ships in four wrappers built on the web component: an Electron **desktop app** (`desktop/`, Win/Mac/Linux — local files, URLs, native always-on-top PiP, playlist), a **Chrome extension** (`chrome-extension/`), a **Firefox add-on** (`firefox-extension/` — the Chrome extension's files copied in by its `build.sh`; only `manifest.json` is Gecko-specific, so edit shared UI in `chrome-extension/`), and a **VS Code extension** (`vscode-extension/`).
 
 ---
 

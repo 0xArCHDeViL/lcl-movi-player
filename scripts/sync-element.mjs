@@ -2,6 +2,7 @@
  * Fans the freshly built player bundle out to every target that ships its own
  * copy:
  *   dist/element.js → chrome-extension/dist/element.js
+ *                   → firefox-extension/dist/element.js
  *                   → vscode-extension/webview/dist/element.js
  *                   → desktop/renderer/vendor/element.js
  *
@@ -25,6 +26,7 @@ const src = resolve(repoRoot, "dist", "element.js");
 
 const targets = [
   ["chrome-extension", "chrome-extension/dist/element.js"],
+  ["firefox-extension", "firefox-extension/dist/element.js"],
   ["vscode-extension", "vscode-extension/webview/dist/element.js"],
   ["desktop", "desktop/renderer/vendor/element.js"],
 ];
