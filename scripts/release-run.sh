@@ -36,6 +36,13 @@ done
 VERSION="$(node -p "require('./package.json').version")"
 TAG="v${VERSION}"
 
+# release.mjs --package writes each artefact next to the thing it packages, not
+# into the repo root. Spelled out rather than globbed: an unmatched glob is left
+# as a literal by the shell and gets handed to the tool as a filename.
+VSIX="vscode-extension/movi-player-vscode-${VERSION}.vsix"
+CHROME_ZIP="chrome-extension/movi-player-${VERSION}.zip"
+FF_ZIP="firefox-extension/movi-player-firefox-${VERSION}.zip"
+
 say()  { printf '\n%s\n' "${B}${C}▸ $*${N}"; }
 info() { printf '  %s\n' "$*"; }
 warn() { printf '  %s\n' "${Y}! $*${N}"; }
@@ -72,8 +79,18 @@ say "0 · Preflight"
 [ -n "$(git status --porcelain)" ] && die "working tree is dirty — commit or stash first"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [ "$BRANCH" = "develop" ] || die "on '$BRANCH' — releases are cut from develop"
-git rev-parse "$TAG" >/dev/null 2>&1 && die "$TAG already exists — bump the version first"
-info "branch develop · tree clean · $TAG is free"
+
+# The tag is checked in whichever direction this run is going. Starting at or
+# before phase 5, it must NOT exist yet — one that does means the version was
+# never bumped. Resuming past 5, it must: phase 5 created it, and its absence
+# means the run is further back than it looks.
+if [ "$FROM" -le 5 ]; then
+  git rev-parse "$TAG" >/dev/null 2>&1 && die "$TAG already exists — bump the version, or resume with --from/--only past phase 5"
+  info "branch develop · tree clean · $TAG is free"
+else
+  git rev-parse "$TAG" >/dev/null 2>&1 || warn "resuming past phase 5 but $TAG does not exist — was it tagged?"
+  info "branch develop · tree clean · resuming at phase $FROM"
+fi
 
 # Every package must already carry this version. Catches a half-finished bump.
 for f in package.json desktop/package.json vscode-extension/package.json; do
@@ -90,7 +107,12 @@ grep -q "^## \[${VERSION}\]" CHANGELOG.md || die "CHANGELOG.md has no ## [$VERSI
 grep -q "^## \[${VERSION}\]" docs/changelog.md || die "docs/changelog.md has no ## [$VERSION] section"
 info "both changelogs stamped"
 
-run npx tsc --noEmit
+# Only worth the wait when something is still going to be built from source.
+if [ "$FROM" -le 1 ]; then
+  run npx tsc --noEmit
+else
+  info "typecheck skipped — nothing is rebuilt from phase $FROM on"
+fi
 
 # ── 1 · Build ─────────────────────────────────────────────────────────────────
 if phase 1; then
@@ -134,7 +156,12 @@ fi
 if phase 4; then
   say "4 · Package .vsix + chrome/firefox zips"
   run npm run release -- "$VERSION" --package
-  [ "$DRY" = 0 ] && ls -la ./*.vsix ./*.zip 2>/dev/null || true
+  if [ "$DRY" = 0 ]; then
+    for f in "$VSIX" "$CHROME_ZIP" "$FF_ZIP"; do
+      [ -f "$f" ] || die "expected $f — packaging did not produce it"
+      printf '  %s %s (%s)\n' "${G}✓${N}" "$f" "$(du -h "$f" | cut -f1)"
+    done
+  fi
 fi
 
 # ── 5 · Git: push develop, merge to main, tag ─────────────────────────────────
@@ -185,18 +212,38 @@ fi
 # ── 7 · Publish ───────────────────────────────────────────────────────────────
 if phase 7; then
   say "7 · Publish"
-  confirm "npm publish (needs npm login + 2FA)?"
-  run npm publish
+  # A version can only go up to npm once, and resuming this phase to finish a
+  # later step should not stop dead on a prompt for something already done.
+  if [ "$DRY" = 0 ] && npm view "movi-player@${VERSION}" version >/dev/null 2>&1; then
+    info "${G}✓${N} movi-player@${VERSION} is already on npm — skipping publish"
+  else
+    confirm "npm publish (needs npm login + 2FA)?"
+    run npm publish
+  fi
 
+  # From inside vscode-extension: that is where vsce and the publisher identity
+  # live. --packagePath takes the already-built .vsix so this publishes exactly
+  # what phase 4 produced rather than repackaging from the working tree.
+  #
+  # vsce authenticates with an Azure DevOps PAT, which expires within a year —
+  # so roughly every other release meets "You're using an expired Personal
+  # Access Token". A new one comes from dev.azure.com → User settings →
+  # Personal access tokens, scoped to Marketplace ▸ Manage and to ALL
+  # accessible organizations (single-org tokens are rejected). Then either
+  # `npx vsce login mrujjwalg` once, or pass it for the one command:
+  #   VSCE_PAT=<token> npx vsce publish --packagePath <vsix>
+  [ "$DRY" = 0 ] && [ ! -f "$VSIX" ] && die "no $VSIX — run phase 4 first"
   confirm "publish the VS Code extension with vsce?"
-  run npx --prefix vscode-extension vsce publish --packagePath ./*.vsix
+  run bash -c "cd vscode-extension && npx vsce publish --packagePath '$(basename "$VSIX")'"
 fi
 
 # ── 8 · What is left for a human ──────────────────────────────────────────────
 say "8 · By hand — no CLI does these"
 cat <<EOF
-  · Chrome Web Store  — upload the chrome zip   https://chrome.google.com/webstore/devconsole
-  · Firefox Add-ons   — submit the firefox zip  https://addons.mozilla.org/developers/
+  · Chrome Web Store  — upload $CHROME_ZIP
+                        https://chrome.google.com/webstore/devconsole
+  · Firefox Add-ons   — submit $FF_ZIP
+                        https://addons.mozilla.org/developers/
   · GitHub release    — attach the artefacts to $TAG, paste the changelog section
   · Open issues/PRs   — reply to anything this release resolves. Draft each one,
                         show it, and post only after that reply is approved.

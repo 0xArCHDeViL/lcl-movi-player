@@ -25,13 +25,15 @@ if [ -z "$SKIP_BUILD" ]; then
   cd "$ROOT"
   npm run build:ts
 else
-  echo "Reusing existing dist/element.js (SKIP_BUILD set)"
+  echo "Reusing existing dist/element.slim.js (SKIP_BUILD set)"
 fi
 
-if [ ! -f "$ROOT/dist/element.js" ]; then
-  echo "✗ dist/element.js not found — run 'npm run build:ts' first" >&2
-  exit 1
-fi
+for f in element.slim.js movi.wasm; do
+  if [ ! -f "$ROOT/dist/$f" ]; then
+    echo "✗ dist/$f not found — run 'npm run build:ts' first" >&2
+    exit 1
+  fi
+done
 
 echo "Copying shared files from chrome-extension/..."
 rm -rf "$DIR/dist" "$DIR/icons"
@@ -41,7 +43,9 @@ for f in $SHARED; do
   cp "$SRC/$f" "$DIR/$f"
 done
 cp "$SRC"/icons/*.png "$SRC"/icons/*.svg "$DIR/icons/"
-cp "$ROOT/dist/element.js" "$DIR/dist/"
+# The slim bundle plus its engine — see the note in chrome-extension/build.sh.
+# AMO refuses a JS file over 5MB; the all-in-one build is 11.8MB.
+cp "$ROOT/dist/element.slim.js" "$ROOT/dist/movi.wasm" "$DIR/dist/"
 
 echo "Done! Add-on size: $(du -sh "$DIR/dist" | cut -f1)"
 echo "Load add-on from: $DIR"

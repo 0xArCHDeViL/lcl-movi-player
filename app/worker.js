@@ -2724,14 +2724,16 @@ async function handleCommentsList(env, url) {
   const hasCursor = Number.isFinite(before) && before > 0;
 
   try {
+    // Top level only — a reply belongs to its parent's card, not to the page,
+    // and letting one occupy a page slot would push a real comment off it.
     const rows = hasCursor
       ? await env.COMMENTS_DB.prepare(
           "SELECT id, name, body, rating, created_at FROM comments " +
-            "WHERE hidden = 0 AND id < ? ORDER BY id DESC LIMIT ?",
+            "WHERE hidden = 0 AND parent_id IS NULL AND id < ? ORDER BY id DESC LIMIT ?",
         ).bind(before, COMMENT_PAGE_SIZE + 1).all()
       : await env.COMMENTS_DB.prepare(
           "SELECT id, name, body, rating, created_at FROM comments " +
-            "WHERE hidden = 0 ORDER BY id DESC LIMIT ?",
+            "WHERE hidden = 0 AND parent_id IS NULL ORDER BY id DESC LIMIT ?",
         ).bind(COMMENT_PAGE_SIZE + 1).all();
 
     const all = rows.results || [];
@@ -2739,9 +2741,31 @@ async function handleCommentsList(env, url) {
     const hasMore = all.length > COMMENT_PAGE_SIZE;
     const page = hasMore ? all.slice(0, COMMENT_PAGE_SIZE) : all;
 
+    // One query for the whole page's replies rather than one per card.
+    const repliesBy = new Map();
+    if (page.length) {
+      const marks = page.map(() => "?").join(",");
+      const rep = await env.COMMENTS_DB.prepare(
+        "SELECT id, name, body, created_at, parent_id, author_role FROM comments " +
+          `WHERE hidden = 0 AND parent_id IN (${marks}) ORDER BY id ASC`,
+      ).bind(...page.map((r) => r.id)).all();
+      for (const r of rep.results || []) {
+        if (!repliesBy.has(r.parent_id)) repliesBy.set(r.parent_id, []);
+        repliesBy.get(r.parent_id).push({
+          id: r.id,
+          name: r.name,
+          body: r.body,
+          createdAt: r.created_at,
+          role: r.author_role || "visitor",
+        });
+      }
+    }
+
+    // Replies are answers, not feedback: counting them would inflate the
+    // comment count and they carry no rating to average anyway.
     const totals = await env.COMMENTS_DB.prepare(
       "SELECT COUNT(*) AS total, AVG(rating) AS avgRating, " +
-        "COUNT(rating) AS rated FROM comments WHERE hidden = 0",
+        "COUNT(rating) AS rated FROM comments WHERE hidden = 0 AND parent_id IS NULL",
     ).first();
 
     return new Response(
@@ -2752,6 +2776,7 @@ async function handleCommentsList(env, url) {
           body: r.body,
           rating: r.rating,
           createdAt: r.created_at,
+          replies: repliesBy.get(r.id) || [],
         })),
         hasMore,
         total: totals?.total ?? page.length,
@@ -2807,6 +2832,18 @@ async function handleCommentPost(request, env) {
     return jsonResponse({ error: "Please write a comment first." }, 400);
   }
 
+  // A reply is an ordinary comment hung off another one, and it comes through
+  // this handler rather than a route of its own precisely so it meets the same
+  // bot gate, rate limit and abuse screen above. Anyone may write one.
+  let parentId = null;
+  if (payload?.parentId != null && payload.parentId !== "") {
+    const n = Number(payload.parentId);
+    if (!Number.isInteger(n) || n <= 0) {
+      return jsonResponse({ error: "Invalid parentId" }, 400);
+    }
+    parentId = n;
+  }
+
   let rating = null;
   if (payload?.rating != null && payload.rating !== "") {
     const n = Number(payload.rating);
@@ -2815,6 +2852,9 @@ async function handleCommentPost(request, env) {
     }
     rating = n;
   }
+  // A rating is feedback on the player, not on the comment being answered —
+  // counting one from a reply would move the average for the wrong reason.
+  if (parentId) rating = null;
 
   // Fail closed: with no blocklist there is no abuse gate, so refuse the
   // comment rather than publish it unscreened. Costs nothing in practice —
@@ -2854,14 +2894,34 @@ async function handleCommentPost(request, env) {
       return jsonResponse({ error: `Please wait ${wait}s before posting again.` }, 429);
     }
 
+    // The parent has to exist, be visible, and itself be top-level. Without
+    // the last check a reply could hang off another reply, and the wall only
+    // ever draws one level deep — the thread would simply not appear.
+    if (parentId) {
+      const parent = await env.COMMENTS_DB.prepare(
+        "SELECT id FROM comments WHERE id = ? AND hidden = 0 AND parent_id IS NULL",
+      ).bind(parentId).first();
+      if (!parent) {
+        return jsonResponse({ error: "That comment is no longer available." }, 404);
+      }
+    }
+
     const inserted = await env.COMMENTS_DB.prepare(
-      "INSERT INTO comments (name, body, rating, ip_hash, created_at) " +
-        "VALUES (?, ?, ?, ?, ?) RETURNING id",
-    ).bind(name, body, rating, ipHash, now).first();
+      "INSERT INTO comments (name, body, rating, ip_hash, created_at, parent_id) " +
+        "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+    ).bind(name, body, rating, ipHash, now, parentId).first();
 
     return jsonResponse({
       ok: true,
-      comment: { id: inserted?.id, name, body, rating, createdAt: now },
+      comment: {
+        id: inserted?.id,
+        name,
+        body,
+        rating,
+        createdAt: now,
+        parentId,
+        role: "visitor",
+      },
     }, 201);
   } catch (err) {
     console.error("Comment insert failed", err);
