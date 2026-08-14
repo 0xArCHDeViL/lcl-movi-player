@@ -30007,32 +30007,62 @@ export class MoviElement extends HTMLElement {
   }
 
   /** The audio tracks, in AudioTrackList's shape. `enabled` reads the player's
-   *  current selection; writing it selects that language. */
+   *  current selection; writing it switches to that track. */
   get audioTracks() {
     // Declared <source kind="audio"> children when there are any; otherwise
     // whatever the container itself carries, so an ordinary muxed file reports
     // its one track rather than none.
     const declared = this._audioTracks || [];
-    const active = declared.length
-      ? declared
+    const rows = declared.length
+      ? declared.map((t) => ({
+          lang: t.lang,
+          label: t.label,
+          trackId: null as number | null,
+        }))
       : (this.player?.getAudioTracks?.() ?? []).map((t, i) => ({
-          src: "",
-          lang: (t as { language?: string }).language || "",
-          label: (t as { label?: string }).label || `Track ${i + 1}`,
+          lang: t.language || "",
+          label: t.label || `Track ${i + 1}`,
+          // The container's own id. It is what selectAudioTrack takes, and the
+          // only key that holds for a file whose tracks carry no language at
+          // all — a Matroska mux that left the field empty, or two tracks in
+          // the same language where one is a commentary.
+          trackId: t.id ?? i,
         }));
+    // What is playing RIGHT NOW. A muxed file answers from the track manager, a
+    // declared list from the language the player switched to. This used to read
+    // the rebuild-carry field, which is null outside a rebuild — so every muxed
+    // file reported its FIRST track as the enabled one no matter what the
+    // viewer had picked, and anything asking this element which audio was on
+    // got the wrong answer.
+    const activeId = declared.length
+      ? null
+      : (this.player?.trackManager?.getActiveAudioTrack?.()?.id ?? null);
+    const activeLang = declared.length
+      ? ((this.player?.getAudioLangs?.() ?? []).find((t) => t.active)?.lang ??
+        null)
+      : null;
     const self = this;
     return moviTrackList(
-      active.map((t, i) => ({
+      rows.map((t, i) => ({
         id: String(i),
         kind: "main",
         label: t.label || t.lang || `Track ${i + 1}`,
         language: t.lang || "",
+        /** The container's id for a muxed track; null for a declared one. */
+        trackId: t.trackId,
         get enabled() {
-          const current = self._carryAudioLang;
-          return current ? current === t.lang : i === 0;
+          if (t.trackId !== null) {
+            return activeId !== null ? t.trackId === activeId : i === 0;
+          }
+          return activeLang ? activeLang === t.lang : i === 0;
         },
         set enabled(on: boolean) {
-          if (on) self.selectAudioLang(t.lang || "");
+          if (!on) return;
+          // By id for a muxed track: selectAudioLang looks its argument up in
+          // the DECLARED list, which a muxed file has nothing in, so routing
+          // one through it was a warning and no switch.
+          if (t.trackId !== null) self.pickAudioTrack(t.trackId);
+          else self.selectAudioLang(t.lang || "");
         },
       })),
     );
