@@ -1,126 +1,27 @@
 {
-  "name": "movi-player",
+  "name": "@lcl-sync/movi-player",
   "version": "0.4.0",
-  "description": "Play MKV, HEVC, AV1, HDR videos in the browser. WebCodecs + FFmpeg WASM player with encrypted playback, chapters, subtitles, multi-audio tracks. No server transcoding needed.",
+  "description": "LCL//SYNC-maintained MoviPlayer fork: a full WebCodecs player for private opaque-relay playback.",
   "type": "module",
-  "main": "dist/index.js",
-  "module": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/element.slim.js",
+  "module": "dist/element.slim.js",
+  "types": "dist/element.d.ts",
   "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
-    },
-    "./demuxer": {
-      "import": "./dist/demuxer.js",
-      "require": "./dist/demuxer.cjs",
-      "types": "./dist/demuxer.d.ts"
-    },
-    "./player": {
-      "import": "./dist/player.js",
-      "require": "./dist/player.cjs",
-      "types": "./dist/player.d.ts"
-    },
-    "./element": {
-      "import": "./dist/element.js",
-      "require": "./dist/element.cjs",
-      "types": "./dist/element.d.ts"
-    },
+    ".": "./dist/element.slim.js",
+    "./element": "./dist/element.slim.js",
     "./element/slim": {
       "import": "./dist/element.slim.js",
-      "require": "./dist/element.slim.cjs",
       "types": "./dist/element.d.ts"
     },
     "./movi.wasm": "./dist/movi.wasm",
-    "./react": {
-      "types": "./dist/react/index.tsx",
-      "import": "./dist/react/index.js",
-      "default": "./dist/react/index.js"
-    },
-    "./react/slim": {
-      "types": "./dist/react/slim.tsx",
-      "import": "./dist/react/slim.js",
-      "default": "./dist/react/slim.js"
-    },
-    "./vue": {
-      "types": "./dist/vue/index.ts",
-      "import": "./dist/vue/index.js",
-      "default": "./dist/vue/index.js"
-    },
-    "./vue/slim": {
-      "types": "./dist/vue/slim.ts",
-      "import": "./dist/vue/slim.js",
-      "default": "./dist/vue/slim.js"
-    },
-    "./svelte": {
-      "types": "./dist/svelte/MoviPlayer.svelte",
-      "svelte": "./dist/svelte/MoviPlayer.svelte",
-      "default": "./dist/svelte/MoviPlayer.svelte"
-    },
-    "./svelte/slim": {
-      "types": "./dist/svelte/MoviPlayerSlim.svelte",
-      "svelte": "./dist/svelte/MoviPlayerSlim.svelte",
-      "default": "./dist/svelte/MoviPlayerSlim.svelte"
-    },
-    "./svelte/MoviSource": {
-      "types": "./dist/svelte/MoviSource.svelte",
-      "svelte": "./dist/svelte/MoviSource.svelte",
-      "default": "./dist/svelte/MoviSource.svelte"
-    },
-    "./svelte/MoviTrack": {
-      "types": "./dist/svelte/MoviTrack.svelte",
-      "svelte": "./dist/svelte/MoviTrack.svelte",
-      "default": "./dist/svelte/MoviTrack.svelte"
-    }
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "README.md",
-    "AGENTS.md",
     "LICENSE",
-    "custom-elements.json"
+    "LCL_SYNC_FORK.md"
   ],
-  "customElements": "custom-elements.json",
-  "peerDependencies": {
-    "react": ">=17",
-    "vue": ">=3.3",
-    "svelte": ">=4"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    },
-    "vue": {
-      "optional": true
-    },
-    "svelte": {
-      "optional": true
-    }
-  },
-  "scripts": {
-    "build": "npm run build:wasm && npm run build:ts",
-    "build:ts": "node scripts/check-wasm.js && tsc && node scripts/build-standalone.js && node scripts/build-wrappers.mjs && node scripts/build-custom-data.mjs",
-    "release": "node scripts/release.mjs",
-    "sync:element": "node scripts/sync-element.mjs",
-    "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
-    "build:wasm:force": "mkdir -p dist/wasm && docker compose run --rm -e FORCE_FFMPEG=true -e FORCE_DAV1D=true build",
-    "dev": "vite --open /dev/",
-    "test": "vitest",
-    "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run typecheck",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs",
-    "docs:deploy": "npm run docs:build && npx gh-pages -d docs/.vitepress/dist",
-    "app:dev": "cd app && npx wrangler dev",
-    "app:deploy": "cd app && cp worker.js worker.js.bak && sed -i '' \"s|\\\"__BUILD_VERSION__\\\"|\\\"$(date +%s)\\\"|\" worker.js && npx wrangler deploy; mv worker.js.bak worker.js",
-    "app:harden": "node scripts/harden-element.js",
-    "app:upload": "npm run app:harden && wrangler r2 object put movi-assets/element.js --file dist/element.js --remote && wrangler r2 object put movi-assets/element.slim.js --file dist/element.slim.js --remote && wrangler r2 object put movi-assets/movi.wasm --file dist/movi.wasm --content-type application/wasm --remote",
-    "app:upload:local": "wrangler r2 object put movi-assets/element.js --file dist/element.js --local --persist-to app/.wrangler/state",
-    "app:release": "npm run build:ts && npm run app:upload && npm run app:deploy"
-  },
+  "sideEffects": true,
   "keywords": [
     "video-player",
     "video",
@@ -184,33 +85,11 @@
   ],
   "author": "Ujjawal Kashyap <mr.ujjwalg@gmail.com> (https://github.com/mrujjwalg)",
   "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/mrujjwalg/movi-player.git"
-  },
-  "bugs": {
-    "url": "https://github.com/mrujjwalg/movi-player/issues"
-  },
-  "homepage": "https://moviplayer.com",
-  "devDependencies": {
-    "@playwright/test": "^1.40.0",
-    "@rollup/plugin-terser": "^1.0.0",
-    "@types/node": "^20.10.0",
-    "@webgpu/types": "^0.1.69",
-    "gh-pages": "^6.3.0",
-    "terser": "^5.44.1",
-    "typescript": "^5.9.3",
-    "vite": "^5.0.0",
-    "vite-plugin-dts": "^5.0.2",
-    "vitepress": "^1.6.4",
-    "vitest": "^4.1.8"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "dashjs": "^5.2.0",
-    "hls.js": "^1.6.16",
-    "shaka-player": "^4.11.2"
+  "repository": "https://github.com/0xArCHDeViL/lcl-movi-player.git",
+  "lclSyncFork": {
+    "upstream": "https://github.com/MrUjjwalG/movi-player.git",
+    "upstreamCommit": "fc5ae6bdea103ebc866ada98baa23cabc8b6985f",
+    "engineBuild": "MoviPlayer 0.4.0 element.slim plus movi.wasm",
+    "purpose": "Internal engine for opaque-relay playback; upstream URLs are not a package concern."
   }
 }
