@@ -14973,12 +14973,12 @@ export class MoviElement extends HTMLElement {
         --movi-title-pad-top: 16px;
 
         /* Premium Color Palette */
-        --movi-primary: #8B5CF6;
+        --movi-primary: #ffd60a;
         /* Derived so themecolor attribute cascades to light/dark variants */
         --movi-primary-light: color-mix(in srgb, var(--movi-primary) 70%, white);
         --movi-primary-dark: color-mix(in srgb, var(--movi-primary) 70%, black);
-        --movi-accent: #06B6D4;
-        --movi-accent-light: #22D3EE;
+        --movi-accent: #ff3b6b;
+        --movi-accent-light: #ff6b8f;
         /* Use solid color instead of gradient */
         --movi-gradient: var(--movi-primary);
         
@@ -14990,14 +14990,14 @@ export class MoviElement extends HTMLElement {
            purpose: there is no backdrop-filter to lean on (see the note by the
            controls bar — some mobile GPUs flash white on it), and a thinner
            black over a bright, moving picture makes the rows hard to read. */
-        --movi-glass-bg: rgba(0, 0, 0, 0.92);
-        --movi-glass-border: rgba(255, 255, 255, 0.1);
+        --movi-glass-bg: rgba(12, 12, 16, 0.96);
+        --movi-glass-border: rgba(72, 69, 77, 0.6);
         /* The OTHER surface family: chrome that floats over the picture for a
            moment — the OSD capsule, the seek readout, the unmute pill. They are
            read at a glance and must not block the frame the way a panel you act
            on is allowed to. (Not --movi-overlay-bg: that name is taken by the
            controls overlay's gradient, further down.) */
-        --movi-osd-bg: rgba(0, 0, 0, 0.55);
+        --movi-osd-bg: rgba(5, 5, 7, 0.85);
         --movi-glass-blur: 20px;
 
         /* Corners. Two values for the whole chrome: the SURFACE a menu is
@@ -15007,8 +15007,8 @@ export class MoviElement extends HTMLElement {
            from 3 to 10 — which is not a style, it is what happens when each
            menu is written on its own day. Named here so the next one inherits
            the answer instead of picking a new number. */
-        --movi-radius-surface: 10px;
-        --movi-radius-row: 7px;
+        --movi-radius-surface: 0px;
+        --movi-radius-row: 0px;
         /* The same reasoning carried through the rest of the chrome, which had
            the same problem the menus did: 4px, 6px, 8px, 10px, 12px and more
            scattered across panels, buttons and badges with nothing deciding
@@ -15023,13 +15023,13 @@ export class MoviElement extends HTMLElement {
              osd      the centre feedback capsule
            Picture-in-Picture is deliberately absent: it renders into its own
            document, which these never reach. */
-        --movi-radius-panel: 10px;
-        --movi-radius-control: 8px;
-        --movi-radius-tile: 6px;
-        --movi-radius-badge: 4px;
-        --movi-radius-badge-sm: 3px;
-        --movi-radius-subtitle: 4px;
-        --movi-radius-scrollbar: 3px;
+        --movi-radius-panel: 0px;
+        --movi-radius-control: 0px;
+        --movi-radius-tile: 0px;
+        --movi-radius-badge: 0px;
+        --movi-radius-badge-sm: 0px;
+        --movi-radius-subtitle: 0px;
+        --movi-radius-scrollbar: 0px;
         /* The OSD capsule and the seek card sit on the SAME surface family as
            the context menu and the settings panel, so they take the same
            corner. A pill-round OSD over a 10px menu read as two different
@@ -15046,11 +15046,11 @@ export class MoviElement extends HTMLElement {
         --movi-preview-caption-bg: var(--movi-osd-bg);
 
         /* Text Colors */
-        --movi-controls-color: #FFFFFF;
+        --movi-controls-color: #f7f1e8;
         /* Foreground for chrome that is ALWAYS dark (bottom bar, OSD capsule,
            dark pills) — stays white in both themes, unlike --movi-controls-color
            which flips to dark for menus on light surfaces. Public theming hook. */
-        --movi-chrome-fg: #ffffff;
+        --movi-chrome-fg: #eae3dc;
         /* …and the surface under it. Some panels are chrome rather than
            document: the shortcuts sheet, the stats readout, the timeline, the
            cue list and the resume prompt are drawn over the picture in white on
@@ -15059,9 +15059,9 @@ export class MoviElement extends HTMLElement {
            text on white is what that costs. Public hook all the same. */
         /* The capsule behind the right-hand icon cluster. Public hook: a host
            that wants the old loose row sets it to transparent. */
-        --movi-controls-group-bg: rgba(255, 255, 255, 0.065);
-        --movi-chrome-bg: rgba(0, 0, 0, 0.92);
-        --movi-chrome-border: rgba(255, 255, 255, 0.1);
+        --movi-controls-group-bg: rgba(18, 18, 24, 0.9);
+        --movi-chrome-bg: rgba(22, 22, 28, 0.98);
+        --movi-chrome-border: #3e3b43;
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
