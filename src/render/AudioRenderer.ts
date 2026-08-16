@@ -251,30 +251,27 @@ export class AudioRenderer {
       // one on first use or if a prior one somehow ended up closed.
       if (!sharedAudioContext || sharedAudioContext.state === "closed") {
         // Open at the SOURCE's sample rate when we know it. Every decoded
-        // packet becomes its own AudioBufferSourceNode, and a buffer whose rate
-        // differs from the context's is resampled PER NODE — each one resampled
-        // in isolation, so every buffer boundary carries a small discontinuity.
-        // At 1024 frames / 44.1kHz that is a click roughly 43 times a second:
-        // the "pit pit" heard on a Chrome/Android whose output runs at 48kHz,
-        // and silent on devices that happen to run at 44.1kHz, where no
-        // resampling took place. Matching the rate here moves the conversion to
-        // the output mix, where it is one continuous stream.
+      if (
+        !sharedAudioContext || 
+        sharedAudioContext.state === "closed" ||
+        (this._sourceSampleRate > 0 && sharedAudioContext.sampleRate !== this._sourceSampleRate)
+      ) {
+        if (sharedAudioContext && sharedAudioContext.state !== "closed") {
+           // We must recreate to match the source rate, otherwise per-buffer resampling
+           // will cause severe clicking at every chunk boundary.
+           sharedAudioContext.close().catch(() => {});
+        }
+        // Mint a brand-new context
+        // Every new AudioContext requests the hardware anew on Chrome, which may
+        // temporarily drop A2DP headsets, but this is vastly preferable to continuous
+        // audio crackling (pecah-pecah) caused by per-buffer sample rate conversion.
         const opts: AudioContextOptions = {
-          // "interactive" gives Chromium's audio thread a shorter read-ahead
-          // (~30–50ms vs ~150ms with "playback"). Without this, Chromium starves
-          // when setPlaybackRate stops active sources and resets scheduledTime
-          // to `now` — Safari/Firefox tolerate it because their read-ahead is
-          // already short. Trade-off is a smaller output buffer cushion against
-          // main-thread spikes; the audio decoder + Stable Audio gap-fill
-          // already handle that case.
           latencyHint: "interactive",
         };
         if (this._sourceSampleRate > 0) opts.sampleRate = this._sourceSampleRate;
         try {
           sharedAudioContext = new AudioContext(opts);
         } catch {
-          // Some devices refuse a rate outright — the browser's own is fine,
-          // it just costs the per-buffer resampling described above.
           sharedAudioContext = new AudioContext({ latencyHint: "interactive" });
         }
       }
