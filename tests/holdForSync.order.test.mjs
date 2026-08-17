@@ -28,3 +28,13 @@ test("custom element retains a relay HOLDING target received during source boots
   assert.ok(source.includes("const syncHoldTarget = this._pendingSyncHold"), "bootstrap completion must consume the queued hold target");
   assert.ok(source.includes("this.player.holdForSync(syncHoldTarget)"), "bootstrap completion must reach the engine hold API");
 });
+
+test("releasing a prepared HOLDING barrier cannot re-enter the first-play seek path", async () => {
+  const source = await readFile(new URL("../src/core/MoviPlayer.ts", import.meta.url), "utf8");
+  const methodStart = source.indexOf("async releaseSyncHold(): Promise<void>");
+  const methodEnd = source.indexOf("/**\n   * Flag to prevent concurrent async WASM operations", methodStart);
+  const method = source.slice(methodStart, methodEnd);
+
+  assert.ok(method.includes("if (this._playStartTime === 0) this._playStartTime = performance.now()"), "release must mark the prepared pipeline as started");
+  assert.ok(method.indexOf("this._playStartTime = performance.now()") < method.indexOf("await this.play()"), "play must observe prepared state before deciding whether to seek");
+});

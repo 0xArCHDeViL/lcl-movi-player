@@ -4149,6 +4149,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._syncHold = false;
     if (this.streamWrapper) return this.streamWrapper.play();
     if (this.stateManager.getState() === "buffering") this.stateManager.setState("paused");
+    // holdForSync has already sought, decoded, and retained the first target
+    // frame. Do not let play() treat the release as an untouched first play and
+    // seek again from zero; that second flush invalidates the primed frame and
+    // can immediately re-enter buffering after the relay has released both
+    // peers. Mark the prepared pipeline as started before resuming it.
+    if (this._playStartTime === 0) this._playStartTime = performance.now();
     this.audioRenderer?.resumeFromBuffering();
     await this.play();
   }
