@@ -3940,7 +3940,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // into "playing" right below.
       this.seekTargetTime = targetTime;
       if (!this.disableAudio) {
-        await this.audioRenderer.play();
+        // Fire-and-forget: AudioContext.resume() may hang indefinitely under
+        // autoplay policy (no user gesture yet). Blocking here stalls the
+        // entire orchestrator and prevents the state machine from reaching
+        // "playing" — which is the root cause of the host remaining paused
+        // during sync handoffs. The AudioRenderer's isDroppingAudio() guard
+        // keeps frames from being presented until the context is actually
+        // running; audio simply catches up once the user interacts.
+        this.audioRenderer.play().catch((err) =>
+          Logger.warn(TAG, "Audio play failed on first-play re-seek", err),
+        );
       }
       this.clock.seek(targetTime);
       this.pendingAudioPackets = [];
@@ -3951,9 +3960,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.eofReached = false;
       this.eofSince = 0;
     } else {
-      // Resume from pause — just resume AudioContext
+      // Resume from pause — fire-and-forget AudioContext resume so a pending
+      // autoplay-policy block doesn't stall the orchestrator. The state machine
+      // must reach "playing" immediately; audio will join once the context
+      // actually resumes (triggered by the first user gesture).
       if (!this.disableAudio) {
-        await this.audioRenderer.play();
+        this.audioRenderer.play().catch((err) =>
+          Logger.warn(TAG, "Audio play failed on resume from pause", err),
+        );
       } else {
         Logger.debug(TAG, "Audio playback skipped (disabled for debugging)");
       }
@@ -9706,7 +9720,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // back without the full first-play song-and-dance.
     if (wasPlaying) {
       try {
-        if (!this.disableAudio) await this.audioRenderer.play();
+        if (!this.disableAudio)
+          this.audioRenderer.play().catch((err) =>
+            Logger.warn(TAG, "Audio play failed after subtitle prefetch", err),
+          );
         if (this.videoRenderer) this.videoRenderer.startPresentationLoop();
         this.clock.start();
         // Re-arm the seek-target guard (filter-only, not waitingForVideoSync)
