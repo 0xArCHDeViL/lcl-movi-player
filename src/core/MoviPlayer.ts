@@ -4131,14 +4131,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._syncHold = true;
     this.wasPlayingBeforeSeek = false;
     this.wasPlayingBeforeRebuffer = false;
-    // Seek even at the same clock value: a cold player at 0.00 has no decoded
-    // picture yet, and only the seek pipeline's first-frame completion is a
-    // valid readiness proof for a two-node release.
-    await this.seek(targetTime, { suppressSpinner: true });
+    // Freeze the active presentation before awaiting seek. Seeking can spend
+    // multiple seconds fetching a keyframe; waiting until it resolves lets the
+    // old clock/audio timeline run ahead of the canonical barrier target.
     this.clock.pause();
     this.audioRenderer?.suspendForBuffering();
     this.videoRenderer?.stopPresentationLoop();
     if (this.stateManager.getState() !== "buffering") this.stateManager.setState("buffering");
+    // Seek even at the same clock value: a cold player at 0.00 has no decoded
+    // picture yet, and only the seek pipeline's first-frame completion is a
+    // valid readiness proof for a two-node release.
+    await this.seek(targetTime, { suppressSpinner: true });
   }
 
   /** Release an already primed target at the relay's scheduled timestamp. */
