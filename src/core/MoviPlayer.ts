@@ -715,6 +715,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // drains during this hold even though the network is fine, so ABR must NOT
   // read it as the rung failing and downshift.
   private _videoHoldingForKeyframe: boolean = false;
+  /** Relay-owned preparation is distinct from an explicit viewer pause. */
+  private _syncHold: boolean = false;
   // performance.now() of the last seek. The buffering right after a seek is a
   // normal re-fill, not a network stall — switching rendition into that (racing
   // the seek's own re-prime/re-read) is what crashed the demuxer, so the
@@ -4119,6 +4121,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.info(TAG, "Paused");
   }
 
+  /** Hold a target while decode keeps producing a frame; only relay may release. */
+  async holdForSync(targetTime: number): Promise<void> {
+    if (this.streamWrapper) {
+      this.streamWrapper.pause();
+      await this.streamWrapper.seek(targetTime);
+      return;
+    }
+    this._syncHold = true;
+    this.wasPlayingBeforeSeek = false;
+    this.wasPlayingBeforeRebuffer = false;
+    if (Math.abs(this.getCurrentTime() - targetTime) > 0.01) {
+      await this.seek(targetTime, { suppressSpinner: true });
+    }
+    this.clock.pause();
+    this.audioRenderer?.suspendForBuffering();
+    this.videoRenderer?.stopPresentationLoop();
+    if (this.stateManager.getState() !== "buffering") this.stateManager.setState("buffering");
+  }
+
+  /** Release an already primed target at the relay's scheduled timestamp. */
+  async releaseSyncHold(): Promise<void> {
+    this._syncHold = false;
+    if (this.streamWrapper) return this.streamWrapper.play();
+    if (this.stateManager.getState() === "buffering") this.stateManager.setState("paused");
+    this.audioRenderer?.resumeFromBuffering();
+    await this.play();
+  }
+
   /**
    * Flag to prevent concurrent async WASM operations
    */
@@ -4309,6 +4339,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // First-play/replay seek has produced its first frame — drop spinner
     // suppression so any later genuine rebuffer shows the loading UI.
     this.suppressSeekSpinner = false;
+
+    if (this._syncHold) {
+      this.wasPlayingBeforeSeek = false;
+      this.wasPlayingBeforeRebuffer = false;
+      this.clock.pause();
+      this.audioRenderer?.suspendForBuffering();
+      this.videoRenderer?.stopPresentationLoop();
+      this.stateManager.setState("buffering");
+      this.emit("syncReady", time);
+      return;
+    }
 
     // How far past the requested target did the first frame actually land?
     // Long-GOP .ts files can land seconds late; subtract that in
@@ -4849,7 +4890,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           `Bound stall gave up after ${Math.round(dwellMs)}ms — audioReady=${audioReady} videoReady=${videoReady}`,
         );
       }
-      if (canResume) {
+      if (canResume && !this._syncHold) {
         this._primingAudio = false;
         this._bufferingSelfInflicted = false;
         // Stamp the resume so the stall detector can tell this — a warm

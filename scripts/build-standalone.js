@@ -131,7 +131,7 @@ async function buildEntry(entry, format) {
       : {}),
     plugins: [
       // Only generate types once for ES format
-      ...(format === 'es'
+      ...(format === 'es' && process.env.MOVI_SKIP_DTS !== '1'
         ? [
             dts({
               insertTypesEntry: true,
@@ -235,8 +235,11 @@ function externalizeSlimWasm() {
 async function buildAll() {
   console.log('Building standalone modular bundles...\n');
 
+  const selectedEntries = process.env.MOVI_SLIM_ONLY === '1'
+    ? entries.filter((entry) => entry.slim)
+    : entries;
   let builtSlim = false;
-  for (const entry of entries) {
+  for (const entry of selectedEntries) {
     // Build ES format
     await buildEntry(entry, 'es');
 

@@ -249,8 +249,7 @@ export class AudioRenderer {
       // Reuse the session-wide context so a resumed (unmuted) state survives
       // source/video switches — see sharedAudioContext above. Only mint a new
       // one on first use or if a prior one somehow ended up closed.
-      if (!sharedAudioContext || sharedAudioContext.state === "closed") {
-        // Open at the SOURCE's sample rate when we know it. Every decoded
+      // Open at the SOURCE's sample rate when we know it. Every decoded
       if (
         !sharedAudioContext || 
         sharedAudioContext.state === "closed" ||

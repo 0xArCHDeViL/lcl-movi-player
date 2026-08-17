@@ -25795,6 +25795,13 @@ export class MoviElement extends HTMLElement {
       this.player?.off("stateChange", stateChangeHandler),
     );
 
+    const syncReadyHandler = (time: number) =>
+      this.dispatchEvent(new CustomEvent("movi-sync-ready", { detail: { time } }));
+    this.player.on("syncReady", syncReadyHandler);
+    this.eventHandlers.set("syncReady", () =>
+      this.player?.off("syncReady", syncReadyHandler),
+    );
+
     // Handle loadEnd event to hide loading indicator
     const loadEndHandler = () => {
       this.updateLoadingIndicator(this.player?.getState() || "idle");
@@ -26333,6 +26340,23 @@ export class MoviElement extends HTMLElement {
       this.player.pause();
     }
     this.updatePlayPauseIcon();
+  }
+
+  /**
+   * Relay API: hold at a target while decoder work continues. This is not a
+   * user pause and intentionally does not cancel a later canonical release.
+   */
+  async holdForSync(targetTime: number): Promise<void> {
+    if (this.player && !this.isLoading && !this._isUnsupported) {
+      await this.player.holdForSync(targetTime);
+    }
+  }
+
+  /** Relay API: release a previously prepared hold. */
+  async releaseSyncHold(): Promise<void> {
+    if (this.player && !this.isLoading && !this._isUnsupported) {
+      await this.player.releaseSyncHold();
+    }
   }
 
   /**

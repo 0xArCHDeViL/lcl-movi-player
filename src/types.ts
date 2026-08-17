@@ -366,6 +366,8 @@ export type PlayerState =
 
 export interface PlayerEventMap {
   frame: DecodedVideoFrame;
+  /** A real decoded picture completed a relay-owned target hold. */
+  syncReady: number;
   audio: DecodedAudioFrame;
   subtitle: SubtitleCue;
   stateChange: PlayerState;
