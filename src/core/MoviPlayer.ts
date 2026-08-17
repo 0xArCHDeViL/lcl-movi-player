@@ -4131,9 +4131,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._syncHold = true;
     this.wasPlayingBeforeSeek = false;
     this.wasPlayingBeforeRebuffer = false;
-    if (Math.abs(this.getCurrentTime() - targetTime) > 0.01) {
-      await this.seek(targetTime, { suppressSpinner: true });
-    }
+    // Seek even at the same clock value: a cold player at 0.00 has no decoded
+    // picture yet, and only the seek pipeline's first-frame completion is a
+    // valid readiness proof for a two-node release.
+    await this.seek(targetTime, { suppressSpinner: true });
     this.clock.pause();
     this.audioRenderer?.suspendForBuffering();
     this.videoRenderer?.stopPresentationLoop();
