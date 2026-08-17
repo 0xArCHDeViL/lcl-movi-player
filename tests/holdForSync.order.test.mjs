@@ -16,3 +16,15 @@ test("holdForSync freezes the running timeline before awaiting the target seek",
     "clock must stop before asynchronous seek can fetch a keyframe and leak local playback time",
   );
 });
+
+test("custom element retains a relay HOLDING target received during source bootstrap", async () => {
+  const source = await readFile(new URL("../src/render/MoviElement.ts", import.meta.url), "utf8");
+  const methodStart = source.indexOf("async holdForSync(targetTime: number): Promise<void>");
+  const methodEnd = source.indexOf("/** Release an already primed target", methodStart);
+  const method = source.slice(methodStart, methodEnd);
+
+  assert.ok(source.includes("private _pendingSyncHold: number | null = null"), "element must retain a pre-bootstrap hold target");
+  assert.ok(method.includes("this._pendingSyncHold = targetTime"), "hold target must be queued before the loading guard");
+  assert.ok(source.includes("const syncHoldTarget = this._pendingSyncHold"), "bootstrap completion must consume the queued hold target");
+  assert.ok(source.includes("this.player.holdForSync(syncHoldTarget)"), "bootstrap completion must reach the engine hold API");
+});

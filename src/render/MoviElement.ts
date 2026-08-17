@@ -774,6 +774,11 @@ export class MoviElement extends HTMLElement {
   // lands in before the user has even pressed play.
   private _hasEverPlayed: boolean = false;
   private _pendingPlay: boolean = false;
+  // A relay HOLDING barrier can arrive while source initialization is still
+  // constructing the inner player. Unlike a viewer play request, dropping it
+  // leaves the room waiting forever because the decoder never seeks/emits its
+  // first-frame readiness event. Keep only the newest canonical target.
+  private _pendingSyncHold: number | null = null;
   // True while loading spinner + play() must wait for FileSource preload to
   // complete (mobile only, height >= 2160). Released by the player's
   // 'preloadcomplete' event, which always fires once preload settles.
@@ -25352,6 +25357,14 @@ export class MoviElement extends HTMLElement {
       // player. The live init owns these; a stale one leaves them alone.
       if (gen === this._loadGeneration) {
         this.isLoading = false;
+        // Apply a canonical HOLDING request that arrived during bootstrap
+        // before any deferred play intent. The engine's seek completion emits
+        // syncReady; this is the only valid barrier acknowledgement source.
+        const syncHoldTarget = this._pendingSyncHold;
+        this._pendingSyncHold = null;
+        if (syncHoldTarget !== null && this.player && !this._isUnsupported) {
+          void this.player.holdForSync(syncHoldTarget).catch(() => {});
+        }
         // Flush any play() calls deferred while loading was in flight.
         if (this._pendingPlay && this.player && !this._isUnsupported) {
           this._pendingPlay = false;
@@ -26347,13 +26360,16 @@ export class MoviElement extends HTMLElement {
    * user pause and intentionally does not cancel a later canonical release.
    */
   async holdForSync(targetTime: number): Promise<void> {
+    this._pendingSyncHold = targetTime;
     if (this.player && !this.isLoading && !this._isUnsupported) {
+      this._pendingSyncHold = null;
       await this.player.holdForSync(targetTime);
     }
   }
 
   /** Relay API: release a previously prepared hold. */
   async releaseSyncHold(): Promise<void> {
+    this._pendingSyncHold = null;
     if (this.player && !this.isLoading && !this._isUnsupported) {
       await this.player.releaseSyncHold();
     }
