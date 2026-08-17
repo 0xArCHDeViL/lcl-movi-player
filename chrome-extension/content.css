@@ -121,3 +121,15 @@
   background: #13131c;
   color: #fff;
 }
+
+/* LCL-Movi Spacing & Compact Mobile Overhaul */
+.movi-player-root, .movi-controls-bar, .movi-settings-menu {
+  gap: clamp(8px, 1.5vw, 14px) !important;
+}
+.movi-player-root > * + *, .movi-controls-bar > * + *, .movi-settings-menu > * + * {
+  margin-top: 2px !important;
+}
+@media (max-width: 600px) {
+  .movi-player-root { padding: 6px !important; gap: 6px !important; }
+  .movi-controls-bar { padding: 6px 8px !important; gap: 6px !important; }
+}
